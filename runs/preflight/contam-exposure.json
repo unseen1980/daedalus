@@ -1,0 +1,255 @@
+{
+  "per_source": [
+    {
+      "source": "cosmopedia-v2",
+      "source_tokens": 950000576,
+      "eos_id": 0,
+      "windows": 200,
+      "tokens_scanned": 26214400,
+      "tokens_excluded": 161749,
+      "docs": 36082,
+      "doc_tokens": 26016369,
+      "stopped_early": null,
+      "examples": [],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 0,
+      "tokens_split_gap": 0,
+      "docs_limit_gap": 0,
+      "tokens_limit_gap": 0
+    },
+    {
+      "source": "dclm-baseline",
+      "source_tokens": 3375002145,
+      "eos_id": 0,
+      "windows": 200,
+      "tokens_scanned": 26214400,
+      "tokens_excluded": 962146,
+      "docs": 20246,
+      "doc_tokens": 25231808,
+      "stopped_early": null,
+      "examples": [],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 0,
+      "tokens_split_gap": 0,
+      "docs_limit_gap": 0,
+      "tokens_limit_gap": 0
+    },
+    {
+      "source": "everyday-conversations",
+      "source_tokens": 403573,
+      "eos_id": 0,
+      "windows": 3,
+      "tokens_scanned": 393216,
+      "tokens_excluded": 412,
+      "docs": 2198,
+      "doc_tokens": 390603,
+      "stopped_early": null,
+      "examples": [],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 0,
+      "tokens_split_gap": 0,
+      "docs_limit_gap": 0,
+      "tokens_limit_gap": 0
+    },
+    {
+      "source": "finemath-3plus",
+      "source_tokens": 1350008857,
+      "eos_id": 0,
+      "windows": 200,
+      "tokens_scanned": 26214400,
+      "tokens_excluded": 1719914,
+      "docs": 15233,
+      "doc_tokens": 24479053,
+      "stopped_early": null,
+      "examples": [
+        {
+          "index": "limit_gap",
+          "n_matched": 48,
+          "ngram": "(30 cm) to 2 feet (61 cm) apart. Be sure your cuts are",
+          "excerpt": "direction the wood is laying. Using a circular saw, make single cuts straight across the flooring that are about 1 foot (30\u00a0cm) to 2 feet (61\u00a0cm) apart. Be sure your cuts are perpendicular to the direction of the wood. Start on 1 side of the room and work your way systematically to the other side, spacing each cut about 1 foot (30\u00a0cm) to 2 feet (61\u00a0cm) apart.[3] My advice is to bring in a professional to make sure the floors can be refi"
+        }
+      ],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 0,
+      "tokens_split_gap": 0,
+      "docs_limit_gap": 1,
+      "tokens_limit_gap": 3835
+    },
+    {
+      "source": "finepdfs-edu",
+      "source_tokens": 1200001535,
+      "eos_id": 0,
+      "windows": 200,
+      "tokens_scanned": 26214400,
+      "tokens_excluded": 2774743,
+      "docs": 6140,
+      "doc_tokens": 23433317,
+      "stopped_early": null,
+      "examples": [],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 0,
+      "tokens_split_gap": 0,
+      "docs_limit_gap": 0,
+      "tokens_limit_gap": 0
+    },
+    {
+      "source": "finephrase",
+      "source_tokens": 2066170024,
+      "eos_id": 0,
+      "windows": 200,
+      "tokens_scanned": 26214400,
+      "tokens_excluded": 653573,
+      "docs": 25090,
+      "doc_tokens": 25535537,
+      "stopped_early": null,
+      "examples": [],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 0,
+      "tokens_split_gap": 0,
+      "docs_limit_gap": 0,
+      "tokens_limit_gap": 0
+    },
+    {
+      "source": "fineweb-edu",
+      "source_tokens": 5035572292,
+      "eos_id": 0,
+      "windows": 200,
+      "tokens_scanned": 26214400,
+      "tokens_excluded": 907608,
+      "docs": 24828,
+      "doc_tokens": 25281764,
+      "stopped_early": null,
+      "examples": [],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 0,
+      "tokens_split_gap": 0,
+      "docs_limit_gap": 0,
+      "tokens_limit_gap": 0
+    },
+    {
+      "source": "finewiki-en",
+      "source_tokens": 450005019,
+      "eos_id": 0,
+      "windows": 200,
+      "tokens_scanned": 26214400,
+      "tokens_excluded": 1211858,
+      "docs": 16199,
+      "doc_tokens": 24986143,
+      "stopped_early": null,
+      "examples": [],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 0,
+      "tokens_split_gap": 0,
+      "docs_limit_gap": 0,
+      "tokens_limit_gap": 0
+    },
+    {
+      "source": "infiwebmath-3plus",
+      "source_tokens": 1350000198,
+      "eos_id": 0,
+      "windows": 200,
+      "tokens_scanned": 26214400,
+      "tokens_excluded": 1235598,
+      "docs": 15761,
+      "doc_tokens": 24962841,
+      "stopped_early": null,
+      "examples": [
+        {
+          "index": "split_gap",
+          "n_matched": 1,
+          "ngram": "acceleration of an object is determined by the mass of the object and",
+          "excerpt": "# 2.1 Understanding acceleration   Page 1 / 3 Acceleration exists where net external force exists. The acceleration of an object is determined by the mass of the object and net external force applied. Most important aspect of acceleration is that it is independent of motion i.e. velocity.  The relationship among velocity, acceleration and"
+        }
+      ],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 1,
+      "tokens_split_gap": 1222,
+      "docs_limit_gap": 0,
+      "tokens_limit_gap": 0
+    },
+    {
+      "source": "stack-edu-python",
+      "source_tokens": 1210964651,
+      "eos_id": 0,
+      "windows": 200,
+      "tokens_scanned": 26214400,
+      "tokens_excluded": 1825054,
+      "docs": 13155,
+      "doc_tokens": 24375991,
+      "stopped_early": null,
+      "examples": [],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 0,
+      "tokens_split_gap": 0,
+      "docs_limit_gap": 0,
+      "tokens_limit_gap": 0
+    }
+  ],
+  "totals": {
+    "corpus_tokens": 16988128870,
+    "docs": 174932,
+    "doc_tokens": 224693426,
+    "sampled_frac": 0.013226496438745228,
+    "docs_filtered": 0,
+    "token_rate_filtered": 0.0,
+    "doc_rate_filtered_upper95": 2.1960050981342178e-05,
+    "docs_split_gap": 1,
+    "token_rate_split_gap": 3.890142235445995e-06,
+    "doc_rate_split_gap_upper95": 3.238373527547139e-05,
+    "docs_limit_gap": 1,
+    "token_rate_limit_gap": 1.2449784286191747e-05,
+    "doc_rate_limit_gap_upper95": 3.238373527547139e-05
+  },
+  "coverage": {
+    "hellaswag": {
+      "indexed": 2000,
+      "total": 10042,
+      "build_split": null
+    },
+    "arc_easy": {
+      "indexed": 2000,
+      "total": 2376,
+      "build_split": "validation"
+    },
+    "piqa": {
+      "indexed": 1838,
+      "total": 1838,
+      "build_split": null
+    },
+    "openbookqa": {
+      "indexed": 500,
+      "total": 500,
+      "build_split": "validation"
+    },
+    "winogrande": {
+      "indexed": 1267,
+      "total": 1267,
+      "build_split": null
+    }
+  },
+  "index_sizes": {
+    "filtered": 183359,
+    "split_gap": 47549,
+    "limit_gap": 1157091
+  },
+  "params": {
+    "window": 131072,
+    "k": 200,
+    "n": 13,
+    "used_limit": 2000,
+    "build_splits": {
+      "arc_easy": "validation",
+      "openbookqa": "validation"
+    }
+  }
+}

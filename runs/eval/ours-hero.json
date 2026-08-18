@@ -1,0 +1,58 @@
+{
+  "per_checkpoint": [
+    {
+      "val_bpb": 0.8684870782844363,
+      "per_source_val_bpb": {
+        "cosmopedia-v2": {
+          "val_bpb": 0.5390803120841055,
+          "tokens": 50573683,
+          "weight": 0.060061896026711185
+        },
+        "dclm-baseline": {
+          "val_bpb": 1.042576207181265,
+          "tokens": 76227783,
+          "weight": 0.22028543318864774
+        },
+        "finemath-3plus": {
+          "val_bpb": 0.8800322192197589,
+          "tokens": 64291747,
+          "weight": 0.04650609454218569
+        },
+        "finepdfs-edu": {
+          "val_bpb": 0.8709403930235046,
+          "tokens": 62389802,
+          "weight": 0.075967394524207
+        },
+        "finephrase": {
+          "val_bpb": 0.8836970350132602,
+          "tokens": 90294917,
+          "weight": 0.1085142205984333
+        },
+        "fineweb-edu": {
+          "val_bpb": 0.8902952440647128,
+          "tokens": 52368152,
+          "weight": 0.3397787431719533
+        },
+        "finewiki-en": {
+          "val_bpb": 0.7477686991420004,
+          "tokens": 16862671,
+          "weight": 0.028924363806343906
+        },
+        "infiwebmath-3plus": {
+          "val_bpb": 0.8520400465435087,
+          "tokens": 57155913,
+          "weight": 0.04650609454218569
+        },
+        "stack-edu-python": {
+          "val_bpb": 0.5405120639854896,
+          "tokens": 110964651,
+          "weight": 0.07345575959933222
+        }
+      },
+      "checkpoint": "runs/hero/checkpoint.pt"
+    }
+  ],
+  "mean": {
+    "val_bpb": 0.8684870782844363
+  }
+}

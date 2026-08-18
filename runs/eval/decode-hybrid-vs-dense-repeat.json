@@ -1,0 +1,98 @@
+{
+  "passes": [
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 0,
+      "rounds": 3,
+      "models": {
+        "daedalus-150m": {
+          "path": "/tmp/dense-gguf-dryrun/hybrid-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            960.45,
+            951.37,
+            1020.25
+          ],
+          "mean": 977.36,
+          "stdev": 37.42
+        },
+        "dense-150m": {
+          "path": "/tmp/dense-gguf-dryrun/dense-qwen3-q4_0.gguf",
+          "file_mb": 108.34,
+          "samples": [
+            812.29,
+            735.36,
+            769.35
+          ],
+          "mean": 772.33,
+          "stdev": 38.55
+        }
+      }
+    },
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 512,
+      "rounds": 3,
+      "models": {
+        "daedalus-150m": {
+          "path": "/tmp/dense-gguf-dryrun/hybrid-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            869.98,
+            855.31,
+            884.41
+          ],
+          "mean": 869.9,
+          "stdev": 14.55
+        },
+        "dense-150m": {
+          "path": "/tmp/dense-gguf-dryrun/dense-qwen3-q4_0.gguf",
+          "file_mb": 108.34,
+          "samples": [
+            584.9,
+            576.26,
+            583.97
+          ],
+          "mean": 581.71,
+          "stdev": 4.74
+        }
+      }
+    },
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 2048,
+      "rounds": 3,
+      "models": {
+        "daedalus-150m": {
+          "path": "/tmp/dense-gguf-dryrun/hybrid-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            652.85,
+            658.07,
+            656.14
+          ],
+          "mean": 655.69,
+          "stdev": 2.64
+        },
+        "dense-150m": {
+          "path": "/tmp/dense-gguf-dryrun/dense-qwen3-q4_0.gguf",
+          "file_mb": 108.34,
+          "samples": [
+            334.46,
+            341.46,
+            343.31
+          ],
+          "mean": 339.74,
+          "stdev": 4.67
+        }
+      }
+    }
+  ],
+  "hybrid": "daedalus-150m",
+  "dense": "dense-150m",
+  "results": "/tmp/ablint/results.json",
+  "metric": "llama-bench decode tok/s (-p 0), both arms alternating within each round at matched thread counts, one invocation. The per-arm numbers in results.json were taken ~12 h apart and are not comparable to each other; these are."
+}

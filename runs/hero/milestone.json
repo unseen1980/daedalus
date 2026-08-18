@@ -1,0 +1,14 @@
+{
+  "revision": "hero-stable-end-step68461",
+  "step": 68461,
+  "tokens_seen": 30532341760,
+  "total_steps": 124476,
+  "decay_frac": 0.45,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.02,
+  "adam_lr": 0.0003,
+  "config": "daedalus-150m",
+  "repo": "Unseen1980/daedalus-checkpoints",
+  "path_in_repo": "milestone/hero/checkpoint.pt",
+  "created_at": 1786692694.8678982
+}

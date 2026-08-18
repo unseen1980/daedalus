@@ -1,0 +1,27 @@
+{
+  "torch": "2.12.0+cu130",
+  "device": "cuda",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "config": "dense-150m",
+  "params_total": 161252992,
+  "seq_len": 2048,
+  "compiled": true,
+  "grad_checkpoint": false,
+  "loss_chunk_size": 1024,
+  "optimizer_split": {
+    "muon_tensors": 168,
+    "muon_params": 129761280,
+    "adam_tensors": 98,
+    "adam_params": 31491712
+  },
+  "results": {
+    "16": {
+      "tok_per_sec": 100561.4,
+      "step_ms": 325.9,
+      "peak_mem_GB": 29.55,
+      "loss_first": 12.828,
+      "loss_last": 9.373
+    }
+  },
+  "best_tok_per_sec": 100561.4
+}

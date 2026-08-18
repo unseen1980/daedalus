@@ -1,0 +1,164 @@
+"""Daedalus model configurations.
+
+Every config maps 1:1 onto HuggingFace `Lfm2Config` fields so that checkpoints
+can be saved as `Lfm2ForCausalLM` and converted to GGUF with the stock
+llama.cpp converter. Do not rename fields.
+"""
+
+from dataclasses import dataclass, field, asdict
+from typing import List, Optional
+
+
+def _interleave(n_blocks: int, n_attn: int) -> List[str]:
+    """Spread `n_attn` attention blocks as evenly as possible through the stack.
+
+    LFM2-350M uses 10 conv + 6 attention over 16 blocks with attention placed
+    toward the back of the network. We keep that spirit: no attention in the
+    first two blocks (cheap local mixing first), then even spacing.
+    """
+    assert 0 < n_attn <= n_blocks
+    if n_attn == n_blocks:                      # the dense-transformer twin
+        return ["full_attention"] * n_blocks
+    types = ["conv"] * n_blocks
+    # candidate positions, excluding the first two blocks
+    start = 2 if n_blocks > 6 else 0
+    span = n_blocks - start
+    for i in range(n_attn):
+        pos = start + round((i + 1) * span / (n_attn + 1))
+        pos = min(max(pos, start), n_blocks - 1)
+        while types[pos] == "full_attention":  # avoid collisions
+            pos = (pos + 1) % n_blocks
+        types[pos] = "full_attention"
+    return types
+
+
+@dataclass
+class DaedalusConfig:
+    # --- identity (read by the llama.cpp converter) ---
+    architectures: List[str] = field(default_factory=lambda: ["Lfm2ForCausalLM"])
+    model_type: str = "lfm2"
+
+    # --- shape ---
+    hidden_size: int = 768
+    num_hidden_layers: int = 18
+    num_attention_heads: int = 12
+    num_key_value_heads: int = 4
+    head_dim: int = 64
+    block_ff_dim: int = 2048          # SwiGLU inner dim (must be %256 for k-quants)
+    vocab_size: int = 49152           # SmolLM2 tokenizer; 192 * 256
+    max_position_embeddings: int = 2048
+
+    # --- layer layout ---
+    layer_types: Optional[List[str]] = None   # filled in __post_init__
+    num_attention_blocks: int = 6
+    conv_L_cache: int = 3                     # depthwise conv kernel width
+    conv_bias: bool = False
+
+    # --- numerics ---
+    norm_eps: float = 1e-5
+    rope_theta: float = 1_000_000.0
+    tie_word_embeddings: bool = True
+    initializer_range: float = 0.02
+
+    # --- training-only knobs (stripped before HF save) ---
+    z_loss: float = 1e-4
+    logit_softcap: float = 0.0        # 0 disables; use either this or z_loss
+    # Tokens per chunk in the fused loss head. The full [N, vocab] logit tensor
+    # is never materialised during training; peak loss-head memory is
+    # loss_chunk_size * vocab_size instead of batch * seq * vocab_size.
+    # 0 disables chunking and restores the single-shot path.
+    loss_chunk_size: int = 1024
+    # Recompute block activations in backward instead of storing them. Trades
+    # roughly one extra forward pass (~30% step time) for a large drop in
+    # activation memory, which is what gates batch size on 16 GB cards.
+    gradient_checkpointing: bool = False
+
+    def __post_init__(self):
+        if self.layer_types is None:
+            self.layer_types = _interleave(self.num_hidden_layers,
+                                           self.num_attention_blocks)
+        assert len(self.layer_types) == self.num_hidden_layers
+        assert self.num_attention_heads % self.num_key_value_heads == 0
+        assert self.block_ff_dim % 256 == 0, "keep FFN dim %256 for clean quantization"
+        assert self.vocab_size % 256 == 0
+
+    # ---- derived ----
+    @property
+    def n_attn_layers(self) -> int:
+        return sum(t == "full_attention" for t in self.layer_types)
+
+    def param_count(self) -> dict:
+        h, V = self.hidden_size, self.vocab_size
+        emb = V * h
+        per_conv = 3 * h * h + self.conv_L_cache * h + h * h      # in_proj, dwconv, out_proj
+        qo = self.num_attention_heads * self.head_dim
+        kv = self.num_key_value_heads * self.head_dim
+        per_attn = h * qo + 2 * (h * kv) + qo * h + 2 * self.head_dim  # +qk norms
+        per_ffn = 3 * h * self.block_ff_dim
+        norms = 2 * h
+        n_attn = self.n_attn_layers
+        n_conv = self.num_hidden_layers - n_attn
+        blocks = (n_conv * per_conv + n_attn * per_attn
+                  + self.num_hidden_layers * (per_ffn + norms))
+        total = emb + blocks + h + (0 if self.tie_word_embeddings else V * h)
+        return {
+            "embedding": emb,
+            "blocks": blocks,
+            "total": total,
+            "non_embedding": total - emb,
+            "embedding_frac": emb / total,
+            "q4_0_MB": total * 4.5 / 8 / 1e6,   # ~4.5 bits/weight incl. scales
+        }
+
+    def to_hf_dict(self) -> dict:
+        d = asdict(self)
+        for k in ("z_loss", "logit_softcap", "num_attention_blocks",
+                  "loss_chunk_size", "gradient_checkpointing"):
+            d.pop(k, None)
+        # SmolLM2's tokenizer maps bos/eos/unk/pad all to `<|endoftext|>` (id 0);
+        # it has no distinct pad token. Verified against the real tokenizer_config
+        # (HuggingFaceTB/SmolLM2-135M) -- do not "correct" these to Llama-style
+        # 1/2, that was a bug (id 2 is `<|im_end|>`, a chat special token).
+        d["bos_token_id"] = 0
+        d["eos_token_id"] = 0
+        d["pad_token_id"] = 0
+        d["torch_dtype"] = "bfloat16"
+        return d
+
+
+# ---------------------------------------------------------------- presets ----
+
+PRESETS = {
+    # the shipped model
+    "daedalus-150m": DaedalusConfig(),
+
+    # ablation: same params, all attention, deeper+narrower (the dense twin)
+    "dense-150m": DaedalusConfig(
+        hidden_size=640, num_hidden_layers=24, num_attention_heads=10,
+        num_key_value_heads=2, head_dim=64, block_ff_dim=2304,
+        num_attention_blocks=24,
+    ),
+
+    # ablation: depth
+    "daedalus-150m-deep": DaedalusConfig(
+        hidden_size=640, num_hidden_layers=24, num_attention_heads=10,
+        num_key_value_heads=2, block_ff_dim=1792, num_attention_blocks=8,
+    ),
+
+    # CPU dev / smoke tests (trains on a laptop in minutes)
+    "tiny": DaedalusConfig(
+        hidden_size=128, num_hidden_layers=6, num_attention_heads=4,
+        num_key_value_heads=2, head_dim=32, block_ff_dim=256,
+        vocab_size=512, num_attention_blocks=2, max_position_embeddings=256,
+    ),
+}
+
+
+if __name__ == "__main__":
+    for name, cfg in PRESETS.items():
+        p = cfg.param_count()
+        print(f"{name:22s} {p['total']/1e6:7.1f}M total  "
+              f"{p['non_embedding']/1e6:6.1f}M non-emb  "
+              f"emb {p['embedding_frac']*100:4.1f}%  "
+              f"~{p['q4_0_MB']:5.1f}MB @q4_0  "
+              f"layers={cfg.layer_types.count('conv')}c/{cfg.n_attn_layers}a")

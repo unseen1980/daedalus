@@ -1,0 +1,28 @@
+{
+  "datafile": "data/eval/hellaswag-llamacpp.txt",
+  "n_tasks": 10042,
+  "threads": 6,
+  "n_ctx": 512,
+  "baseline": "f16",
+  "results": {
+    "f16": {
+      "acc": 26.82732523,
+      "ci_low": 25.9697,
+      "ci_high": 27.7026,
+      "n_done": 10042,
+      "n_tasks": 10042
+    },
+    "q4_0": {
+      "acc": 27.05636327,
+      "ci_low": 26.1964,
+      "ci_high": 27.9339,
+      "n_done": 10042,
+      "n_tasks": 10042
+    }
+  },
+  "metric": "llama.cpp --hellaswag (token-count-normalised); NOT comparable to eval.py acc_norm or to published peer numbers -- paired deltas only",
+  "delta_points": {
+    "f16": 0.0,
+    "q4_0": 0.229
+  }
+}

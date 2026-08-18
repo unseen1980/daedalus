@@ -1,0 +1,149 @@
+{
+  "runs": {
+    "daedalus-150m": {
+      "config": "daedalus-150m",
+      "run_name": "abl-arch-daedalus-150m",
+      "attempts": 1,
+      "resumed": false,
+      "checkpoint": "runs/abl-arch-daedalus-150m/checkpoint.pt",
+      "val_bpb": 0.9103983763719194,
+      "export": {
+        "hf_dir": "runs/abl-arch-daedalus-150m/export/hf",
+        "fp16_gguf": "runs/abl-arch-daedalus-150m/export/model-f16.gguf",
+        "q4_0_gguf": "runs/abl-arch-daedalus-150m/export/model-q4_0.gguf",
+        "fp16_ppl": 7.6266,
+        "q4_0_ppl": 7.8195,
+        "delta_pct": 2.529305326095506,
+        "passes_threshold": false,
+        "decode_speed": {
+          "tok_per_sec": 1111.926066,
+          "tok_per_sec_stddev": 25.668561,
+          "n_gen": 128,
+          "n_threads": 8,
+          "by_depth": {
+            "0": {
+              "depth": 0,
+              "tok_per_sec": 1111.926066,
+              "tok_per_sec_stddev": 25.668561,
+              "n_threads": 8
+            },
+            "512": {
+              "depth": 512,
+              "tok_per_sec": 960.252793,
+              "tok_per_sec_stddev": 10.685711,
+              "n_threads": 8
+            },
+            "2048": {
+              "depth": 2048,
+              "tok_per_sec": 739.339606,
+              "tok_per_sec_stddev": 35.51335,
+              "n_threads": 8
+            }
+          }
+        }
+      }
+    },
+    "dense-150m": {
+      "config": "dense-150m",
+      "run_name": "abl-arch-dense-150m",
+      "checkpoint": "runs/abl-arch-dense-150m/checkpoint.pt",
+      "tokens_trained": 5000083456,
+      "resumed": true,
+      "resume_note": "orchestrator was killed at 18:31Z to free 4.18 GB of VRAM it was holding; retrained under scripts/run_dense_arm.sh from the step-1570 checkpoint",
+      "val_bpb": 0.9177739093169623,
+      "per_source_val_bpb": {
+        "cosmopedia-v2": {
+          "val_bpb": 0.6108843175277762,
+          "tokens": 50573683,
+          "weight": 0.05102040816326531
+        },
+        "dclm-baseline": {
+          "val_bpb": 1.0782892207080759,
+          "tokens": 101063162,
+          "weight": 0.22959183673469388
+        },
+        "finemath-3plus": {
+          "val_bpb": 0.9662097799747394,
+          "tokens": 64291747,
+          "weight": 0.030612244897959183
+        },
+        "finepdfs-edu": {
+          "val_bpb": 0.9240575844062461,
+          "tokens": 41552045,
+          "weight": 0.0816326530612245
+        },
+        "finephrase": {
+          "val_bpb": 0.9380836503191066,
+          "tokens": 90294917,
+          "weight": 0.07142857142857144
+        },
+        "fineweb-edu": {
+          "val_bpb": 0.9451494746476661,
+          "tokens": 81735428,
+          "weight": 0.3826530612244898
+        },
+        "finewiki-en": {
+          "val_bpb": 0.7624621826940852,
+          "tokens": 53186220,
+          "weight": 0.030612244897959183
+        },
+        "infiwebmath-3plus": {
+          "val_bpb": 0.9360806308353208,
+          "tokens": 57155913,
+          "weight": 0.030612244897959183
+        },
+        "stack-edu-python": {
+          "val_bpb": 0.5810560835786772,
+          "tokens": 110964651,
+          "weight": 0.09183673469387756
+        }
+      },
+      "export": {
+        "hf_dir": "runs/abl-arch-dense-150m/export/hf",
+        "fp16_gguf": "runs/abl-arch-dense-150m/export/model-f16.gguf",
+        "q4_0_gguf": "runs/abl-arch-dense-150m/export/model-q4_0.gguf",
+        "fp16_ppl": 7.8189,
+        "q4_0_ppl": 8.0052,
+        "delta_pct": 2.3826881019069197,
+        "passes_threshold": false,
+        "decode_speed": {
+          "tok_per_sec": 922.819696,
+          "tok_per_sec_stddev": 14.202899,
+          "n_gen": 128,
+          "n_threads": 8,
+          "by_depth": {
+            "0": {
+              "depth": 0,
+              "tok_per_sec": 922.819696,
+              "tok_per_sec_stddev": 14.202899,
+              "n_threads": 8
+            },
+            "512": {
+              "depth": 512,
+              "tok_per_sec": 664.40908,
+              "tok_per_sec_stddev": 6.460134,
+              "n_threads": 8
+            },
+            "2048": {
+              "depth": 2048,
+              "tok_per_sec": 420.323641,
+              "tok_per_sec_stddev": 5.467459,
+              "n_threads": 8
+            }
+          }
+        }
+      }
+    }
+  },
+  "mixture_dir": "data/shards",
+  "total_tokens_per_run": 5000000000,
+  "configs": [
+    "daedalus-150m",
+    "dense-150m"
+  ],
+  "lr": {
+    "muon_lr": 0.02,
+    "source": "runs/sweep/best-wsdfix.json"
+  },
+  "note": "arm 2's post-training measurements were produced by scripts/finish_dense_arm.py after abl_arch.py was killed to free the 4.18 GB of VRAM that was OOM-ing the dense arm. Both arms are measured by abl_arch's own eval_val_bpb and export_and_bench."
+}

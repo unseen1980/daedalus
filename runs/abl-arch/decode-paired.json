@@ -1,0 +1,98 @@
+{
+  "passes": [
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 0,
+      "rounds": 3,
+      "models": {
+        "daedalus-150m": {
+          "path": "runs/abl-arch-daedalus-150m/export/model-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            1072.86,
+            1046.97,
+            1086.62
+          ],
+          "mean": 1068.82,
+          "stdev": 20.13
+        },
+        "dense-150m": {
+          "path": "runs/abl-arch-dense-150m/export/model-q4_0.gguf",
+          "file_mb": 108.34,
+          "samples": [
+            855.22,
+            877.22,
+            886.43
+          ],
+          "mean": 872.96,
+          "stdev": 16.04
+        }
+      }
+    },
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 512,
+      "rounds": 3,
+      "models": {
+        "daedalus-150m": {
+          "path": "runs/abl-arch-daedalus-150m/export/model-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            969.64,
+            976.38,
+            987.77
+          ],
+          "mean": 977.93,
+          "stdev": 9.16
+        },
+        "dense-150m": {
+          "path": "runs/abl-arch-dense-150m/export/model-q4_0.gguf",
+          "file_mb": 108.34,
+          "samples": [
+            668.94,
+            656.54,
+            657.79
+          ],
+          "mean": 661.09,
+          "stdev": 6.83
+        }
+      }
+    },
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 2048,
+      "rounds": 3,
+      "models": {
+        "daedalus-150m": {
+          "path": "runs/abl-arch-daedalus-150m/export/model-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            761.1,
+            610.92,
+            597.52
+          ],
+          "mean": 656.51,
+          "stdev": 90.82
+        },
+        "dense-150m": {
+          "path": "runs/abl-arch-dense-150m/export/model-q4_0.gguf",
+          "file_mb": 108.34,
+          "samples": [
+            413.3,
+            410.31,
+            339.34
+          ],
+          "mean": 387.65,
+          "stdev": 41.86
+        }
+      }
+    }
+  ],
+  "hybrid": "daedalus-150m",
+  "dense": "dense-150m",
+  "results": "runs/abl-arch/results.json",
+  "metric": "llama-bench decode tok/s (-p 0), both arms alternating within each round at matched thread counts, one invocation. The per-arm numbers in results.json were taken ~12 h apart and are not comparable to each other; these are."
+}

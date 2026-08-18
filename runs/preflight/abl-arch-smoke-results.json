@@ -1,0 +1,95 @@
+{
+  "runs": {
+    "daedalus-150m": {
+      "config": "daedalus-150m",
+      "run_name": "abl-smoke-daedalus-150m",
+      "attempts": 1,
+      "resumed": false,
+      "checkpoint": "runs/abl-smoke-daedalus-150m/checkpoint.pt",
+      "val_bpb": 3.234842389400994,
+      "per_source_val_bpb": {
+        "dclm-baseline": {
+          "val_bpb": 3.2313170756814755,
+          "tokens": 200000,
+          "weight": 0.35714285714285715
+        },
+        "fineweb-edu": {
+          "val_bpb": 3.2371187128073275,
+          "tokens": 200000,
+          "weight": 0.5952380952380952
+        },
+        "finewiki-en": {
+          "val_bpb": 3.2328281997182122,
+          "tokens": 200000,
+          "weight": 0.047619047619047616
+        }
+      },
+      "export": {
+        "hf_dir": "runs/abl-smoke-daedalus-150m/export/hf",
+        "fp16_gguf": "runs/abl-smoke-daedalus-150m/export/model-f16.gguf",
+        "q4_0_gguf": "runs/abl-smoke-daedalus-150m/export/model-q4_0.gguf",
+        "fp16_ppl": 2856655.7658,
+        "q4_0_ppl": 2857664.3016,
+        "delta_pct": 0.03530477182704172,
+        "passes_threshold": true,
+        "decode_speed": {
+          "tok_per_sec": 926.888984,
+          "tok_per_sec_stddev": 37.84062,
+          "n_gen": 16,
+          "n_threads": 8
+        }
+      }
+    },
+    "dense-150m": {
+      "config": "dense-150m",
+      "run_name": "abl-smoke-dense-150m",
+      "attempts": 1,
+      "resumed": false,
+      "checkpoint": "runs/abl-smoke-dense-150m/checkpoint.pt",
+      "val_bpb": 2.7300450754796537,
+      "per_source_val_bpb": {
+        "dclm-baseline": {
+          "val_bpb": 2.726856029635565,
+          "tokens": 200000,
+          "weight": 0.35714285714285715
+        },
+        "fineweb-edu": {
+          "val_bpb": 2.7321179988937234,
+          "tokens": 200000,
+          "weight": 0.5952380952380952
+        },
+        "finewiki-en": {
+          "val_bpb": 2.7280513766344585,
+          "tokens": 200000,
+          "weight": 0.047619047619047616
+        }
+      },
+      "export": {
+        "hf_dir": "runs/abl-smoke-dense-150m/export/hf",
+        "fp16_gguf": "runs/abl-smoke-dense-150m/export/model-f16.gguf",
+        "q4_0_gguf": "runs/abl-smoke-dense-150m/export/model-q4_0.gguf",
+        "fp16_ppl": 283076.7165,
+        "q4_0_ppl": 283013.3157,
+        "delta_pct": 0.022397038083491787,
+        "passes_threshold": true,
+        "decode_speed": {
+          "tok_per_sec": 649.838161,
+          "tok_per_sec_stddev": 40.335615,
+          "n_gen": 16,
+          "n_threads": 8
+        }
+      }
+    }
+  },
+  "mixture_dir": "/tmp/ablsmoke/mix",
+  "total_tokens_per_run": 60000,
+  "configs": [
+    "daedalus-150m",
+    "dense-150m"
+  ],
+  "lr": {
+    "muon_lr": null,
+    "source": "train.py default",
+    "micro_batch": 2
+  }
+}

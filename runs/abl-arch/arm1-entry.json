@@ -1,0 +1,43 @@
+{
+  "config": "daedalus-150m",
+  "run_name": "abl-arch-daedalus-150m",
+  "attempts": 1,
+  "resumed": false,
+  "checkpoint": "runs/abl-arch-daedalus-150m/checkpoint.pt",
+  "val_bpb": 0.9103983763719194,
+  "export": {
+    "hf_dir": "runs/abl-arch-daedalus-150m/export/hf",
+    "fp16_gguf": "runs/abl-arch-daedalus-150m/export/model-f16.gguf",
+    "q4_0_gguf": "runs/abl-arch-daedalus-150m/export/model-q4_0.gguf",
+    "fp16_ppl": 7.6266,
+    "q4_0_ppl": 7.8195,
+    "delta_pct": 2.529305326095506,
+    "passes_threshold": false,
+    "decode_speed": {
+      "tok_per_sec": 1111.926066,
+      "tok_per_sec_stddev": 25.668561,
+      "n_gen": 128,
+      "n_threads": 8,
+      "by_depth": {
+        "0": {
+          "depth": 0,
+          "tok_per_sec": 1111.926066,
+          "tok_per_sec_stddev": 25.668561,
+          "n_threads": 8
+        },
+        "512": {
+          "depth": 512,
+          "tok_per_sec": 960.252793,
+          "tok_per_sec_stddev": 10.685711,
+          "n_threads": 8
+        },
+        "2048": {
+          "depth": 2048,
+          "tok_per_sec": 739.339606,
+          "tok_per_sec_stddev": 35.51335,
+          "n_threads": 8
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "revision": "post-sft-stable-end-step16784",
+  "step": 16784,
+  "tokens_seen": 274989056,
+  "total_steps": 30518,
+  "decay_frac": 0.45,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.002,
+  "adam_lr": 3e-05,
+  "config": "daedalus-150m",
+  "repo": null,
+  "path_in_repo": "milestone/post-sft/checkpoint.pt",
+  "created_at": 1787005094.2167306
+}

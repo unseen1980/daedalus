@@ -1,0 +1,13 @@
+# LaTeX build artefacts
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+
+# macOS
+._*
+
+# Personal explainer — kept locally, deliberately not published
+daedalus-explained.*
+explainer-template.latex

@@ -1,0 +1,46 @@
+{
+  "repo": "Unseen1980/daedalus-checkpoints",
+  "phases": [
+    {
+      "phase": "A",
+      "seconds": 58.8,
+      "step": 2,
+      "tokens_seen": 32,
+      "pending_after_drain": 0
+    },
+    {
+      "phase": "B",
+      "seconds": 12.7,
+      "restored_step": 3,
+      "worst_abs_delta": 0.000244140625,
+      "worst_rel_delta": 0.0038910505827516317,
+      "trained_on_to_step": 3
+    },
+    {
+      "phase": "C",
+      "milestone_step": 5,
+      "revision": "hubsmoke-ms-stable-end-step5",
+      "lr_mult_at_branch": 1.0,
+      "restored_step": 5,
+      "muon_entries_with_state": 34
+    },
+    {
+      "phase": "D",
+      "branches": [
+        "hubsmoke-ms-stable-end-step5",
+        "hubsmoke-restored-stable-end-step2",
+        "hubsmoke-stable-end-step1",
+        "main",
+        "rolling"
+      ],
+      "pointers_on_main": [
+        "latest-milestone-hubsmoke-ms.json",
+        "latest-milestone-hubsmoke-restored.json",
+        "latest-milestone-hubsmoke.json",
+        "latest-rolling-hubsmoke-ms.json",
+        "latest-rolling-hubsmoke-restored.json",
+        "latest-rolling-hubsmoke.json"
+      ]
+    }
+  ]
+}

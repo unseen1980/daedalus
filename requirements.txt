@@ -1,0 +1,14 @@
+torch>=2.7
+numpy
+datasets>=3.0,<4.0   # 5.x renamed dataset configs and broke the eval suite
+transformers>=4.54   # Lfm2ForCausalLM (this architecture) landed in 4.54
+tokenizers
+huggingface_hub
+datasketch
+tqdm
+wandb
+gguf
+sentencepiece
+protobuf
+zstandard
+psutil

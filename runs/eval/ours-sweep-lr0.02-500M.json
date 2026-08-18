@@ -1,0 +1,47 @@
+{
+  "per_checkpoint": [
+    {
+      "hellaswag": 0.2733519219279028,
+      "hellaswag_acc": 0.26857199761003786,
+      "hellaswag_n": 10042,
+      "hellaswag_acc_norm": 0.2733519219279028,
+      "arc_easy": 0.3867845117845118,
+      "arc_easy_acc": 0.4364478114478115,
+      "arc_easy_n": 2376,
+      "arc_easy_acc_norm": 0.3867845117845118,
+      "piqa": 0.5603917301414582,
+      "piqa_acc": 0.5718171926006529,
+      "piqa_n": 1838,
+      "piqa_acc_norm": 0.5603917301414582,
+      "openbookqa": 0.284,
+      "openbookqa_acc": 0.154,
+      "openbookqa_n": 500,
+      "openbookqa_acc_norm": 0.284,
+      "winogrande": 0.5067087608524072,
+      "winogrande_acc": 0.5067087608524072,
+      "winogrande_n": 1267,
+      "checkpoint": "runs/sweep-wsdfix-lr0.02/checkpoint.pt"
+    }
+  ],
+  "mean": {
+    "hellaswag_n": 10042.0,
+    "arc_easy_acc_norm": 0.3867845117845118,
+    "hellaswag_acc": 0.26857199761003786,
+    "arc_easy": 0.3867845117845118,
+    "winogrande_acc": 0.5067087608524072,
+    "openbookqa_acc_norm": 0.284,
+    "winogrande_n": 1267.0,
+    "piqa_acc": 0.5718171926006529,
+    "arc_easy_acc": 0.4364478114478115,
+    "piqa_acc_norm": 0.5603917301414582,
+    "winogrande": 0.5067087608524072,
+    "piqa": 0.5603917301414582,
+    "hellaswag": 0.2733519219279028,
+    "piqa_n": 1838.0,
+    "openbookqa_n": 500.0,
+    "openbookqa_acc": 0.154,
+    "hellaswag_acc_norm": 0.2733519219279028,
+    "openbookqa": 0.284,
+    "arc_easy_n": 2376.0
+  }
+}

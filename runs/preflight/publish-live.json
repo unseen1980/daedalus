@@ -1,0 +1,85 @@
+{
+  "repo": "Unseen1980/daedalus-publish-smoke",
+  "phases": {
+    "A_export": {
+      "seconds": 6.6,
+      "files": {
+        "README.md": 3411,
+        "config.json": 1062,
+        "generation_config.json": 216,
+        "model.safetensors": 320996024,
+        "tokenizer.json": 3522871,
+        "tokenizer_config.json": 764
+      },
+      "publishable": "yes"
+    },
+    "B_publish": {
+      "seconds": 29.6,
+      "MB": 426.5,
+      "Mbit_per_s": 115.4,
+      "result": {
+        "repo_id": "Unseen1980/daedalus-publish-smoke",
+        "private": true,
+        "files": [
+          "README.md",
+          "config.json",
+          "generation_config.json",
+          "model.safetensors",
+          "tokenizer.json",
+          "tokenizer_config.json"
+        ],
+        "ggufs": [
+          {
+            "name": "model-Q4_0.gguf",
+            "size": 101981376
+          }
+        ],
+        "url": "https://huggingface.co/Unseen1980/daedalus-publish-smoke"
+      }
+    },
+    "C_verify": {
+      "private": true,
+      "remote": {
+        ".gitattributes": {
+          "size": 1576,
+          "lfs": false
+        },
+        "README.md": {
+          "size": 3411,
+          "lfs": false
+        },
+        "config.json": {
+          "size": 1062,
+          "lfs": false
+        },
+        "generation_config.json": {
+          "size": 216,
+          "lfs": false
+        },
+        "gguf/model-Q4_0.gguf": {
+          "size": 101981376,
+          "lfs": true
+        },
+        "model.safetensors": {
+          "size": 320996024,
+          "lfs": true
+        },
+        "tokenizer.json": {
+          "size": 3522871,
+          "lfs": false
+        },
+        "tokenizer_config.json": {
+          "size": 764,
+          "lfs": false
+        }
+      },
+      "missing": [],
+      "lfs_files": [
+        "gguf/model-Q4_0.gguf",
+        "model.safetensors"
+      ]
+    },
+    "D_cleanup": "deleted"
+  },
+  "ok": true
+}

@@ -1,0 +1,96 @@
+{
+  "passes": [
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 0,
+      "rounds": 3,
+      "models": {
+        "hybrid": {
+          "path": "/tmp/dense-gguf-dryrun/hybrid-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            948.61,
+            915.86,
+            991.31
+          ],
+          "mean": 951.92,
+          "stdev": 37.83
+        },
+        "dense": {
+          "path": "/tmp/dense-gguf-dryrun/dense-qwen3-q4_0.gguf",
+          "file_mb": 108.34,
+          "samples": [
+            829.02,
+            827.39,
+            819.6
+          ],
+          "mean": 825.33,
+          "stdev": 5.03
+        }
+      }
+    },
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 512,
+      "rounds": 3,
+      "models": {
+        "hybrid": {
+          "path": "/tmp/dense-gguf-dryrun/hybrid-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            866.56,
+            893.62,
+            848.15
+          ],
+          "mean": 869.45,
+          "stdev": 22.87
+        },
+        "dense": {
+          "path": "/tmp/dense-gguf-dryrun/dense-qwen3-q4_0.gguf",
+          "file_mb": 108.34,
+          "samples": [
+            575.93,
+            627.76,
+            577.16
+          ],
+          "mean": 593.61,
+          "stdev": 29.57
+        }
+      }
+    },
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 2048,
+      "rounds": 3,
+      "models": {
+        "hybrid": {
+          "path": "/tmp/dense-gguf-dryrun/hybrid-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            641.63,
+            655.64,
+            648.35
+          ],
+          "mean": 648.54,
+          "stdev": 7.01
+        },
+        "dense": {
+          "path": "/tmp/dense-gguf-dryrun/dense-qwen3-q4_0.gguf",
+          "file_mb": 108.34,
+          "samples": [
+            331.39,
+            392.94,
+            337.91
+          ],
+          "mean": 354.08,
+          "stdev": 33.81
+        }
+      }
+    }
+  ],
+  "note": "abl-arch arm 1 training on the GPU throughout; random-init GGUFs from the dense dry run, valid for speed only",
+  "metric": "llama-bench decode tok/s (-p 0), alternating rounds; absolute values depend on concurrent box load and are comparable only within one invocation -- the ratio is the durable number"
+}

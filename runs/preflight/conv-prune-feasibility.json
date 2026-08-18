@@ -1,0 +1,33 @@
+{
+  "src_gguf": "runs/abl-arch-daedalus-150m/export/model-f16.gguf",
+  "pruned_width": 640,
+  "control": {
+    "rc": 0,
+    "loaded": true,
+    "wrong_shape": false,
+    "tail": "0.00.185.483 I \n0.00.185.589 I system_info: n_threads = 2 (n_threads_batch = 2) / 16 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | \n0.00.185.603 I perplexity: tokenizing the input ..\n0.00.190.810 I perplexity: tokenization took 5.204 ms\n0.00.190.847 I perplexity: calculating perplexity over 1 chunks, n_ctx=512, batch_size=2048, n_seq=4\n0.01.131.250 I perplexity: 0.94 seconds per pass - ETA 0.01.138.142 I Final estimate: PPL = 1.0077 +/- 0.00033"
+  },
+  "roundtrip_build": {
+    "kv_copied": 29,
+    "conv_tensors_narrowed": 36,
+    "n_embd": 768
+  },
+  "roundtrip": {
+    "rc": 0,
+    "loaded": true,
+    "wrong_shape": false,
+    "tail": "0.00.214.647 I \n0.00.214.760 I system_info: n_threads = 2 (n_threads_batch = 2) / 16 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | \n0.00.214.777 I perplexity: tokenizing the input ..\n0.00.219.342 I perplexity: tokenization took 4.559 ms\n0.00.219.395 I perplexity: calculating perplexity over 1 chunks, n_ctx=512, batch_size=2048, n_seq=4\n0.01.159.480 I perplexity: 0.94 seconds per pass - ETA 0.01.165.825 I Final estimate: PPL = 1.0077 +/- 0.00033"
+  },
+  "build": {
+    "kv_copied": 29,
+    "conv_tensors_narrowed": 36,
+    "n_embd": 768
+  },
+  "pruned": {
+    "rc": 1,
+    "loaded": false,
+    "wrong_shape": true,
+    "tail": "0.00.099.415 E llama_model_load_from_file_impl: failed to load model\n0.00.099.456 E common_fit_params: encountered an error while trying to fit params to free device memory: failed to load model\n0.00.161.960 E llama_model_load: error loading model: check_tensor_dims: tensor 'blk.0.shortconv.conv.weight' has wrong shape; expected      3,    768, got      3,    640,      1,      1\n0.00.161.964 E llama_model_load_from_file_impl: failed to load model\n0.00.161.969 E cmn  common_init_: failed to load model '/tmp/conv-prune-probe/pruned-640.gguf'\n0.00.161.976 E llama_perplexity: unable to load model"
+  },
+  "verdict": "INFEASIBLE: llama.cpp rejects conv width != n_embd; option C requires patching llama.cpp"
+}

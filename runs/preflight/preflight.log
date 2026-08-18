@@ -1,0 +1,84 @@
+====================================================================
+DAEDALUS SMOKE TEST
+====================================================================
+torch      : 2.12.0+cu130
+device     : cuda
+gpu        : NVIDIA GeForce RTX 5090  (33.7 GB, sm_120)
+config     : daedalus-150m
+params     : 160.5M total, 122.7M non-embedding (~90 MB at q4_0)
+layers     : 12 conv + 6 attn
+compile    : True
+block ckpt : False
+loss chunk : 1024
+--------------------------------------------------------------------
+  batch  16 x 2048:   115,692 tok/s   283.2 ms/step  25.29 GB  loss 15.20->5.39
+--------------------------------------------------------------------
+BEST THROUGHPUT: 115,692 tok/s
+  5B (ablation)   :   12.0 GPU-hours  = $  5.39 at $0.449/hr
+  40B (hero run)  :   96.0 GPU-hours  = $ 43.12 at $0.449/hr
+====================================================================
+wrote runs/preflight/daedalus-150m-b16.json
+2026-08-09T22:45:00Z preflight daedalus-150m batch 16: yes
+====================================================================
+DAEDALUS SMOKE TEST
+====================================================================
+torch      : 2.12.0+cu130
+device     : cuda
+gpu        : NVIDIA GeForce RTX 5090  (33.7 GB, sm_120)
+config     : dense-150m
+params     : 161.3M total, 129.8M non-embedding (~91 MB at q4_0)
+layers     : 0 conv + 24 attn
+compile    : True
+block ckpt : False
+loss chunk : 1024
+--------------------------------------------------------------------
+  batch  16 x 2048:   102,046 tok/s   321.1 ms/step  29.55 GB  loss 12.83->9.39
+--------------------------------------------------------------------
+BEST THROUGHPUT: 102,046 tok/s
+  5B (ablation)   :   13.6 GPU-hours  = $  6.11 at $0.449/hr
+  40B (hero run)  :  108.9 GPU-hours  = $ 48.89 at $0.449/hr
+====================================================================
+wrote runs/preflight/dense-150m-b16.json
+2026-08-09T22:45:51Z preflight dense-150m batch 16: yes
+====================================================================
+DAEDALUS SMOKE TEST
+====================================================================
+torch      : 2.12.0+cu130
+device     : cuda
+gpu        : NVIDIA GeForce RTX 5090  (33.7 GB, sm_120)
+config     : daedalus-150m
+params     : 160.5M total, 122.7M non-embedding (~90 MB at q4_0)
+layers     : 12 conv + 6 attn
+compile    : True
+block ckpt : False
+loss chunk : 1024
+--------------------------------------------------------------------
+  batch  16 x 2048:   113,184 tok/s   289.5 ms/step  25.29 GB  loss 15.20->5.35
+--------------------------------------------------------------------
+BEST THROUGHPUT: 113,184 tok/s
+  5B (ablation)   :   12.3 GPU-hours  = $  5.51 at $0.449/hr
+  40B (hero run)  :   98.2 GPU-hours  = $ 44.08 at $0.449/hr
+====================================================================
+wrote runs/preflight/daedalus-150m-b16.json
+2026-08-10T05:13:04Z preflight daedalus-150m batch 16: yes
+====================================================================
+DAEDALUS SMOKE TEST
+====================================================================
+torch      : 2.12.0+cu130
+device     : cuda
+gpu        : NVIDIA GeForce RTX 5090  (33.7 GB, sm_120)
+config     : dense-150m
+params     : 161.3M total, 129.8M non-embedding (~91 MB at q4_0)
+layers     : 0 conv + 24 attn
+compile    : True
+block ckpt : False
+loss chunk : 1024
+--------------------------------------------------------------------
+  batch  16 x 2048:   100,561 tok/s   325.9 ms/step  29.55 GB  loss 12.83->9.37
+--------------------------------------------------------------------
+BEST THROUGHPUT: 100,561 tok/s
+  5B (ablation)   :   13.8 GPU-hours  = $  6.20 at $0.449/hr
+  40B (hero run)  :  110.5 GPU-hours  = $ 49.61 at $0.449/hr
+====================================================================
+wrote runs/preflight/dense-150m-b16.json
+2026-08-10T05:13:14Z preflight dense-150m batch 16: yes

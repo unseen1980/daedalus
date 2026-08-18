@@ -1,0 +1,47 @@
+{
+  "per_checkpoint": [
+    {
+      "hellaswag": 0.33120892252539336,
+      "hellaswag_acc": 0.2996415056761601,
+      "hellaswag_n": 10042,
+      "hellaswag_acc_norm": 0.33120892252539336,
+      "arc_easy": 0.4701178451178451,
+      "arc_easy_acc": 0.5260942760942761,
+      "arc_easy_n": 2376,
+      "arc_easy_acc_norm": 0.4701178451178451,
+      "piqa": 0.6229597388465724,
+      "piqa_acc": 0.6360174102285092,
+      "piqa_n": 1838,
+      "piqa_acc_norm": 0.6229597388465724,
+      "openbookqa": 0.31,
+      "openbookqa_acc": 0.208,
+      "openbookqa_n": 500,
+      "openbookqa_acc_norm": 0.31,
+      "winogrande": 0.4996053670086819,
+      "winogrande_acc": 0.4996053670086819,
+      "winogrande_n": 1267,
+      "checkpoint": "runs/abl-arch-daedalus-150m/checkpoint.pt"
+    }
+  ],
+  "mean": {
+    "openbookqa_acc_norm": 0.31,
+    "hellaswag_acc": 0.2996415056761601,
+    "arc_easy_acc_norm": 0.4701178451178451,
+    "piqa_acc_norm": 0.6229597388465724,
+    "arc_easy_acc": 0.5260942760942761,
+    "winogrande_n": 1267.0,
+    "winogrande": 0.4996053670086819,
+    "piqa_acc": 0.6360174102285092,
+    "arc_easy_n": 2376.0,
+    "piqa": 0.6229597388465724,
+    "arc_easy": 0.4701178451178451,
+    "winogrande_acc": 0.4996053670086819,
+    "openbookqa_n": 500.0,
+    "piqa_n": 1838.0,
+    "hellaswag_n": 10042.0,
+    "openbookqa_acc": 0.208,
+    "hellaswag_acc_norm": 0.33120892252539336,
+    "hellaswag": 0.33120892252539336,
+    "openbookqa": 0.31
+  }
+}

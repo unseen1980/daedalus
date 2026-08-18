@@ -1,0 +1,96 @@
+{
+  "per_checkpoint": [
+    {
+      "val_bpb": 0.833594385717362,
+      "per_source_val_bpb": {
+        "cosmopedia-v2": {
+          "val_bpb": 0.5407181981570142,
+          "tokens": 50573683,
+          "weight": 0.060061896026711185
+        },
+        "dclm-baseline": {
+          "val_bpb": 0.9742605076891441,
+          "tokens": 76227783,
+          "weight": 0.22028543318864774
+        },
+        "finemath-3plus": {
+          "val_bpb": 0.9857679287975851,
+          "tokens": 64291747,
+          "weight": 0.04650609454218569
+        },
+        "finepdfs-edu": {
+          "val_bpb": 0.7806417710949333,
+          "tokens": 62389802,
+          "weight": 0.075967394524207
+        },
+        "finephrase": {
+          "val_bpb": 0.905584545976463,
+          "tokens": 90294917,
+          "weight": 0.1085142205984333
+        },
+        "fineweb-edu": {
+          "val_bpb": 0.812255305375607,
+          "tokens": 52368152,
+          "weight": 0.3397787431719533
+        },
+        "finewiki-en": {
+          "val_bpb": 0.7565842641204861,
+          "tokens": 16862671,
+          "weight": 0.028924363806343906
+        },
+        "infiwebmath-3plus": {
+          "val_bpb": 0.7994034197330663,
+          "tokens": 57155913,
+          "weight": 0.04650609454218569
+        },
+        "stack-edu-python": {
+          "val_bpb": 0.6539739347595264,
+          "tokens": 110964651,
+          "weight": 0.07345575959933222
+        }
+      },
+      "hellaswag": 0.37930691097390956,
+      "hellaswag_acc": 0.32662816172077275,
+      "hellaswag_n": 10042,
+      "hellaswag_acc_norm": 0.37930691097390956,
+      "arc_easy": 0.5042087542087542,
+      "arc_easy_acc": 0.5795454545454546,
+      "arc_easy_n": 2376,
+      "arc_easy_acc_norm": 0.5042087542087542,
+      "piqa": 0.6577801958650707,
+      "piqa_acc": 0.6659412404787813,
+      "piqa_n": 1838,
+      "piqa_acc_norm": 0.6577801958650707,
+      "openbookqa": 0.324,
+      "openbookqa_acc": 0.21,
+      "openbookqa_n": 500,
+      "openbookqa_acc_norm": 0.324,
+      "winogrande": 0.500394632991318,
+      "winogrande_acc": 0.500394632991318,
+      "winogrande_n": 1267,
+      "checkpoint": "runs/hero/checkpoint.pt"
+    }
+  ],
+  "mean": {
+    "openbookqa_n": 500.0,
+    "winogrande": 0.500394632991318,
+    "hellaswag_n": 10042.0,
+    "openbookqa": 0.324,
+    "hellaswag_acc_norm": 0.37930691097390956,
+    "arc_easy_n": 2376.0,
+    "arc_easy_acc_norm": 0.5042087542087542,
+    "winogrande_n": 1267.0,
+    "arc_easy": 0.5042087542087542,
+    "hellaswag": 0.37930691097390956,
+    "openbookqa_acc": 0.21,
+    "arc_easy_acc": 0.5795454545454546,
+    "piqa": 0.6577801958650707,
+    "winogrande_acc": 0.500394632991318,
+    "val_bpb": 0.833594385717362,
+    "piqa_acc": 0.6659412404787813,
+    "piqa_acc_norm": 0.6577801958650707,
+    "hellaswag_acc": 0.32662816172077275,
+    "openbookqa_acc_norm": 0.324,
+    "piqa_n": 1838.0
+  }
+}

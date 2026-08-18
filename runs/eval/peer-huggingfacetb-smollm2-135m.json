@@ -1,0 +1,47 @@
+{
+  "per_checkpoint": [
+    {
+      "hellaswag": 0.43178649671380204,
+      "hellaswag_acc": 0.353415654252141,
+      "hellaswag_acc_norm": 0.43178649671380204,
+      "hellaswag_n": 10042,
+      "arc_easy": 0.5879629629629629,
+      "arc_easy_acc": 0.6439393939393939,
+      "arc_easy_acc_norm": 0.5879629629629629,
+      "arc_easy_n": 2376,
+      "piqa": 0.6866158868335147,
+      "piqa_acc": 0.6838955386289445,
+      "piqa_acc_norm": 0.6866158868335147,
+      "piqa_n": 1838,
+      "openbookqa": 0.33,
+      "openbookqa_acc": 0.216,
+      "openbookqa_acc_norm": 0.33,
+      "openbookqa_n": 500,
+      "winogrande": 0.5224940805051302,
+      "winogrande_acc": 0.5224940805051302,
+      "winogrande_n": 1267,
+      "checkpoint": "HuggingFaceTB/SmolLM2-135M"
+    }
+  ],
+  "mean": {
+    "openbookqa_n": 500.0,
+    "piqa": 0.6866158868335147,
+    "arc_easy_n": 2376.0,
+    "winogrande": 0.5224940805051302,
+    "hellaswag_acc_norm": 0.43178649671380204,
+    "piqa_acc": 0.6838955386289445,
+    "hellaswag_acc": 0.353415654252141,
+    "winogrande_acc": 0.5224940805051302,
+    "piqa_acc_norm": 0.6866158868335147,
+    "openbookqa_acc_norm": 0.33,
+    "arc_easy": 0.5879629629629629,
+    "hellaswag": 0.43178649671380204,
+    "arc_easy_acc_norm": 0.5879629629629629,
+    "openbookqa_acc": 0.216,
+    "piqa_n": 1838.0,
+    "winogrande_n": 1267.0,
+    "arc_easy_acc": 0.6439393939393939,
+    "openbookqa": 0.33,
+    "hellaswag_n": 10042.0
+  }
+}

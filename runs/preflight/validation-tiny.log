@@ -1,0 +1,42 @@
+====================================================================
+DAEDALUS SMOKE TEST
+====================================================================
+torch      : 2.12.0+cu130
+device     : cuda
+gpu        : NVIDIA GeForce RTX 5090  (33.7 GB, sm_120)
+config     : tiny
+params     : 1.0M total, 1.0M non-embedding (~1 MB at q4_0)
+layers     : 4 conv + 2 attn
+compile    : True
+block ckpt : False
+loss chunk : 1024
+--------------------------------------------------------------------
+  batch   2 x 128:    18,837 tok/s    13.6 ms/step   0.18 GB  loss 6.29->3.85
+--------------------------------------------------------------------
+BEST THROUGHPUT: 18,837 tok/s
+  5B (ablation)   :   73.7 GPU-hours  = $ 33.11 at $0.449/hr
+  40B (hero run)  :  589.9 GPU-hours  = $264.85 at $0.449/hr
+====================================================================
+wrote runs/preflight/tiny-b2.json
+2026-08-09T19:59:03Z preflight tiny batch 2: yes
+====================================================================
+DAEDALUS SMOKE TEST
+====================================================================
+torch      : 2.12.0+cu130
+device     : cuda
+gpu        : NVIDIA GeForce RTX 5090  (33.7 GB, sm_120)
+config     : tiny
+params     : 1.0M total, 1.0M non-embedding (~1 MB at q4_0)
+layers     : 4 conv + 2 attn
+compile    : True
+block ckpt : False
+loss chunk : 1024
+--------------------------------------------------------------------
+  batch   1 x 128:    10,430 tok/s    12.3 ms/step   0.18 GB  loss 6.30->3.76
+--------------------------------------------------------------------
+BEST THROUGHPUT: 10,430 tok/s
+  5B (ablation)   :  133.2 GPU-hours  = $ 59.79 at $0.449/hr
+  40B (hero run)  : 1065.3 GPU-hours  = $478.31 at $0.449/hr
+====================================================================
+wrote runs/preflight/tiny-b1.json
+2026-08-09T19:59:22Z preflight tiny batch 1: yes

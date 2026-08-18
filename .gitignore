@@ -1,0 +1,101 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.coverage
+
+# Secrets — never commit tokens (HF_TOKEN_WRITE, GH_TOKEN, VAST_API_KEY)
+.env
+.env.*
+*.token
+secrets.sh
+
+# Training artifacts (checkpoints go to the HF Hub, not git)
+*.pt
+*.bin
+*.safetensors
+*.gguf
+data/shards/
+data/shards-*/
+*.npy
+*.memmap
+
+# Local tooling / OS
+.DS_Store
+.deepeval/
+
+# W&B local run cache — already synced to the cloud, don't bloat git history
+wandb/
+
+# Live process pidfiles — pure ephemeral process-tracking, dead the moment
+# the run ends; an automated checkpoint commit swept a stale one into git
+# once already (see STATUS.md "Fourth incident" / 74e519b)
+runs/**/*.pid
+
+# The Hub upload queue. `*.pt` already keeps the 321 MB payloads out, but the
+# `.upload.json` sidecars slipped through on abl-arch's first staged
+# checkpoint. They are transient by construction — ckpt_uploader deletes each
+# one the moment its payload lands on the Hub — so a committed sidecar is at
+# best noise and at worst a resurrected instruction to re-upload a file that
+# no longer exists.
+runs/**/hub_outbox/
+
+# Top-level dataprep run-tracking manifests and logs -- rewritten continuously
+# during a run and can go stale/misleading (a --resume run reads this to
+# decide what's already "done"); a wip commit swept a stale one into git
+# once already (see STATUS.md "Housekeeping" note after the 4th dataprep
+# attempt). Per-source shard manifest.json under data/shards-*/ is already
+# covered by that pattern above.
+data/manifest-*.json
+runs/*/dataprep.log
+runs/*/monitor*.log
+runs/*/sweep.log
+runs/*/sweep_watch.log
+
+# Regenerated on demand by scripts/gguf_task_delta.py from eval.load_hellaswag,
+# so the 7.5 MB is derived, not source. Keeping it out also keeps the item set
+# honest: it must come from the same loader eval.py scores peers with, never
+# from a stale checked-in copy that has drifted from the harness.
+data/eval/hellaswag-llamacpp.txt
+
+# credit_watch runtime state: the last verdict (so an issue is filed once)
+# and the last-written signature (so STATUS.md is not rewritten every poll).
+# Local to the box by design -- neither belongs in history.
+runs/.credit-watch-verdict
+runs/.credit-watch-verdict.sig
+
+# Stray artifacts from tests that use the run-name "test" (tests pass an
+# isolated run_dir, but a future one might not). No real run is named "test":
+# they are hero, sweep-*, abl-arch-*, post-*.
+runs/test/
+
+# Boot-resume state is machine-local by nature: `inflight.json` says "a trainer
+# is running on THIS box right now". Committed, it could be restored into a
+# fresh clone (workspace_is_volume is False, so a recycle re-clones) and tell
+# `scripts/boot_resume.py` to continue a run that never started here -- which,
+# with no checkpoint present, means launching `hero` from step 0, unattended
+# and past its gate. `boot_resume.ran_here` refuses that too; this is the first
+# of the two locks.
+runs/**/inflight.json
+runs/**/inflight.json.tmp
+runs/.boot-resume.lock
+# Same reasoning for the trainer watch: `quiet_since` and `last_action` describe
+# processes on THIS box. Restored into a fresh clone they would either suppress
+# a rescue (a `last_action` from another machine reads as a cooldown) or invent
+# an hour-old absence that never happened here.
+runs/.train-watch.json
+runs/.train-watch.json.tmp
+runs/.train-watch.lock
+runs/.train-watch-stall-issue
+# Machine-local network counter baseline. A stale one restored into a fresh
+# clone would report a wrong egress delta on a box that never sent those bytes.
+runs/.egress-baseline.json
+
+# macOS
+.DS_Store
+._*
+
+# dataprep progress logs
+data/*_progress.jsonl*

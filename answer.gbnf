@@ -1,0 +1,8 @@
+# Minimal JSON grammar: {"answer": "..."}
+# Avoids the {m,n} repetition operators that llama.cpp b10450 rejected in the
+# auto-generated --json-schema grammar.
+root   ::= "{" ws "\"answer\"" ws ":" ws string ws "}"
+string ::= "\"" chars "\""
+chars  ::= char chars | char
+char   ::= [^"\\]
+ws     ::= [ ]*

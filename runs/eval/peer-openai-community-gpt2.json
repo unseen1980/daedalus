@@ -1,0 +1,47 @@
+{
+  "per_checkpoint": [
+    {
+      "hellaswag": 0.31228838876717785,
+      "hellaswag_acc": 0.2901812387970524,
+      "hellaswag_acc_norm": 0.31228838876717785,
+      "hellaswag_n": 10042,
+      "arc_easy": 0.4006734006734007,
+      "arc_easy_acc": 0.44191919191919193,
+      "arc_easy_acc_norm": 0.4006734006734007,
+      "arc_easy_n": 2376,
+      "piqa": 0.6213275299238302,
+      "piqa_acc": 0.6202393906420022,
+      "piqa_acc_norm": 0.6213275299238302,
+      "piqa_n": 1838,
+      "openbookqa": 0.276,
+      "openbookqa_acc": 0.164,
+      "openbookqa_acc_norm": 0.276,
+      "openbookqa_n": 500,
+      "winogrande": 0.4980268350434096,
+      "winogrande_acc": 0.4980268350434096,
+      "winogrande_n": 1267,
+      "checkpoint": "openai-community/gpt2"
+    }
+  ],
+  "mean": {
+    "hellaswag_acc": 0.2901812387970524,
+    "hellaswag_acc_norm": 0.31228838876717785,
+    "hellaswag_n": 10042.0,
+    "piqa_n": 1838.0,
+    "piqa": 0.6213275299238302,
+    "arc_easy_n": 2376.0,
+    "arc_easy": 0.4006734006734007,
+    "openbookqa_acc": 0.164,
+    "openbookqa_n": 500.0,
+    "arc_easy_acc_norm": 0.4006734006734007,
+    "winogrande_n": 1267.0,
+    "arc_easy_acc": 0.44191919191919193,
+    "piqa_acc": 0.6202393906420022,
+    "winogrande": 0.4980268350434096,
+    "winogrande_acc": 0.4980268350434096,
+    "openbookqa": 0.276,
+    "openbookqa_acc_norm": 0.276,
+    "hellaswag": 0.31228838876717785,
+    "piqa_acc_norm": 0.6213275299238302
+  }
+}

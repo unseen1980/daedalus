@@ -1,0 +1,44 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+initialized weights from runs/preflight/fake-hero.pt: step=0 tokens_seen=0, fresh optimizer state and LR schedule
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: koutsiaris (koutsiaris-sap) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run 48ntacet
+wandb: Tracking run with wandb version 0.28.1
+wandb: Run data is saved locally in /workspace/daedalus/wandb/run-20260809_221332-48ntacet
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run post-smoke
+wandb: ⭐️ View project at https://wandb.ai/koutsiaris-sap/daedalus
+wandb: 🚀 View run at https://wandb.ai/koutsiaris-sap/daedalus/runs/48ntacet
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (14684 > 8192). Running this sequence through the model will result in indexing errors
+[milestone] end of stable phase at step 3 (3,072 tokens) -> revision post-smoke-stable-end-step3
+SFT done: 12 examples, 1324 supervised of 3386 padded tokens (39.1%)
+[dpo] ~0.2 GB of logits per step (batch 1 x seq 256 x 4 forwards)
+[dpo] step     1  loss 0.6931  margin +0.000  acc 0.000
+post done: final weights -> runs/post-smoke/final.pt
+wandb: updating run metadata
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading history steps 0-2, summary, console lines 4-5
+wandb: 
+wandb: Run history:
+wandb:        dpo_accuracy ▁█
+wandb:   dpo_chosen_reward █▁
+wandb:        dpo_dpo_loss █▁
+wandb:          dpo_margin ▁█
+wandb: dpo_rejected_reward █▁
+wandb:      milestone_step ▁
+wandb:                step ▁█
+wandb: 
+wandb: Run summary:
+wandb:        dpo_accuracy 1
+wandb:   dpo_chosen_reward -0.04225
+wandb:        dpo_dpo_loss 0.30839
+wandb:          dpo_margin 10.18237
+wandb: dpo_rejected_reward -1.0605
+wandb:      milestone_step 3
+wandb:                step 2
+wandb: 
+wandb: 🚀 View run post-smoke at: https://wandb.ai/koutsiaris-sap/daedalus/runs/48ntacet
+wandb: ⭐️ View project at: https://wandb.ai/koutsiaris-sap/daedalus
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20260809_221332-48ntacet/logs
+EXIT_CODE=0

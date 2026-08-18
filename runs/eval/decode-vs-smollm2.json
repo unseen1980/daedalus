@@ -1,0 +1,96 @@
+{
+  "passes": [
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 0,
+      "rounds": 3,
+      "models": {
+        "ours": {
+          "path": "/tmp/dense-gguf-dryrun/hybrid-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            958.11,
+            964.74,
+            959.81
+          ],
+          "mean": 960.89,
+          "stdev": 3.44
+        },
+        "smollm2": {
+          "path": "/tmp/peer-bench/smollm2-135m-q4_0.gguf",
+          "file_mb": 91.73,
+          "samples": [
+            889.36,
+            884.13,
+            950.87
+          ],
+          "mean": 908.12,
+          "stdev": 37.11
+        }
+      }
+    },
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 512,
+      "rounds": 3,
+      "models": {
+        "ours": {
+          "path": "/tmp/dense-gguf-dryrun/hybrid-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            951.96,
+            948.25,
+            900.92
+          ],
+          "mean": 933.71,
+          "stdev": 28.46
+        },
+        "smollm2": {
+          "path": "/tmp/peer-bench/smollm2-135m-q4_0.gguf",
+          "file_mb": 91.73,
+          "samples": [
+            660.66,
+            584.49,
+            632.03
+          ],
+          "mean": 625.73,
+          "stdev": 38.47
+        }
+      }
+    },
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 2048,
+      "rounds": 3,
+      "models": {
+        "ours": {
+          "path": "/tmp/dense-gguf-dryrun/hybrid-q4_0.gguf",
+          "file_mb": 101.98,
+          "samples": [
+            634.31,
+            657.8,
+            653.84
+          ],
+          "mean": 648.65,
+          "stdev": 12.57
+        },
+        "smollm2": {
+          "path": "/tmp/peer-bench/smollm2-135m-q4_0.gguf",
+          "file_mb": 91.73,
+          "samples": [
+            316.12,
+            316.92,
+            304.13
+          ],
+          "mean": 312.39,
+          "stdev": 7.16
+        }
+      }
+    }
+  ],
+  "note": "sweep-wsdfix probe 2 training on the GPU throughout",
+  "metric": "llama-bench decode tok/s (-p 0), alternating rounds; absolute values depend on concurrent box load and are comparable only within one invocation -- the ratio is the durable number"
+}
