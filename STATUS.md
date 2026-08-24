@@ -1,9 +1,9 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-24T11:20:50.779853Z`
+- Heartbeat: `2026-08-24T11:25:52.287729Z`
 - Phase: `bootstrap`
 - Status: `running`
-- Source: `vast/daedalus-improvements-20260824` at `d8bbbf099403`
+- Source: `vast/daedalus-improvements-20260824` at `beb6317c3ec2`
 
 ## Latest Metrics
 
@@ -16,7 +16,7 @@
 ```json
 {
   "memory_total_mb": 24564,
-  "memory_used_mb": 9,
+  "memory_used_mb": 398,
   "utilization_pct": 0
 }
 ```
