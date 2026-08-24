@@ -1035,3 +1035,44 @@ class TestStaleFailureContext:
         keeper.step()
 
         assert launcher.requests[1].failure_context == ""
+
+
+class TestNestedSupervisedRuns:
+    """Experiment drivers group their arms below the runs root."""
+
+    def _marker(self, run_dir: Path, *, live: bool) -> None:
+        import os
+
+        from daedalus.supervise import proc_start_ticks
+
+        run_dir.mkdir(parents=True, exist_ok=True)
+        marker = {"schema": 1, "cmd": ["train.py"]}
+        if live:
+            marker["supervisor_pid"] = os.getpid()
+            marker["supervisor_start_ticks"] = proc_start_ticks(os.getpid())
+        (run_dir / "inflight.json").write_text(json.dumps(marker))
+
+    @pytest.mark.skipif(
+        not Path("/proc").is_dir(), reason="process start ticks are read from /proc"
+    )
+    def test_an_arm_nested_under_its_driver_marks_the_box_busy(self, tmp_path):
+        self._marker(tmp_path / "qat-recovery" / "muon-5e-4", live=True)
+
+        assert supervised_job_probe(tmp_path)() is True
+
+    @pytest.mark.skipif(
+        not Path("/proc").is_dir(), reason="process start ticks are read from /proc"
+    )
+    def test_a_top_level_run_still_marks_the_box_busy(self, tmp_path):
+        self._marker(tmp_path / "hero", live=True)
+
+        assert supervised_job_probe(tmp_path)() is True
+
+    def test_a_nested_completed_arm_does_not_hold_the_program_idle(self, tmp_path):
+        run_dir = tmp_path / "qat-recovery" / "muon-1e-3"
+        run_dir.mkdir(parents=True)
+        (run_dir / "inflight.json").write_text(
+            json.dumps({"schema": 1, "completed": True, "supervisor_pid": 1})
+        )
+
+        assert supervised_job_probe(tmp_path)() is False

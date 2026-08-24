@@ -583,7 +583,11 @@ def supervised_job_probe(runs_root) -> Callable[[], bool]:
 
         if not root.is_dir():
             return False
-        for marker_path in sorted(root.glob("*/inflight.json")):
+        # Nested, not just `runs/<name>/`: an experiment driver groups its arms
+        # under its own directory, so a probe's marker lives at
+        # `runs/qat-recovery/<arm>/inflight.json`. Globbing one level deep would
+        # miss every one of them and relaunch sessions into a box that is busy.
+        for marker_path in sorted(root.rglob("inflight.json")):
             marker = read_inflight(str(marker_path.parent))
             if not marker or marker.get("completed"):
                 continue
