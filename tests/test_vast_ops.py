@@ -145,6 +145,15 @@ def test_phase_command_runs_controller_with_repository_on_pythonpath(tmp_path):
     assert state.exists()
 
 
+def test_progress_once_command_uses_github_progress_publisher():
+    wrapper = (ROOT / "ops/vast/run-approved").read_text()
+
+    assert "progress-once)" in wrapper
+    assert "scripts/github_progress.py" in wrapper
+    assert "--once" in wrapper
+    assert "DAEDALUS_PROGRESS_WORKTREE" in wrapper
+
+
 def test_pr_status_script_renders_draft_commands_without_merge_or_close():
     script = ROOT / "scripts/pr_status.py"
     subprocess.run(["python", "-m", "py_compile", str(script)], check=True)

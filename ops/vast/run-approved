@@ -82,6 +82,18 @@ case "${command_name}" in
         export PYTHONPATH="${repo}${PYTHONPATH:+:${PYTHONPATH}}"
         exec python scripts/vast_program.py "$@"
         ;;
+    progress-once)
+        source "${venv_dir}/bin/activate"
+        progress_worktree=${DAEDALUS_PROGRESS_WORKTREE:-/workspace/daedalus-progress}
+        state_path=${DAEDALUS_STATE_PATH:-${repo}/runs/vast-program/state.json}
+        progress_branch=${DAEDALUS_PROGRESS_BRANCH:-vast/progress-20260824}
+        exec python scripts/github_progress.py \
+            --source-repo "${repo}" \
+            --progress-worktree "${progress_worktree}" \
+            --state "${state_path}" \
+            --branch "${progress_branch}" \
+            --once
+        ;;
     hash)
         [[ $# -gt 0 ]] || { echo "paths required" >&2; exit 2; }
         for path in "$@"; do
