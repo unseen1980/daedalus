@@ -139,12 +139,31 @@ class TestDecide:
             kind="block", reason="hard blocker", generation=1, attempt=0
         )
 
-    @pytest.mark.parametrize("status", ["complete", "halted", "blocked", "failed"])
-    def test_terminal_program_status_stops_supervision(self, status):
+    @pytest.mark.parametrize("status", ["complete", "completed"])
+    def test_a_finished_program_stops_supervision(self, status):
         action = decision(KeeperState(), status=status)
 
         assert action.kind == "stop"
         assert status in action.reason
+
+    @pytest.mark.parametrize("status", ["halted", "blocked", "failed"])
+    def test_a_recorded_blocker_stops_supervision(self, status):
+        action = decision(
+            KeeperState(), status=status, details={"blocker": "needs an operator"}
+        )
+
+        assert action.kind == "stop"
+        assert "blocker" in action.reason
+
+    @pytest.mark.parametrize("status", ["halted", "failed"])
+    def test_a_failed_phase_command_keeps_supervision_running(self, status):
+        # `run-phase` writes `halted` when one command exits non-zero. That is
+        # the repair contract's cue to engage, not to go offline.
+        action = decision(
+            KeeperState(), status=status, details={"attempts": 1, "returncodes": [1]}
+        )
+
+        assert action.kind == "launch"
 
     def test_no_experiment_session_starts_inside_the_finalization_window(self):
         now = START + timedelta(hours=137)

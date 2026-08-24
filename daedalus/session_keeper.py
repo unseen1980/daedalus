@@ -41,10 +41,29 @@ from daedalus.program_state import (
 
 KEEPER_STATE_SCHEMA = 1
 
-#: Program statuses after which no further engineering session may start.
-TERMINAL_PROGRAM_STATUSES = frozenset(
-    {"complete", "completed", "halted", "blocked", "failed"}
-)
+#: Statuses that end the program on their own terms.
+FINISHED_PROGRAM_STATUSES = frozenset({"complete", "completed"})
+
+#: Statuses that end the program only when a blocker was actually recorded.
+#: The controller also writes `halted` when a single phase command exits
+#: non-zero, which is a failure to repair rather than a reason to stop
+#: supervising -- treating the two alike would take the keeper offline at
+#: exactly the moment the repair contract is supposed to engage.
+HALT_LIKE_PROGRAM_STATUSES = frozenset({"halted", "blocked", "failed"})
+
+
+def program_has_stopped(program_state: dict) -> tuple:
+    """``(stopped, reason)`` for the program's own terminal condition."""
+
+    status = str(program_state.get("status", ""))
+    if status in FINISHED_PROGRAM_STATUSES:
+        return True, f"program status {status}"
+    if status not in HALT_LIKE_PROGRAM_STATUSES:
+        return False, ""
+    details = program_state.get("details") or {}
+    if details.get("blocker") or details.get("user_action_required"):
+        return True, f"program status {status} with a recorded blocker"
+    return False, ""
 
 #: Phase names that carry no engineering work.
 IDLE_PHASES = frozenset({"", "not_started"})
@@ -261,9 +280,9 @@ def decide(
             attempt=keeper_state.attempt,
         )
 
-    status = str(program_state.get("status", ""))
-    if status in TERMINAL_PROGRAM_STATUSES:
-        return KeeperAction(kind="stop", reason=f"program status {status}")
+    stopped, stop_reason = program_has_stopped(program_state)
+    if stopped:
+        return KeeperAction(kind="stop", reason=stop_reason)
 
     stage = deadline.stage(now)
     if stage == "expired":
