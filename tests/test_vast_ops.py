@@ -188,3 +188,13 @@ def test_standing_engineering_prompt_carries_the_repair_contract():
     assert "/usr/local/bin/daedalus-approved" in prompt
     assert "focused" in prompt
     assert "Do not ask" in prompt
+
+
+def test_phase_three_prompt_preregisters_its_gates():
+    prompt = (ROOT / "ops/vast/prompts/phase3-qat-recovery.md").read_text()
+
+    assert "--init-from" in prompt and "never" in prompt
+    assert "qat_frac=1.0" in prompt
+    assert "50% reduction" in prompt
+    assert "Do not tune a threshold after seeing an outcome." in prompt
+    assert "/usr/local/bin/daedalus-approved" in prompt
