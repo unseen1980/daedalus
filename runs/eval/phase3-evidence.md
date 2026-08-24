@@ -393,3 +393,12 @@ The released repositories are untouched. The input checkpoint
   preregistration.
 - **The `_safe_reciprocal` fix should be carried into Phase 8.** Daedalus-Code
   starts from the same checkpoint family and would hit the identical NaN.
+- **Full-pass BPB was not measured**, and it is third in the preregistered
+  selection order. `scripts/bpb_eval.py` needs a `--holdout-root`, and the
+  corpus slice fetched here is train shards only — `make_mixture_holdout_split`
+  was never run against it, so there is no held-out split to score. It could
+  not have changed this verdict: BPB sits below the Q4 penalty and FP16
+  retention in the lexicographic order, both of which already separated the
+  arms, and no arm was accepted, so no tie needed breaking. It is recorded as
+  not-measured rather than left to look measured, and building the holdout is
+  a prerequisite for any rerun that expects BPB to arbitrate.
