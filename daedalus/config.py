@@ -60,6 +60,16 @@ class DaedalusConfig:
     tie_word_embeddings: bool = True
     initializer_range: float = 0.02
 
+    # --- tokenizer (stripped before HF save) ---
+    # `None` means the SmolLM2 default every existing run uses, so no shipped
+    # config changes behaviour. A path or Hub name here is what lets Phase 4's
+    # candidate vocabularies be trained and evaluated without a second copy of
+    # the model definition -- `vocab_size` alone says how many rows the
+    # embedding has, not which tokenizer produced the ids that index them, and
+    # a shard packed under one vocabulary read under another is a silent
+    # mis-embedding rather than an error.
+    tokenizer: Optional[str] = None
+
     # --- training-only knobs (stripped before HF save) ---
     z_loss: float = 1e-4
     logit_softcap: float = 0.0        # 0 disables; use either this or z_loss
@@ -112,8 +122,12 @@ class DaedalusConfig:
 
     def to_hf_dict(self) -> dict:
         d = asdict(self)
+        # `tokenizer` is stripped with the other training-only knobs: config.json
+        # is read by llama.cpp's converter, which fingerprints the tokenizer from
+        # the tokenizer files beside it, and an unexpected key there is a
+        # gratuitous difference from every `Lfm2Config` the converter has seen.
         for k in ("z_loss", "logit_softcap", "num_attention_blocks",
-                  "loss_chunk_size", "gradient_checkpointing"):
+                  "loss_chunk_size", "gradient_checkpointing", "tokenizer"):
             d.pop(k, None)
         # SmolLM2's tokenizer maps bos/eos/unk/pad all to `<|endoftext|>` (id 0);
         # it has no distinct pad token. Verified against the real tokenizer_config
@@ -152,6 +166,51 @@ PRESETS = {
         vocab_size=512, num_attention_blocks=2, max_position_embeddings=256,
     ),
 }
+
+
+# ------------------------------------------------- Phase 4 tokenizer probes ----
+# One preset per candidate vocabulary, identical in every other field, so a
+# tiny-model comparison between vocabularies varies the vocabulary and nothing
+# else. Generated rather than written out four times: four hand-copied configs
+# are four chances for one of them to differ in a field nobody re-reads, and
+# the whole comparison rests on them being otherwise the same.
+#
+# The shape is the shipped model's layout narrowed rather than an unrelated
+# small model: 18 blocks with 6 attention, hidden 512 instead of 768. Two
+# properties matter and the obvious cheaper shapes have neither.
+#
+# **The embedding fraction has to be realistic**, because it is the thing under
+# test. Shipped, `token_embd` is 25.1% of parameters. These probes run 17.6%
+# (24,576) to 29.9% (49,152), bracketing it -- so a vocabulary's cost lands
+# roughly where it lands in the real artifact. A shallower probe would push the
+# embedding past 40% and turn a vocabulary comparison into a comparison of how
+# much of the model is a lookup table.
+#
+# **The layout is the shipped one**, so Phase 4 is not quietly answering a
+# Phase 6 question. Depth, attention count and KV heads are what Phase 6
+# varies; holding them at the shipped ratio here keeps the two separable.
+
+TOKENIZER_PROBE_VOCAB_SIZES = (24576, 32768, 40960, 49152)
+
+
+def tokenizer_probe_config(vocab_size: int, tokenizer: Optional[str] = None
+                           ) -> DaedalusConfig:
+    """The shared Phase 4 probe shape at one vocabulary size."""
+    return DaedalusConfig(
+        hidden_size=512, num_hidden_layers=18, num_attention_heads=8,
+        num_key_value_heads=2, head_dim=64, block_ff_dim=1536,
+        num_attention_blocks=6, vocab_size=vocab_size,
+        max_position_embeddings=1024, tokenizer=tokenizer,
+    )
+
+
+def tokenizer_probe_preset_name(vocab_size: int) -> str:
+    return f"tok-probe-{vocab_size}"
+
+
+for _vocab in TOKENIZER_PROBE_VOCAB_SIZES:
+    PRESETS[tokenizer_probe_preset_name(_vocab)] = tokenizer_probe_config(_vocab)
+del _vocab
 
 
 if __name__ == "__main__":

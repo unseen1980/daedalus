@@ -193,6 +193,23 @@ def recovery_exposure(mixture_root, *, run_tokens: int,
     }
 
 
+def tokenizer_artifact(path) -> ArtifactRef:
+    """An `ArtifactRef` for a tokenizer given as a file *or* a directory.
+
+    A saved HF tokenizer is a directory, and `sha256_file` on one raises
+    IsADirectoryError. Hashing `tokenizer.json` inside it is the right digest
+    anyway: it is the file that carries the vocabulary and the merges, which is
+    what "which tokenizer scored this" means.
+    """
+    path = Path(path)
+    target = path / "tokenizer.json" if path.is_dir() else path
+    if not target.exists():
+        raise FileNotFoundError(
+            f"{path} is not a tokenizer file and has no tokenizer.json")
+    return ArtifactRef(path=str(path), sha256=sha256_file(target),
+                       kind="tokenizer")
+
+
 def parse_weights(pairs) -> Dict[str, float]:
     weights = {}
     for pair in pairs or ():
@@ -342,7 +359,14 @@ def main(argv=None) -> int:
     from eval import evaluate_bpb
     from train import load_checkpoint
 
-    tokenizer = get_tokenizer()
+    # `--tokenizer` decodes the held-out ids, it does not merely label the
+    # scorecard. Bits per byte is nats/token converted through the *bytes those
+    # tokens stand for*, and the byte count comes from decoding them -- so
+    # decoding a 32,768-vocabulary holdout with SmolLM2 counts the wrong bytes
+    # and reports a BPB for a corpus that does not exist. Harmless while every
+    # artifact shared one tokenizer; wrong from Phase 4 onward, which is
+    # exactly when BPB became the metric that decides between vocabularies.
+    tokenizer = get_tokenizer(args.tokenizer)
     model = Daedalus(PRESETS[args.config]).to(args.device)
     load_checkpoint(args.checkpoint, model, map_location=args.device)
     model.eval()
@@ -352,10 +376,7 @@ def main(argv=None) -> int:
                             args.device, batch_size=args.batch_size,
                             max_batches=max_batches)
 
-    tokenizer_ref = (ArtifactRef(path=args.tokenizer,
-                                 sha256=sha256_file(args.tokenizer),
-                                 kind="tokenizer")
-                     if args.tokenizer
+    tokenizer_ref = (tokenizer_artifact(args.tokenizer) if args.tokenizer
                      else ArtifactRef(path="<smollm2-default>", sha256="0" * 64,
                                       kind="tokenizer"))
 

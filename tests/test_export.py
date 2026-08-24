@@ -1151,3 +1151,64 @@ def test_the_written_config_declares_the_dtype_the_weights_are_in(tmp_path):
         f"Q4_0 grid through export")
     assert declared == actual, (
         f"config.json declares {declared!r} beside {actual!r} weights")
+
+
+# ------------------------------------------------ explicit tokenizer path ----
+
+def test_export_tokenizer_still_defaults_to_smollm2():
+    """Phase 4 added an override. Every shipped export must be unaffected by
+    it, because SmolLM2's pre-tokenizer hash is the one llama.cpp's converter
+    recognises and any other vocabulary makes conversion raise."""
+    import inspect
+
+    signature = inspect.signature(export_module.export_tokenizer)
+    assert signature.parameters["tokenizer"].default is None
+    assert signature.parameters["expected_vocab_size"].default is None
+    assert "tokenizer or SMOLLM2_TOKENIZER" in inspect.getsource(
+        export_module.export_tokenizer)
+
+
+def test_export_tokenizer_refuses_a_vocabulary_the_model_cannot_index(tmp_path):
+    """A 49,152-token tokenizer beside a 32,768-row embedding produces a
+    directory that converts, quantizes and loads -- and decodes the wrong token
+    for every id. The guard is the only thing between the override and that."""
+    with pytest.raises(ValueError, match="rows"):
+        export_module.export_tokenizer(str(tmp_path / "hf"),
+                                       expected_vocab_size=32768)
+
+
+def test_config_json_never_carries_the_tokenizer_field(tmp_path):
+    """`tokenizer` is a training-only knob. llama.cpp's converter reads
+    config.json by name and fingerprints the tokenizer from the files beside
+    it; an extra key there is a gratuitous difference from every `Lfm2Config`
+    the converter has seen."""
+    import json
+
+    from daedalus.config import PRESETS, tokenizer_probe_preset_name
+
+    probe = PRESETS[tokenizer_probe_preset_name(32768)]
+    assert "tokenizer" in vars(probe)
+    assert "tokenizer" not in probe.to_hf_dict()
+
+    ckpt = _tiny_checkpoint(tmp_path)
+    out = str(tmp_path / "hf")
+    export_hf_model(ckpt, "tiny", out)
+    assert "tokenizer" not in json.load(open(os.path.join(out, "config.json")))
+
+
+def test_the_model_card_names_a_non_default_vocabulary(tmp_path):
+    """A card claiming a byte-identical SmolLM2 tokenizer beside a 32,768-row
+    embedding would be false, and the card travels with the weights."""
+    from daedalus.config import PRESETS, tokenizer_probe_preset_name
+
+    name = tokenizer_probe_preset_name(32768)
+    PRESETS[name].tokenizer = "data/tokenizer-lab/tokenizers/v32768"
+    try:
+        out = tmp_path / "card"
+        out.mkdir()
+        export_module.write_model_card(str(out), name)
+        card = (out / "README.md").read_text()
+    finally:
+        PRESETS[name].tokenizer = None
+    assert "v32768" in card
+    assert "reused byte-identical" not in card.split("| tokenizer |")[1].split("\n")[0]

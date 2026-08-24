@@ -246,7 +246,8 @@ CHATML_TEMPLATE = (
 )
 
 
-def export_tokenizer(out_dir: str) -> str:
+def export_tokenizer(out_dir: str, tokenizer: Optional[str] = None,
+                     expected_vocab_size: Optional[int] = None) -> str:
     """SmolLM2's tokenizer, reused byte-identical (AGENT.md SS2) -- its
     pre-tokenizer hash is registered with llama.cpp's converter, so any
     modification breaks GGUF conversion.
@@ -257,9 +258,30 @@ def export_tokenizer(out_dir: str) -> str:
     metadata beside them, read by `apply_chat_template` and copied into the
     GGUF -- it changes no id, so the converter's pre-tokenizer hash is
     unaffected.
+
+    `tokenizer` overrides the default with a path or Hub name, for Phase 4's
+    candidate vocabularies. `None` keeps SmolLM2, so every shipped export is
+    unchanged. **A non-default vocabulary does not convert under stock
+    llama.cpp** -- `conversion/base.py::get_vocab_base_pre` hashes the token
+    ids of a fixed probe string and raises `NotImplementedError` for any hash
+    it does not already carry, so a newly trained vocabulary has to be
+    registered upstream first. That is a finding for the V2 migration report,
+    not something this function can work around, and it is why the override
+    exists for measurement rather than for shipping.
+
+    `expected_vocab_size` is the guard that makes the override safe to use.
+    Writing a 49,152-token tokenizer beside a 32,768-row embedding produces a
+    directory that converts, quantizes and loads, and answers with the wrong
+    token for every id above the model's range.
     """
     from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(SMOLLM2_TOKENIZER)
+    tok = AutoTokenizer.from_pretrained(tokenizer or SMOLLM2_TOKENIZER)
+    if expected_vocab_size is not None and tok.vocab_size != expected_vocab_size:
+        raise ValueError(
+            f"tokenizer {tokenizer or SMOLLM2_TOKENIZER!r} has "
+            f"{tok.vocab_size} tokens but the model's embedding has "
+            f"{expected_vocab_size} rows; exporting them together produces an "
+            f"artifact that loads and decodes the wrong token for every id")
     tok.chat_template = CHATML_TEMPLATE
     tok.save_pretrained(out_dir)
     return out_dir
@@ -433,8 +455,16 @@ def render_model_card(cfg_name: str, *, run_name: Optional[str] = None,
         f"| RoPE theta | {cfg.rope_theta:,.0f} |",
         f"| context | {cfg.max_position_embeddings} |",
         f"| tied embeddings | {cfg.tie_word_embeddings} |",
-        f"| tokenizer | [`{SMOLLM2_TOKENIZER}`](https://huggingface.co/"
-        f"{SMOLLM2_TOKENIZER}), reused byte-identical, vocab {cfg.vocab_size:,} |",
+        # `cfg.tokenizer` is None for every shipped preset, so this renders the
+        # SmolLM2 line unchanged. A Phase 4 probe preset names its own
+        # vocabulary instead, because a card claiming a byte-identical SmolLM2
+        # tokenizer beside a 32,768-row embedding would be false.
+        (f"| tokenizer | [`{SMOLLM2_TOKENIZER}`](https://huggingface.co/"
+         f"{SMOLLM2_TOKENIZER}), reused byte-identical, vocab "
+         f"{cfg.vocab_size:,} |")
+        if cfg.tokenizer is None else
+        (f"| tokenizer | `{cfg.tokenizer}`, vocab {cfg.vocab_size:,} "
+         f"(not SmolLM2; see the V2 tokenizer migration report) |"),
         "",
     ]
 

@@ -31,12 +31,94 @@ SMOLLM2_TOKENIZER = "HuggingFaceTB/SmolLM2-135M"
 DEFAULT_EOS_ID = 0
 
 
-def get_tokenizer(name: str = SMOLLM2_TOKENIZER):
-    """Load the SmolLM2 tokenizer byte-identical. Import is local so importing
-    this module (e.g. from train.py for `PackedTokenDataset`) doesn't require
-    `transformers` unless tokenization is actually used."""
+def get_tokenizer(name: Optional[str] = None):
+    """Load a tokenizer -- SmolLM2 byte-identical by default.
+
+    `name` accepts a Hub id or a local directory, so Phase 4's candidate
+    vocabularies can be packed and scored through this same pipeline. `None`
+    (the default, and what every existing caller passes) resolves to SmolLM2,
+    so no shipped run changes behaviour.
+
+    The explicit-path form exists because `vocab_size` is not a tokenizer.
+    Two shard directories built under different vocabularies are the same
+    dtype, the same shape and the same manifest schema; nothing about reading
+    the wrong one raises, it just embeds ids that mean something else. The
+    matching guard is `assert_manifest_tokenizer`.
+
+    Import is local so importing this module (e.g. from train.py for
+    `PackedTokenDataset`) doesn't require `transformers` unless tokenization is
+    actually used.
+    """
     from transformers import AutoTokenizer
-    return AutoTokenizer.from_pretrained(name)
+    return AutoTokenizer.from_pretrained(name or SMOLLM2_TOKENIZER)
+
+
+def tokenizer_fingerprint(tokenizer, name: Optional[str] = None) -> dict:
+    """What a manifest records about the tokenizer that produced its ids.
+
+    The vocabulary size alone is not enough -- two 32,768-token vocabularies
+    trained on different samples share it and agree on nothing else -- so the
+    fingerprint also carries the ids of the pinned specials and a digest of the
+    tokenization of a fixed probe string. That digest is the same trick
+    llama.cpp's converter uses to identify a pre-tokenizer, and it is cheap
+    enough to check before every pass over a shard directory.
+
+    A tokenizer that does not expose the full `PreTrainedTokenizer` surface --
+    the stand-ins several tests pack shards with, for instance -- yields a
+    `partial` fingerprint carrying only what it could answer. That is recorded
+    rather than faked, and `assert_manifest_tokenizer` compares only fields
+    both sides actually have, so a partial fingerprint degrades to the same
+    non-guard as a manifest written before this field existed.
+    """
+    import hashlib
+
+    probe = ("Daedalus tokenizer fingerprint probe\n\tdef f(x):\n"
+             "        return x ** 2  # 中文 🚀 ∀x∈ℝ\n")
+    fingerprint = {
+        "name": name or getattr(tokenizer, "name_or_path", None) or SMOLLM2_TOKENIZER,
+    }
+    try:
+        ids = tokenizer.encode(probe, add_special_tokens=False)
+        fingerprint["probe_digest"] = hashlib.sha256(
+            str(list(ids)).encode()).hexdigest()[:32]
+    except TypeError:
+        pass
+    for field, read in (("vocab_size", lambda: int(tokenizer.vocab_size)),
+                        ("eos_id",
+                         lambda: tokenizer.convert_tokens_to_ids("<|endoftext|>"))):
+        try:
+            fingerprint[field] = read()
+        except (AttributeError, TypeError, ValueError):
+            pass
+    if "probe_digest" not in fingerprint or "vocab_size" not in fingerprint:
+        fingerprint["partial"] = True
+    return fingerprint
+
+
+def assert_manifest_tokenizer(manifest: dict, tokenizer, name: Optional[str] = None
+                              ) -> None:
+    """Refuse a shard directory that was packed under a different tokenizer.
+
+    Silent by default is the whole problem: `PackedTokenDataset` will happily
+    serve 32,768-vocabulary ids to a 49,152-row embedding, and the run trains,
+    logs a loss and exports. A manifest written before this field existed
+    carries no fingerprint and is passed through rather than refused, so older
+    corpora keep working.
+    """
+    recorded = manifest.get("tokenizer")
+    if not recorded:
+        return
+    current = tokenizer_fingerprint(tokenizer, name)
+    for field in ("vocab_size", "probe_digest"):
+        if field not in recorded or field not in current:
+            continue
+        if recorded[field] != current[field]:
+            raise ValueError(
+                f"shard tokenizer mismatch on {field!r}: shards were packed by "
+                f"{recorded.get('name')!r} ({recorded.get(field)!r}) but "
+                f"{current['name']!r} gives {current[field]!r}. Reading these "
+                f"ids under this tokenizer is not an error anything raises -- "
+                f"it silently trains on a different vocabulary.")
 
 
 # --------------------------------------------------------------- streaming ----
@@ -145,16 +227,24 @@ class ShardWriter:
 def tokenize_and_pack(tokenizer, documents: Iterable[str], out_dir: str,
                        eos_id: int = DEFAULT_EOS_ID,
                        shard_tokens: int = 100_000_000,
-                       manifest_extra: Optional[dict] = None) -> dict:
+                       manifest_extra: Optional[dict] = None,
+                       tokenizer_name: Optional[str] = None) -> dict:
     """Stream-tokenize `documents` into fixed-size uint16 shards under
-    `out_dir`, EOS-separated dense packing. Writes and returns the manifest."""
+    `out_dir`, EOS-separated dense packing. Writes and returns the manifest.
+
+    The manifest records which tokenizer produced the ids (see
+    `tokenizer_fingerprint`). That was always worth recording and became
+    necessary in Phase 4, where four shard directories differing only in
+    vocabulary sit side by side.
+    """
     writer = ShardWriter(out_dir, shard_tokens=shard_tokens)
     n_docs = 0
     for text in documents:
         writer.write(tokenize_document(tokenizer, text, eos_id))
         n_docs += 1
     writer.close()
-    extra = {"n_documents": n_docs, "eos_id": eos_id}
+    extra = {"n_documents": n_docs, "eos_id": eos_id,
+             "tokenizer": tokenizer_fingerprint(tokenizer, tokenizer_name)}
     if manifest_extra:
         extra.update(manifest_extra)
     writer.write_manifest(extra)

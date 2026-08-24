@@ -403,3 +403,39 @@ def test_run_bpb_eval_carries_extra_details_into_the_record(tmp_path):
 
     payload = json.loads(paths["scorecard"].read_text())
     assert payload["details"]["exposure"]["max_epochs_seen"] == 0.5
+
+
+# ------------------------------------------------------- which tokenizer ----
+
+def test_the_tokenizer_flag_decodes_the_holdout_not_just_labels_it():
+    """Bits per byte is nats-per-token converted through *the bytes those
+    tokens stand for*, and the byte count comes from decoding them. `--tokenizer`
+    used to reach only the scorecard's provenance while `get_tokenizer()`
+    decoded with SmolLM2 regardless -- invisible while every artifact shared one
+    vocabulary, and wrong from Phase 4 on, which is exactly when BPB became the
+    metric that decides between vocabularies."""
+    import inspect
+
+    from scripts import bpb_eval
+
+    source = inspect.getsource(bpb_eval.main)
+    assert "get_tokenizer(args.tokenizer)" in source
+    assert "get_tokenizer()" not in source
+
+
+def test_a_tokenizer_directory_is_hashed_by_its_vocabulary_file(tmp_path):
+    """A saved HF tokenizer is a directory, and `sha256_file` on one raises.
+    `tokenizer.json` is the right digest anyway: it carries the vocabulary and
+    the merges, which is what "which tokenizer scored this" means."""
+    from scripts.bpb_eval import tokenizer_artifact
+
+    directory = tmp_path / "v32768"
+    directory.mkdir()
+    (directory / "tokenizer.json").write_text('{"model": {}}')
+    reference = tokenizer_artifact(directory)
+    assert reference.kind == "tokenizer"
+    assert reference.path == str(directory)
+    assert len(reference.sha256) == 64
+
+    with pytest.raises(FileNotFoundError):
+        tokenizer_artifact(tmp_path / "not-a-tokenizer")
