@@ -18,6 +18,11 @@ install -m 0755 "${repo_root}/ops/vast/run-approved" \
 install -m 0644 "${repo_root}/ops/vast/supervisord.conf" \
     /etc/supervisor/conf.d/daedalus.conf
 
+# Permission rules in .claude/settings.json are ignored until the workspace is
+# trusted, and the deny rules protecting credentials are among them.
+python3 "${repo_root}/ops/vast/trust_workspace.py" \
+    --workspace "${repo_root}"
+
 supervisorctl reread
 supervisorctl update
 supervisorctl status daedalus_progress

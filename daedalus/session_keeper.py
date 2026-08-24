@@ -26,6 +26,7 @@ import os
 import signal
 import subprocess
 import time
+import uuid
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -126,6 +127,7 @@ class LaunchRequest:
     generation: int
     attempt: int
     resume_session_id: Optional[str] = None
+    session_id: Optional[str] = None
     failure_context: str = ""
     system_prompt_path: Optional[Path] = None
 
@@ -413,8 +415,13 @@ class ClaudeSessionLauncher:
         system_prompt = request.system_prompt_path or self.system_prompt_path
         if system_prompt is not None:
             argv += ["--append-system-prompt-file", str(system_prompt)]
+        # The id is assigned by the keeper rather than read back from the
+        # result, so a session that is killed, times out, or dies before
+        # printing anything is still resumable.
         if request.resume_session_id:
             argv += ["--resume", request.resume_session_id]
+        elif request.session_id:
+            argv += ["--session-id", request.session_id]
         return argv
 
     def launch(self, request: LaunchRequest) -> LaunchOutcome:
@@ -475,6 +482,9 @@ def run_process_group(
     process = subprocess.Popen(
         list(argv),
         cwd=cwd,
+        # An engineering turn is never interactive; leaving stdin attached costs
+        # a startup stall and risks blocking on a read that never completes.
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE if capture_output else None,
         stderr=subprocess.PIPE if capture_output else None,
         text=text,
@@ -726,14 +736,21 @@ class SessionKeeper:
         system_prompt_path: Optional[Path] = None,
     ) -> None:
         phase = str(program_state.get("phase", ""))
+        assigned_session_id = action.resume_session_id or str(uuid.uuid4())
         request = LaunchRequest(
             phase=phase,
             generation=action.generation,
             attempt=action.attempt,
             resume_session_id=action.resume_session_id,
+            session_id=assigned_session_id,
             failure_context=keeper_state.last_failure,
             system_prompt_path=system_prompt_path,
         )
+        # Recorded before the launch: a keeper that dies mid-session must still
+        # know which conversation to continue.
+        keeper_state.phase = phase
+        keeper_state.session_id = assigned_session_id
+        self.save_state(keeper_state)
         before = self._fingerprint()
         self.store.append_event(
             {
@@ -757,7 +774,7 @@ class SessionKeeper:
         keeper_state.generation = action.generation
         keeper_state.attempt = action.attempt
         keeper_state.launches += 1
-        keeper_state.session_id = outcome.session_id
+        keeper_state.session_id = outcome.session_id or assigned_session_id
         keeper_state.last_exit_code = outcome.exit_code
         keeper_state.last_exit_at = _utc_timestamp(finished)
         keeper_state.progress_fingerprint = after

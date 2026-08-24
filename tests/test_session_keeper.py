@@ -869,3 +869,89 @@ class TestFinalizationWindow:
         assert state["status"] == "running"
         assert state["details"]["previous_phase"] == "phase2-evaluation"
         assert launcher.requests == []
+
+
+class TestAssignedSessionIdentity:
+    """A session that dies before printing anything must still be resumable."""
+
+    def test_a_fresh_session_is_launched_under_an_assigned_identifier(self, tmp_path):
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("work")
+        launcher = ClaudeSessionLauncher(repo=tmp_path, prompt_path=prompt)
+
+        argv = list(
+            launcher.build_argv(
+                LaunchRequest(
+                    phase="p", generation=1, attempt=1, session_id="assigned-1"
+                )
+            )
+        )
+
+        assert argv[argv.index("--session-id") + 1] == "assigned-1"
+        assert "--resume" not in argv
+
+    def test_a_continuation_resumes_and_does_not_reassign(self, tmp_path):
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("work")
+        launcher = ClaudeSessionLauncher(repo=tmp_path, prompt_path=prompt)
+
+        argv = list(
+            launcher.build_argv(
+                LaunchRequest(
+                    phase="p",
+                    generation=1,
+                    attempt=2,
+                    resume_session_id="s-1",
+                    session_id="s-1",
+                )
+            )
+        )
+
+        assert argv[argv.index("--resume") + 1] == "s-1"
+        assert "--session-id" not in argv
+
+    def test_the_identifier_is_recorded_before_the_session_starts(
+        self, keeper_environment
+    ):
+        store, keeper_path = keeper_environment
+        recorded = {}
+
+        class CrashingLauncher:
+            def launch(self, request):
+                # Whatever happens next, the keeper already knows the id.
+                recorded["state"] = json.loads(keeper_path.read_text())
+                recorded["request"] = request
+                raise RuntimeError("keeper died here")
+
+        keeper = build_keeper(
+            store, keeper_path, CrashingLauncher(), progress=["sha-1"]
+        )
+
+        with pytest.raises(RuntimeError):
+            keeper.step()
+
+        assert recorded["state"]["session_id"] == recorded["request"].session_id
+        assert recorded["state"]["session_id"]
+
+    def test_a_killed_session_leaves_a_resumable_identifier(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        launcher = RecordingLauncher(
+            [
+                LaunchOutcome(exit_code=-9, session_id=None, tail="killed"),
+                LaunchOutcome(exit_code=0, session_id=None),
+            ]
+        )
+        keeper = build_keeper(
+            store,
+            keeper_path,
+            launcher,
+            progress=["sha-1"],
+            policy=KeeperPolicy(backoff_base_sec=0.0),
+        )
+
+        keeper.step()
+        assigned = keeper.load_state().session_id
+        keeper.step()
+
+        assert assigned is not None
+        assert launcher.requests[1].resume_session_id == assigned
