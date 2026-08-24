@@ -1104,5 +1104,34 @@ def main(argv=None) -> int:
     return 1
 
 
+def _exit(code: int) -> None:
+    """Leave the process without running interpreter finalization.
+
+    `datasets`' parquet streaming leaves a pyarrow thread pool behind, and
+    CPython's shutdown of it aborts with SIGABRT
+    (`PyGILState_Release: thread state ... must be current when releasing`)
+    *after* `main` has returned. The controller reads the exit status, so a
+    completed sample that had written and fsynced every output was recorded as
+    a failed phase, halting the program.
+
+    Exiting here rather than suppressing the abort keeps the status meaningful:
+    the code below is this script's own verdict, decided before any
+    finalization runs, so a genuine failure still reports one. Everything this
+    script writes goes through `write_text` or a closed handle, so there is no
+    buffered output for finalization to flush.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        _code = main()
+    except SystemExit as _exit_request:               # argparse and raise SystemExit
+        _code = _exit_request.code if isinstance(_exit_request.code, int) else 1
+    except BaseException:                             # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        _code = 1
+    _exit(_code or 0)

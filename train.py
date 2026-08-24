@@ -785,6 +785,11 @@ class TrainArgs:
     # does at the same batch shape.
     loss_chunk_size: Optional[int] = None
     gradient_checkpointing: Optional[bool] = None
+    # Which tokenizer produced the ids in `--data-dir`/`--val-dir`. `None` means
+    # the preset's own value, which is `None` -- SmolLM2 -- for every shipped
+    # preset, so no existing run changes. It is stripped by `to_hf_dict` like
+    # the two above, so it does not reach the exported config either.
+    tokenizer: Optional[str] = None
     grad_clip: float = 1.0
     run_dir: Optional[str] = None
     ckpt_every_sec: float = 1800.0       # 30 min, per AGENT.md hero spec
@@ -914,6 +919,12 @@ def _config_for(args: TrainArgs) -> DaedalusConfig:
         overrides["loss_chunk_size"] = args.loss_chunk_size
     if args.gradient_checkpointing is not None:
         overrides["gradient_checkpointing"] = bool(args.gradient_checkpointing)
+    # `None` keeps the preset's own value, which is `None` -- SmolLM2 -- for
+    # every shipped preset. Phase 4's probes pass the candidate vocabulary they
+    # were packed under, so `_val_bpb` decodes the holdout with the tokenizer
+    # that produced its ids rather than with SmolLM2 regardless.
+    if args.tokenizer is not None:
+        overrides["tokenizer"] = args.tokenizer
     return dataclass_replace(cfg, **overrides) if overrides else cfg
 
 
@@ -1260,7 +1271,13 @@ class Trainer:
             from eval import evaluate_bpb_mixture
             if self._tokenizer is None:
                 from daedalus.data import get_tokenizer
-                self._tokenizer = get_tokenizer()
+                # `cfg.tokenizer` (None for every shipped preset, so this is
+                # unchanged for them) rather than always SmolLM2. val_bpb
+                # converts nats-per-token through the *bytes those tokens stand
+                # for*, and the byte count comes from decoding them -- so a run
+                # over a 32,768-vocabulary holdout decoded with SmolLM2 reports
+                # bits per byte for a corpus that does not exist.
+                self._tokenizer = get_tokenizer(self.model.cfg.tokenizer)
             # self.model, not self.net: the compiled graph is specialized to the
             # training shapes and a different eval batch would force a recompile.
             #
@@ -1890,6 +1907,14 @@ def parse_args(argv=None) -> TrainArgs:
                         "config's 1024; 0 restores the single-shot path). "
                         "Lower it to cut loss-head memory, which is what a "
                         "QAT forward needs on top of the usual activations.")
+    p.add_argument("--tokenizer", default=None,
+                   help="path or Hub name of the tokenizer that produced the "
+                        "ids in --data-dir/--val-dir (default: the config's, "
+                        "which is SmolLM2 for every shipped preset). Only "
+                        "val_bpb reads it, but it reads it to convert "
+                        "nats-per-token into bits per *byte*, so a holdout "
+                        "decoded with the wrong vocabulary reports a figure "
+                        "for a corpus that does not exist.")
     p.add_argument("--gradient-checkpointing", dest="gradient_checkpointing",
                    action="store_true", default=None,
                    help="recompute block activations in backward instead of "
@@ -1940,6 +1965,7 @@ def parse_args(argv=None) -> TrainArgs:
     # for them, unlike the flags above whose default lives on TrainArgs.
     kwargs["loss_chunk_size"] = a.loss_chunk_size
     kwargs["gradient_checkpointing"] = a.gradient_checkpointing
+    kwargs["tokenizer"] = a.tokenizer
     return TrainArgs(**kwargs)
 
 

@@ -357,6 +357,45 @@ def test_preregistration_is_written_once(tmp_path):
     write_preregistration(path, payload, force=True)   # deliberate restart only
 
 
+# ---------------------------------------------------------------- exit ------
+
+@pytest.mark.slow
+def test_a_successful_run_exits_zero_despite_pyarrow_finalization(tmp_path):
+    """`datasets`' parquet streaming leaves a pyarrow thread pool whose
+    interpreter-shutdown abort (SIGABRT, `PyGILState_Release`) lands *after*
+    main returns. The controller reads the exit status, so that turned a
+    completed sample -- every output written and fsynced -- into a failed phase
+    and halted the program. Measured once; pinned so it cannot come back."""
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [_sys.executable, "scripts/tokenizer_lab.py", "--root", str(tmp_path),
+         "preregister"],
+        cwd=root, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert (tmp_path / "preregistration.json").exists()
+
+
+def test_a_failing_run_still_reports_a_failure(tmp_path):
+    """The exit path must not launder failures into successes -- which is the
+    obvious way to 'fix' the abort above and the reason it is written out."""
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[1]
+    (tmp_path / "preregistration.json").write_text("{}")
+    result = subprocess.run(
+        [_sys.executable, "scripts/tokenizer_lab.py", "--root", str(tmp_path),
+         "preregister"],
+        cwd=root, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "written once" in result.stderr
+
+
 def test_the_rule_digest_changes_if_a_threshold_is_edited(monkeypatch):
     """A preregistration whose rule can be edited after the numbers land is not
     a preregistration. The digest is what a later reader checks."""
