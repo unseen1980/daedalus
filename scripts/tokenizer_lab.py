@@ -1391,6 +1391,62 @@ def check_stock_gguf_conversion(*, label: str, vocab_size: int,
     }
 
 
+def sweep_order(tokenizer_root, include_matched: bool = False
+                ) -> List[Tuple[str, str]]:
+    """`(label, protocol)` arms, most decision-relevant first.
+
+    Ordered so an interrupted sweep still answers the question it was run for.
+    Every equal-bytes arm comes first because that set alone decides the
+    preregistered rule; the equal-tokens set is the promised bracket; the
+    size-matched control is diagnostic and last. At ~37 minutes an arm that is
+    not an academic distinction.
+    """
+    rule_labels = [str(size) for size in CANDIDATE_VOCAB_SIZES] + [INCUMBENT_KEY]
+    arms = [(label, "equal-bytes") for label in rule_labels]
+    arms += [(label, "equal-tokens") for label in rule_labels]
+    if include_matched and any(
+            label == MATCHED_CONTROL_KEY
+            for label, _size, _path in measurement_targets(tokenizer_root)):
+        arms += [(MATCHED_CONTROL_KEY, "equal-bytes"),
+                 (MATCHED_CONTROL_KEY, "equal-tokens")]
+    return arms
+
+
+def run_sweep(*, root, shard_root, tokenizer_root, device: str = "cuda",
+              include_matched: bool = False, skip_existing: bool = True,
+              log=print) -> dict:
+    """Train and score every arm in order, writing each result as it lands."""
+    root = Path(root)
+    results = {}
+    arms = sweep_order(tokenizer_root, include_matched=include_matched)
+    for index, (label, protocol) in enumerate(arms, start=1):
+        scored_path = root / "scored" / f"{label}-{protocol}.json"
+        if skip_existing and scored_path.exists():
+            log(f"[{index}/{len(arms)}] {label} {protocol}: already scored")
+            results[f"{label}-{protocol}"] = json.loads(scored_path.read_text())
+            continue
+        size, path = resolve_label(label, tokenizer_root)
+        log(f"[{index}/{len(arms)}] {label} {protocol}: training", flush=True)
+        launched = launch_probe(vocab_size=size, label=label, protocol=protocol,
+                                shard_root=shard_root, tokenizer_path=path,
+                                device=device)
+        probe_path = root / "probes" / f"{label}-{protocol}.json"
+        probe_path.parent.mkdir(parents=True, exist_ok=True)
+        probe_path.write_text(json.dumps(launched, indent=2, sort_keys=True,
+                                         default=str) + "\n")
+
+        log(f"[{index}/{len(arms)}] {label} {protocol}: scoring", flush=True)
+        record = score_probe(vocab_size=size, label=label, protocol=protocol,
+                             shard_root=shard_root, tokenizer_path=path,
+                             device=device)
+        scored_path.parent.mkdir(parents=True, exist_ok=True)
+        scored_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        results[f"{label}-{protocol}"] = record
+        log(f"[{index}/{len(arms)}] {label} {protocol}: bpb {record['bpb']:.4f} "
+            f"after {record.get('tokens_seen') or 0:,} tokens", flush=True)
+    return results
+
+
 def resolve_label(label: str, tokenizer_root) -> Tuple[int, str]:
     for known, size, path in measurement_targets(tokenizer_root):
         if known == label:
@@ -1682,6 +1738,16 @@ def main(argv=None) -> int:
     probe.add_argument("--device", default="cuda")
     probe.add_argument("--max-attempts", type=int, default=3)
 
+    sweep = sub.add_parser("sweep", help="train and score every arm in order")
+    sweep.add_argument("--shards", default="data/tokenizer-lab/shards")
+    sweep.add_argument("--tokenizers", default="data/tokenizer-lab/tokenizers")
+    sweep.add_argument("--device", default="cuda")
+    sweep.add_argument("--include-matched", action="store_true",
+                       help="also probe the size-matched control (diagnostic, "
+                            "not read by the rule)")
+    sweep.add_argument("--rerun", action="store_true",
+                       help="re-train arms that already have a score")
+
     score = sub.add_parser("score", help="held-out BPB for one arm")
     score.add_argument("--label", required=True)
     score.add_argument("--protocol", required=True,
@@ -1846,6 +1912,16 @@ def main(argv=None) -> int:
         print(json.dumps({k: report[k] for k in
                           ("run", "protocol", "total_tokens", "packed_tokens")},
                          indent=2))
+        return 0
+
+    if args.command == "sweep":
+        results = run_sweep(root=root, shard_root=args.shards,
+                            tokenizer_root=args.tokenizers, device=args.device,
+                            include_matched=args.include_matched,
+                            skip_existing=not args.rerun)
+        print(json.dumps({name: record["bpb"]
+                          for name, record in results.items()},
+                         indent=2, sort_keys=True))
         return 0
 
     if args.command == "score":

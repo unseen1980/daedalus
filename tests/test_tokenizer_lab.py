@@ -406,6 +406,34 @@ def test_a_failing_run_still_reports_a_failure(tmp_path):
     assert "written once" in result.stderr
 
 
+def test_the_sweep_runs_the_rule_deciding_arms_first(tmp_path):
+    """At ~37 minutes an arm, order is not an academic distinction: an
+    interrupted sweep has to have answered the question it was run for."""
+    from scripts.tokenizer_lab import INCUMBENT_KEY, sweep_order
+
+    arms = sweep_order(tmp_path)
+    protocols = [protocol for _label, protocol in arms]
+    assert protocols[:4] == ["equal-bytes"] * 4
+    assert set(protocols) == {"equal-bytes", "equal-tokens"}
+    # The incumbent must be in the first block: every candidate's BPB is a
+    # delta against it, so three candidates without it decide nothing.
+    assert (INCUMBENT_KEY, "equal-bytes") in arms[:4]
+    assert len(arms) == 8
+
+
+def test_the_matched_control_is_probed_last_and_only_on_request(tmp_path):
+    """It is diagnostic -- the rule does not read it -- so it must not displace
+    an arm the rule does read."""
+    from scripts.tokenizer_lab import MATCHED_CONTROL_KEY, sweep_order
+
+    (tmp_path / "v49152").mkdir()
+    (tmp_path / "v49152" / "tokenizer.json").write_text("{}")
+    assert not any(label == MATCHED_CONTROL_KEY
+                   for label, _p in sweep_order(tmp_path))
+    with_control = sweep_order(tmp_path, include_matched=True)
+    assert [label for label, _p in with_control[-2:]] == [MATCHED_CONTROL_KEY] * 2
+
+
 def test_the_addendum_cannot_be_written_once_an_arm_is_scored(tmp_path):
     """The addendum records decisions the preregistration left open -- which
     protocol the BPB clause reads, chiefly. Written before any BPB number
