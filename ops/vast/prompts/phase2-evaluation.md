@@ -65,3 +65,22 @@ that shells out to a network client is refused, a candidate that reads a
 root-owned mode-0600 file outside the sandbox is refused, and a candidate that
 writes outside its working directory is refused. A test that only asserts the
 socket patch is not evidence for this gate.
+
+## The gate verdict is a script, not a claim
+
+Every later phase reads this phase's gate. Record the verdict with
+`scripts/gate_check.py`, which reads the written scorecards and decides each
+criterion mechanically, rather than asserting the outcome in prose:
+
+- synthetic controls scored 100% where the control expects it;
+- two runs of the same evaluation at temperature zero produced identical
+  per-item outcomes and an identical scorecard fingerprint;
+- the FP16 and Q4_0 paired comparison covered the same item ids in the same
+  order, with matching item counts and digests;
+- the code sandbox refused network access and refused reads and writes outside
+  its working directory.
+
+Emit one machine-readable verdict per criterion with the scorecard path and the
+observed value that decided it, exit non-zero when any criterion fails, and give
+it focused tests including a scorecard that must fail each criterion. A gate
+that cannot fail has not been tested.
