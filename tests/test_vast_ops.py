@@ -237,7 +237,8 @@ def test_session_keeper_yields_the_box_to_supervised_jobs():
     assert "--runs-root" in wrapper
     assert "--busy-poll-sec" in wrapper
     # Evaluation and training turns outlast a code slice.
-    assert "DAEDALUS_SESSION_TIMEOUT_SEC:-7200" in wrapper
+    # A phase 3 turn drives three one-hour arms plus scoring.
+    assert "DAEDALUS_SESSION_TIMEOUT_SEC:-28800" in wrapper
 
 
 def test_finalization_prompt_forbids_new_experiments_and_merges():

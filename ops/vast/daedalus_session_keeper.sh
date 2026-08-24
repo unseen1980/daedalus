@@ -41,5 +41,5 @@ exec python -u scripts/session_keeper.py \
   --model opus \
   --effort xhigh \
   --permission-mode dontAsk \
-  --session-timeout-sec "${DAEDALUS_SESSION_TIMEOUT_SEC:-7200}" \
+  --session-timeout-sec "${DAEDALUS_SESSION_TIMEOUT_SEC:-28800}" \
   --poll-interval-sec "${DAEDALUS_KEEPER_POLL_SEC:-60}"
