@@ -352,8 +352,34 @@ floor, which tensors QAT touches), not about the budget.
 
 ## Artifacts
 
-Kept on the box, hashed, and **not published**. Publishing implies endorsement,
-and the preregistered verdict endorses none of these.
+Published **privately**, hash-verified, to
+`Unseen1980/daedalus-qat-recovery-probes` — all three arms' FP16 and Q4_0
+GGUFs, the lr 5e-4 arm in HF format, and the full evidence set
+(preregistration, baseline, per-arm scorecards, verdict, preflight, and this
+file).
+
+Publishing was initially skipped on the reasoning that it implies endorsement
+and the verdict endorses none of these. That conflated two different things.
+These are *private experiment* artifacts, not a release, and the plan separates
+those explicitly. Three arguments settled it:
+
+- Nothing on this box survives a recycle. Three GPU-hours of evidence living
+  only on an instance that gets destroyed is the failure the durability rules
+  exist to prevent.
+- The two operator decisions below are *about these artifacts*. If the FP16
+  gate is resolved in favour of ship-format scoring, the lr 5e-4 Q4_0 model is
+  immediately usable — but only if it still exists. Otherwise the decision
+  costs three hours of retraining to revisit.
+- A model card can carry the verdict. Endorsement is a property of what the
+  card says, not of the upload; the card leads with "none of the models in this
+  repository passed their preregistered acceptance gates".
+
+Deliberately **not** published: the `.pt` checkpoints (1.44 GB each). They are
+resume artifacts, and nothing needs them — the preregistered 300M follow-up
+starts from the *released base* with `--init-from`, not from a probe, so no
+probe checkpoint is an input to any next step. They stay on the box.
+
+Local copies and their hashes:
 
 | artifact | sha256 |
 |---|---|
@@ -384,8 +410,9 @@ The released repositories are untouched. The input checkpoint
 
 - **The 300M follow-up and the 1B escalation were not run**, per the
   preregistered stop rule. Roughly 14 GPU-hours were deliberately not spent.
-- **Nothing is published.** The artifacts above are on the box with hashes; the
-  decision to publish any of them privately waits on the two questions above.
+- **The artifacts are published privately and hash-verified**, so both open
+  questions can be answered against real files rather than against this
+  summary. Nothing is public, and the released repositories are untouched.
 - **No retrieval-safe variant has been tried.** The obvious candidates —
   raising the general-replay share, flooring the LR earlier, or leaving
   attention projections out of the QAT plan so the retrieval path is not
