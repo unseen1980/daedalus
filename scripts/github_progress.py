@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -24,6 +25,75 @@ METRIC_FIELDS = (
 )
 GPU_FIELDS = ("utilization_pct", "memory_used_mb", "memory_total_mb")
 PROGRESS_FILES = ("STATUS.md", "status.json", "recent-metrics.json", "timeline.jsonl")
+
+#: Statuses that mean the program stopped advancing on its own.
+ATTENTION_STATUSES = frozenset({"blocked", "halted", "failed"})
+
+#: A blocker summary is operator-written prose, so it is bounded and scrubbed
+#: before reaching a branch anyone can read.
+BLOCKER_SUMMARY_LIMIT = 400
+_PROTECTED_PATH = re.compile(r"/root/\S*")
+_SECRET_LIKE = re.compile(
+    r"(?:gh[pousr]_[A-Za-z0-9]{16,}|hf_[A-Za-z0-9]{16,}|[A-Za-z0-9_-]{40,})"
+)
+
+
+def sanitize_blocker(value) -> str:
+    """A short, credential-free description of why the program needs a human."""
+
+    if isinstance(value, dict):
+        text = str(value.get("summary") or value.get("reason") or "")
+    else:
+        text = str(value or "")
+    text = " ".join(text.split())
+    text = _PROTECTED_PATH.sub("<protected-path>", text)
+    text = _SECRET_LIKE.sub("<redacted>", text)
+    if len(text) > BLOCKER_SUMMARY_LIMIT:
+        text = text[:BLOCKER_SUMMARY_LIMIT].rstrip() + "..."
+    return text
+
+
+def build_deadline_view(state: dict, now: datetime) -> dict:
+    """Elapsed and remaining time against the hard deadline and its reserve."""
+
+    started = state.get("started_at")
+    if not started:
+        return {}
+    try:
+        started_at = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+    except ValueError:
+        return {}
+    hard_hours = float(state.get("hard_hours", 144.0))
+    reserve_hours = float(state.get("reserve_hours", 8.0))
+    elapsed_hours = (now - started_at).total_seconds() / 3600.0
+    finalizes_in = hard_hours - reserve_hours - elapsed_hours
+    remaining_hours = hard_hours - elapsed_hours
+    if remaining_hours <= 0:
+        stage = "expired"
+    elif finalizes_in <= 0:
+        stage = "finalizing"
+    else:
+        stage = "active"
+    return {
+        "stage": stage,
+        "elapsed_hours": round(elapsed_hours, 2),
+        "remaining_hours": round(remaining_hours, 2),
+        "finalization_in_hours": round(finalizes_in, 2),
+        "hard_hours": hard_hours,
+        "reserve_hours": reserve_hours,
+    }
+
+
+def build_attention_view(state: dict) -> dict:
+    """Whether a human has to act, and the scrubbed reason when one does."""
+
+    status = str(state.get("status", ""))
+    details = state.get("details") or {}
+    blocker = sanitize_blocker(details.get("blocker"))
+    required = status in ATTENTION_STATUSES or bool(
+        details.get("user_action_required")
+    )
+    return {"user_action_required": bool(required), "blocker": blocker}
 
 
 def _timestamp(value: datetime) -> str:
@@ -52,6 +122,8 @@ def build_public_snapshot(
         "source_sha": source_sha,
         "metrics": _select(metrics, METRIC_FIELDS),
         "gpu": _select(gpu, GPU_FIELDS),
+        "deadline": build_deadline_view(state, now),
+        "attention": build_attention_view(state),
     })
     return snapshot
 
@@ -81,17 +153,36 @@ def _write_text_atomic(path: Path, content: str) -> None:
     os.replace(temporary, path)
 
 
+def _render_deadline(deadline: dict) -> str:
+    if not deadline:
+        return ""
+    return (
+        f"- Elapsed: `{deadline['elapsed_hours']}h` of "
+        f"`{deadline['hard_hours']}h`\n"
+        f"- Finalization window opens in: "
+        f"`{deadline['finalization_in_hours']}h`\n"
+        f"- Deadline stage: `{deadline['stage']}`\n"
+    )
+
+
 def _render_status(snapshot: dict) -> str:
     metrics = json.dumps(snapshot.get("metrics", {}), indent=2, sort_keys=True)
     gpu = json.dumps(snapshot.get("gpu", {}), indent=2, sort_keys=True)
+    attention = snapshot.get("attention", {})
+    banner = ""
+    if attention.get("user_action_required"):
+        reason = attention.get("blocker") or "see the phase timeline"
+        banner = f"> **Action required.** {reason}\n\n"
     return (
         "# Daedalus Vast Program Status\n\n"
+        f"{banner}"
         f"- Heartbeat: `{snapshot.get('heartbeat_at', 'unknown')}`\n"
         f"- Phase: `{snapshot.get('phase', 'unknown')}`\n"
         f"- Status: `{snapshot.get('status', 'unknown')}`\n"
         f"- Source: `{snapshot.get('source_branch', 'unknown')}` "
-        f"at `{snapshot.get('source_sha', 'unknown')}`\n\n"
-        "## Latest Metrics\n\n"
+        f"at `{snapshot.get('source_sha', 'unknown')}`\n"
+        f"{_render_deadline(snapshot.get('deadline', {}))}"
+        "\n## Latest Metrics\n\n"
         f"```json\n{metrics}\n```\n\n"
         "## GPU\n\n"
         f"```json\n{gpu}\n```\n"

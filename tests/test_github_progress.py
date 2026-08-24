@@ -173,3 +173,88 @@ def test_main_once_publishes_requested_paths(monkeypatch, tmp_path):
         "metrics_path": str(tmp_path / "metrics.jsonl"),
         "progress_branch": "vast/progress-20260824",
     }]
+
+class TestDeadlineAndAttention:
+    """A heartbeat has to say how much time is left and whether a human is needed."""
+
+    def _state(self, **overrides) -> dict:
+        state = {
+            "schema": 1,
+            "started_at": "2026-08-24T10:00:00Z",
+            "updated_at": "2026-08-24T12:00:00Z",
+            "hard_hours": 144.0,
+            "reserve_hours": 8.0,
+            "phase": "phase2-evaluation",
+            "status": "running",
+            "details": {},
+        }
+        state.update(overrides)
+        return state
+
+    def _at(self, hours: float):
+        from datetime import datetime, timedelta, timezone
+
+        return datetime(2026, 8, 24, 10, tzinfo=timezone.utc) + timedelta(hours=hours)
+
+    def test_reports_elapsed_and_remaining_against_the_hard_deadline(self):
+        from scripts.github_progress import build_deadline_view
+
+        view = build_deadline_view(self._state(), self._at(10))
+
+        assert view["stage"] == "active"
+        assert view["elapsed_hours"] == 10.0
+        assert view["remaining_hours"] == 134.0
+        assert view["finalization_in_hours"] == 126.0
+
+    def test_marks_the_reserve_and_the_expiry(self):
+        from scripts.github_progress import build_deadline_view
+
+        assert build_deadline_view(self._state(), self._at(137))["stage"] == "finalizing"
+        assert build_deadline_view(self._state(), self._at(145))["stage"] == "expired"
+
+    def test_a_state_without_a_start_time_reports_no_deadline(self):
+        from scripts.github_progress import build_deadline_view
+
+        assert build_deadline_view({"status": "running"}, self._at(1)) == {}
+
+    def test_a_blocked_program_asks_for_a_human(self):
+        from scripts.github_progress import build_attention_view
+
+        view = build_attention_view(
+            self._state(status="blocked", details={"blocker": "wrapper is stale"})
+        )
+
+        assert view == {"user_action_required": True, "blocker": "wrapper is stale"}
+
+    def test_a_running_program_asks_for_nobody(self):
+        from scripts.github_progress import build_attention_view
+
+        assert build_attention_view(self._state())["user_action_required"] is False
+
+    def test_a_blocker_summary_is_bounded_and_scrubbed(self):
+        from scripts.github_progress import BLOCKER_SUMMARY_LIMIT, sanitize_blocker
+
+        scrubbed = sanitize_blocker(
+            {
+                "summary": "reinstall /root/.config/daedalus/runtime.env using "
+                "ghp_0123456789abcdef0123456789abcdef0123 " + "x" * 600
+            }
+        )
+
+        assert "/root/" not in scrubbed
+        assert "ghp_" not in scrubbed
+        assert len(scrubbed) <= BLOCKER_SUMMARY_LIMIT + 3
+
+    def test_the_status_page_leads_with_the_action_banner(self):
+        from scripts.github_progress import _render_status, build_public_snapshot
+
+        snapshot = build_public_snapshot(
+            self._state(status="blocked", details={"blocker": "wrapper is stale"}),
+            source_branch="vast/daedalus-improvements-20260824",
+            source_sha="abc1234",
+            now=self._at(10),
+        )
+        rendered = _render_status(snapshot)
+
+        assert "> **Action required.** wrapper is stale" in rendered
+        assert "Deadline stage: `active`" in rendered
