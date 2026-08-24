@@ -298,25 +298,46 @@ def qat_active_at(progress: float, qat_frac: float) -> bool:
     return progress >= (1.0 - min(qat_frac, 1.0))
 
 
+def grid_id(linear_kind: str = "q4_0",
+            embed_kind: Optional[str] = "q8_0") -> str:
+    """A short, stable name for the lattice a quantized forward is running on.
+
+    Logged beside every quantized number so it can never be compared against a
+    float one by accident. Phase 3 runs QAT from step 0, so *every* validation
+    figure a recovery run produces is on this grid rather than in fp32 -- a
+    distinction that is invisible in the number itself and changes what the
+    number means.
+    """
+    return linear_kind if embed_kind is None else f"{linear_kind}/{embed_kind}"
+
+
 def quantization_error(model: nn.Module, linear_kind: str = "q4_0",
                        embed_kind: Optional[str] = "q8_0") -> Dict[str, float]:
     """Mean relative error the ship-format grid would inflict right now.
 
-    Logged during the QAT phase: it should fall toward zero as the weights
-    settle onto the grid, which is the direct evidence QAT is doing its job.
-    Cheap enough to call every few hundred steps.
+    Logged during the QAT phase: `qat_rel_rmse` should fall toward zero as the
+    weights settle onto the grid, which is the direct evidence QAT is doing its
+    job. Cheap enough to call every few hundred steps.
+
+    `qat_tensors` counts *tensors* on the grid and `qat_elements` counts the
+    weights inside them. Both are reported because they answer different
+    questions: a coverage regression (a plan that stopped matching some module
+    class, or a tie that collapsed two entries into one) moves the tensor count
+    while barely touching the element count.
     """
-    total_sq, total_ref, n = 0.0, 0.0, 0
+    total_sq, total_ref, elements, tensors = 0.0, 0.0, 0, 0
     with torch.no_grad():
         for _, mod, kind in plan_qat(model, linear_kind, embed_kind):
             w = master_weight(mod).detach().float()
             err = (_QDQ[kind](w) - w)
             total_sq += float(err.pow(2).sum())
             total_ref += float(w.pow(2).sum())
-            n += w.numel()
+            elements += w.numel()
+            tensors += 1
     return {
         "qat_rel_rmse": (total_sq / total_ref) ** 0.5 if total_ref > 0 else 0.0,
-        "qat_tensors": float(n),
+        "qat_tensors": float(tensors),
+        "qat_elements": float(elements),
     }
 
 

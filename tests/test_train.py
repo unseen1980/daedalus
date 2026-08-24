@@ -2848,3 +2848,155 @@ def test_the_push_carries_its_stall_guard_and_cannot_wait_on_a_prompt(
     # The push inherits the rest of the environment -- dropping it would strip
     # PATH and the credential helper's own configuration.
     assert push["kwargs"]["env"].get("PATH") == os.environ.get("PATH")
+
+
+# --------------------------------------------------------------------------
+# Phase 3 recovery knobs: schedule and memory flags on the CLI, and the
+# durable record a finiteness gate is decided from.
+# --------------------------------------------------------------------------
+
+def test_schedule_flags_default_to_the_shipped_values():
+    """Absent flags must not change any run that is already scheduled."""
+    a = train_module.parse_args(["--run-name", "x"])
+    assert a.warmup_steps == 300
+    assert a.decay_frac == 0.45
+    assert a.loss_chunk_size is None
+    assert a.gradient_checkpointing is None
+
+
+def test_schedule_flags_reach_train_args_from_the_cli():
+    a = train_module.parse_args([
+        "--run-name", "x", "--warmup-steps", "40", "--decay-frac", "0.9",
+        "--loss-chunk-size", "256", "--gradient-checkpointing",
+    ])
+    assert a.warmup_steps == 40
+    assert a.decay_frac == 0.9
+    assert a.loss_chunk_size == 256
+    assert a.gradient_checkpointing is True
+
+
+def test_gradient_checkpointing_can_be_forced_off_from_the_cli():
+    """`--no-...` must be distinguishable from "unset", or a config that turns
+    checkpointing on could never be overridden from the command line."""
+    a = train_module.parse_args(["--run-name", "x", "--no-gradient-checkpointing"])
+    assert a.gradient_checkpointing is False
+
+
+def test_warmup_and_decay_flags_actually_move_the_schedule(tmp_path):
+    """The flags exist to reshape a short run's LR curve, so assert on the
+    curve rather than on the field they were stored in."""
+    args = _tiny_args(tmp_path / "run", max_steps=100, warmup_steps=10,
+                      decay_frac=0.5)
+    t = Trainer(args)
+    # Warmup is 10 steps, not 300: by step 10 the multiplier is at its ceiling
+    # instead of the 3% a 300-step warmup would still be at.
+    t.step = 10
+    assert t._lr_multiplier(100) == pytest.approx(1.0)
+    # Decay starts halfway, and the milestone tracks it.
+    t.step = 50
+    assert t._lr_multiplier(100) == pytest.approx(1.0)
+    t.step = 75
+    assert t._lr_multiplier(100) == pytest.approx(0.5)
+    assert t.milestone_step == 50
+
+
+def test_config_overrides_do_not_mutate_the_shared_preset(tmp_path):
+    """`PRESETS` holds one instance per name. Mutating it would silently
+    reconfigure every later Trainer, eval and export in the process."""
+    before = (PRESETS["tiny"].loss_chunk_size,
+              PRESETS["tiny"].gradient_checkpointing)
+    args = _tiny_args(tmp_path / "run", max_steps=1, loss_chunk_size=64,
+                      gradient_checkpointing=True)
+    t = Trainer(args)
+    assert t.cfg.loss_chunk_size == 64
+    assert t.cfg.gradient_checkpointing is True
+    assert (PRESETS["tiny"].loss_chunk_size,
+            PRESETS["tiny"].gradient_checkpointing) == before
+    assert t.cfg is not PRESETS["tiny"]
+
+
+def test_an_unoverridden_run_still_gets_the_preset_object(tmp_path):
+    args = _tiny_args(tmp_path / "run", max_steps=1)
+    assert Trainer(args).cfg is PRESETS["tiny"]
+
+
+def test_a_negative_loss_chunk_size_is_refused_rather_than_silently_odd(tmp_path):
+    args = _tiny_args(tmp_path / "run", max_steps=1, loss_chunk_size=-1)
+    with pytest.raises(ValueError, match="loss-chunk-size"):
+        Trainer(args)
+
+
+def test_gradient_checkpointing_still_trains_the_same_model(tmp_path):
+    """The flag is a memory trade, not a model change: same seed, same data,
+    same loss. If recomputation drifted from the stored activations the
+    recovery run would be optimizing something other than what it exports."""
+    plain = Trainer(_tiny_args(tmp_path / "a", max_steps=2))
+    plain.fit()
+    ckpt = Trainer(_tiny_args(tmp_path / "b", max_steps=2,
+                              gradient_checkpointing=True))
+    ckpt.fit()
+    a = [json.loads(l)["loss"] for l in
+         (tmp_path / "a" / "metrics.jsonl").read_text().strip().splitlines()]
+    b = [json.loads(l)["loss"] for l in
+         (tmp_path / "b" / "metrics.jsonl").read_text().strip().splitlines()]
+    assert a == pytest.approx(b, rel=1e-5)
+
+
+def test_metrics_carry_the_skipped_update_count_every_row(tmp_path):
+    """The finiteness gate is decided from metrics.jsonl, so the count has to
+    be in every row -- not only the rows where a skip happened."""
+    args = _tiny_args(tmp_path / "run", max_steps=3)
+    Trainer(args).fit()
+    rows = [json.loads(l) for l in
+            (tmp_path / "run" / "metrics.jsonl").read_text().strip().splitlines()]
+    assert [r["skipped_updates"] for r in rows] == [0, 0, 0]
+
+
+def test_a_non_finite_loss_increments_the_recorded_skip_count(tmp_path):
+    """Previously a skip left only a WARNING on stdout and a `loss: nan` row
+    indistinguishable from an ordinary interval row."""
+    args = _tiny_args(tmp_path / "run", max_steps=2)
+    t = Trainer(args)
+    real_net = t.net
+
+    def poisoned(x, targets=None, **kw):
+        return None, torch.tensor(float("nan")), None
+
+    t.net = poisoned
+    stats = t.train_step()
+    assert stats["skipped"] is True
+    assert t._skipped_updates == 1
+    # ... and the step did not advance, so the budget is unchanged.
+    assert t.step == 0
+
+    t.net = real_net
+    t.log_step(stats, force=True)
+    row = json.loads((tmp_path / "run" / "metrics.jsonl").read_text()
+                     .strip().splitlines()[-1])
+    assert row["skipped_updates"] == 1
+
+
+def test_the_skip_count_survives_a_crash_resume(tmp_path):
+    """A resumed run that reset the count to zero would report a clean gate
+    for a run that had already skipped updates."""
+    args = _tiny_args(tmp_path / "run", max_steps=1)
+    first = Trainer(args)
+    first._skipped_updates = 3
+    first.fit()
+
+    second = Trainer(_tiny_args(tmp_path / "run", max_steps=2,
+                                resume=str(tmp_path / "run" / "checkpoint.pt")))
+    assert second._skipped_updates == 3
+
+
+def test_a_fresh_init_from_run_starts_its_skip_count_at_zero(tmp_path):
+    """`--init-from` is a new run. Inheriting the donor's skip count would
+    charge a recovery probe for the pretraining run's history."""
+    args = _tiny_args(tmp_path / "donor", max_steps=1)
+    donor = Trainer(args)
+    donor._skipped_updates = 5
+    donor.fit()
+
+    probe = Trainer(_tiny_args(tmp_path / "probe", max_steps=1,
+                               init_from=str(tmp_path / "donor" / "checkpoint.pt")))
+    assert probe._skipped_updates == 0

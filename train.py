@@ -34,7 +34,7 @@ import subprocess
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace as dataclass_replace
 from typing import Dict, List, Optional, Tuple
 
 # Must run before `import torch` -- torch._inductor.config reads this env var
@@ -772,6 +772,19 @@ class TrainArgs:
     conv_proj_wd: Optional[float] = None
     warmup_steps: int = 300
     decay_frac: float = 0.45
+    # Config knobs a *run* may override without editing the preset. Both default
+    # to None meaning "whatever `PRESETS[config]` says", so every existing run
+    # keeps the shipped 1024-token loss chunk and no block checkpointing.
+    #
+    # They are per-run rather than per-preset because they are memory/throughput
+    # trades, not model definition: `to_hf_dict` already strips both, so two
+    # runs that differ only here export byte-identical configs. A QAT recovery
+    # run is the case that needs them -- the fake-quant parametrization adds a
+    # dequantized copy of every linear weight to the forward graph, so the
+    # activation headroom that fitted the original pretraining run no longer
+    # does at the same batch shape.
+    loss_chunk_size: Optional[int] = None
+    gradient_checkpointing: Optional[bool] = None
     grad_clip: float = 1.0
     run_dir: Optional[str] = None
     ckpt_every_sec: float = 1800.0       # 30 min, per AGENT.md hero spec
@@ -857,6 +870,26 @@ class NoOpResume(RuntimeError):
     """
 
 
+def _config_for(args: TrainArgs) -> DaedalusConfig:
+    """`PRESETS[args.config]` with this run's memory overrides applied.
+
+    Returns the preset object itself when nothing is overridden, so the common
+    case allocates nothing and `Trainer(...).cfg is PRESETS[name]` stays true
+    for every existing caller and test.
+    """
+    cfg = PRESETS[args.config]
+    overrides = {}
+    if args.loss_chunk_size is not None:
+        if args.loss_chunk_size < 0:
+            raise ValueError(
+                f"--loss-chunk-size must be >= 0 (0 disables chunking), "
+                f"got {args.loss_chunk_size}")
+        overrides["loss_chunk_size"] = args.loss_chunk_size
+    if args.gradient_checkpointing is not None:
+        overrides["gradient_checkpointing"] = bool(args.gradient_checkpointing)
+    return dataclass_replace(cfg, **overrides) if overrides else cfg
+
+
 class Trainer:
     def __init__(self, args: TrainArgs):
         self.args = args
@@ -864,7 +897,12 @@ class Trainer:
         self.ckpt_path = os.path.join(self.run_dir, "checkpoint.pt")
 
         torch.manual_seed(args.seed)
-        self.cfg = PRESETS[args.config]
+        # `dataclasses.replace`, never mutation: `PRESETS` holds one shared
+        # `DaedalusConfig` instance per name, so assigning to `self.cfg.<field>`
+        # would rewrite the preset for every later `Trainer`, `eval.py` and
+        # `export.py` in the same process. The overrides below are exactly the
+        # fields `to_hf_dict` strips, so the exported config is unaffected.
+        self.cfg = _config_for(args)
         self.model = Daedalus(self.cfg).to(args.device)
         self.muon, self.adamw, self.opt_stats = build_optimizers(
             self.model, muon_lr=args.muon_lr, adam_lr=args.adam_lr,
@@ -875,6 +913,13 @@ class Trainer:
         self.start_time = time.time()
         self._peak_mem_seen = 0.0
         self._tokenizer = None          # lazily loaded, only if val_dir is set
+        # Cumulative count of optimizer updates dropped because the loss was
+        # non-finite. A Phase 3 gate reads "no skipped non-finite updates", and
+        # the only previous evidence was a WARNING line in a log nobody keeps:
+        # every skip logged a `loss: nan` row indistinguishable from a row the
+        # metrics interval simply happened to land on. Carried in the durable
+        # record so the gate can be decided from `metrics.jsonl` alone.
+        self._skipped_updates = 0
 
         # `hub://owner/repo/path?rev=branch` is materialised to a local file
         # first, so a restore from the Hub takes exactly the same code path as
@@ -889,6 +934,12 @@ class Trainer:
                                    map_location=args.device)
             self.step = info["step"]
             self.tokens_seen = info["tokens_seen"]
+            # Carry the skip count across the restart. Resetting it to 0 would
+            # let a run that skipped updates before a crash report a clean
+            # `skipped_updates: 0` afterwards, and the Phase 3 finiteness gate
+            # reads exactly that field.
+            self._skipped_updates = int(
+                (info.get("extra") or {}).get("skipped_updates", 0))
             self._resumed = True
             print(f"resumed from {args.resume}: step={self.step} "
                  f"tokens_seen={self.tokens_seen}")
@@ -1095,7 +1146,9 @@ class Trainer:
                                 dtype=torch.bfloat16, enabled=(args.device == "cuda")):
                 _, loss, _ = self.net(x, targets=y)
             if not torch.isfinite(loss):
-                print(f"WARNING: non-finite loss at step {self.step}, skipping update")
+                self._skipped_updates += 1
+                print(f"WARNING: non-finite loss at step {self.step}, skipping "
+                      f"update ({self._skipped_updates} skipped so far)")
                 self.muon.zero_grad(set_to_none=True)
                 self.adamw.zero_grad(set_to_none=True)
                 return {"step": self.step, "loss": float("nan"), "skipped": True,
@@ -1223,11 +1276,15 @@ class Trainer:
             return False
         applied = qat_mod.enable_qat(self.model)
         self._qat_on = True
-        err = qat_mod.quantization_error(self.model)["qat_rel_rmse"]
+        err = qat_mod.quantization_error(self.model)
         print(f"QAT ON at step {self.step} ({self._progress():.1%} of the run): "
-              f"{len(applied)} tensors on the llama.cpp Q4_0/Q8_0 grid; "
-              f"pre-QAT relative RMSE {err:.4f}")
-        self.wandb.log({"qat_started_step": self.step, "qat_rel_rmse": err},
+              f"{len(applied)} tensors on the llama.cpp "
+              f"{qat_mod.grid_id()} grid; "
+              f"pre-QAT relative RMSE {err['qat_rel_rmse']:.4f}")
+        self.wandb.log({"qat_started_step": self.step,
+                        "qat_rel_rmse": err["qat_rel_rmse"],
+                        "qat_tensors": err["qat_tensors"],
+                        "qat_elements": err["qat_elements"]},
                        step=self.step)
         return True
 
@@ -1280,7 +1337,8 @@ class Trainer:
             if self._refuse_if_diverged("the rolling checkpoint"):
                 return
             save_checkpoint(self.ckpt_path, self.model, self.muon, self.adamw,
-                            self.step, self.tokens_seen, self.cfg)
+                            self.step, self.tokens_seen, self.cfg,
+                            extra={"skipped_updates": self._skipped_updates})
 
     # ------------------------------------------------------ Hub durability ---
 
@@ -1617,9 +1675,10 @@ class Trainer:
             now = time.time()
             window_tokens = self.tokens_seen - self._last_log_tokens
             window_sec = max(now - self._last_log_time, 1e-9)
+            val_bpb = self._val_bpb()
             record = {
                 "step": self.step, "tokens": self.tokens_seen,
-                "loss": stats["loss"], "val_bpb": self._val_bpb(),
+                "loss": stats["loss"], "val_bpb": val_bpb,
                 "lr": args.muon_lr * stats.get("lr_mult", 1.0),
                 "tok_per_sec": window_tokens / window_sec,
                 "elapsed_h": self._elapsed_h(),
@@ -1627,13 +1686,26 @@ class Trainer:
                 "grad_norm": stats.get("grad_norm"),
                 "peak_mem_GB": self._peak_mem_seen,
                 "qat_active": int(self._qat_on),
+                "skipped_updates": self._skipped_updates,
             }
+            if val_bpb is not None:
+                # Which forward produced `val_bpb`. `self.model` carries the
+                # fake-quant parametrizations while QAT is on, so val_bpb is
+                # measured *through the Q4_0 lattice* then and in fp32
+                # otherwise. The two are not comparable, and nothing in the
+                # number says which one it is -- a recovery run whose val_bpb
+                # sits above the pretraining run's is expected, not a
+                # regression. Recorded rather than inferred, because whoever
+                # reads metrics.jsonl later will not have `qat_frac` to hand.
+                record["val_forward"] = "quantized" if self._qat_on else "float"
+                record["val_grid"] = qat_mod.grid_id() if self._qat_on else None
             if self._qat_on:
                 # Should fall toward zero as the weights settle onto the grid --
                 # the direct evidence QAT is working. O(params), so only while
                 # it is actually on.
-                record["qat_rel_rmse"] = \
-                    qat_mod.quantization_error(self.model)["qat_rel_rmse"]
+                err = qat_mod.quantization_error(self.model)
+                record["qat_rel_rmse"] = err["qat_rel_rmse"]
+                record["qat_tensors"] = err["qat_tensors"]
             record.update(self._hub_health())
             self._last_log_tokens, self._last_log_time = self.tokens_seen, now
             self._last_metrics_step = self.step
@@ -1756,6 +1828,29 @@ def parse_args(argv=None) -> TrainArgs:
                         "llama.cpp's exact Q4_0 grid (blueprint: 0.05 for hero). "
                         "Leave at 0 for sweep/abl-arch -- a quantized forward "
                         "would invalidate those comparisons.")
+    p.add_argument("--warmup-steps", type=int, default=None,
+                   help="linear LR warmup length in steps (default 300). A "
+                        "recovery run measured in hundreds of steps rather "
+                        "than hundreds of thousands would otherwise spend most "
+                        "of its budget still warming up.")
+    p.add_argument("--decay-frac", type=float, default=None,
+                   help="fraction of the run spent decaying LR to zero "
+                        "(default 0.45). Also moves the milestone checkpoint, "
+                        "which is written at the end of the stable phase.")
+    p.add_argument("--loss-chunk-size", type=int, default=None,
+                   help="tokens per chunk in the fused loss head (default: the "
+                        "config's 1024; 0 restores the single-shot path). "
+                        "Lower it to cut loss-head memory, which is what a "
+                        "QAT forward needs on top of the usual activations.")
+    p.add_argument("--gradient-checkpointing", dest="gradient_checkpointing",
+                   action="store_true", default=None,
+                   help="recompute block activations in backward instead of "
+                        "storing them: ~30%% slower steps for a large drop in "
+                        "activation memory. Default: the config's setting.")
+    p.add_argument("--no-gradient-checkpointing", dest="gradient_checkpointing",
+                   action="store_false",
+                   help="force block checkpointing off even if the config "
+                        "enables it.")
     p.add_argument("--ramp-frac", type=float, default=None,
                    help="fraction of the budget the batch/seq ramps span "
                         "(default 0.1). Only needed to *retarget* a run that is "
@@ -1789,6 +1884,14 @@ def parse_args(argv=None) -> TrainArgs:
         kwargs["metrics_every_steps"] = a.metrics_every_steps
     if a.ramp_frac is not None:
         kwargs["ramp_frac"] = a.ramp_frac
+    if a.warmup_steps is not None:
+        kwargs["warmup_steps"] = a.warmup_steps
+    if a.decay_frac is not None:
+        kwargs["decay_frac"] = a.decay_frac
+    # These two stay None when unset -- None *is* the "use the preset" value
+    # for them, unlike the flags above whose default lives on TrainArgs.
+    kwargs["loss_chunk_size"] = a.loss_chunk_size
+    kwargs["gradient_checkpointing"] = a.gradient_checkpointing
     return TrainArgs(**kwargs)
 
 
