@@ -2976,6 +2976,57 @@ def test_a_non_finite_loss_increments_the_recorded_skip_count(tmp_path):
     assert row["skipped_updates"] == 1
 
 
+def test_a_run_that_skips_every_step_stops_instead_of_spinning(tmp_path):
+    """`train_step` does not advance step or tokens_seen when it skips, and
+    both of fit()'s break conditions are thresholds on those two. A run whose
+    every step is non-finite therefore loops forever.
+
+    Measured on the first Phase 3 smoke run: 2,794 skipped updates and 0.18
+    GPU-hours with `--max-steps 3` set, killed by hand.
+    """
+    args = _tiny_args(tmp_path / "run", max_steps=3, max_consecutive_skips=5)
+    t = Trainer(args)
+    t.net = lambda x, targets=None, **kw: (None, torch.tensor(float("nan")), None)
+
+    with pytest.raises(train_module.NonFiniteStall, match="cannot"):
+        t.fit()
+
+    assert t.step == 0, "a skipped step must not be billed against the budget"
+    assert t._skipped_updates == 5
+
+    # The evidence for why it stopped outlives the exception: the durable
+    # record shows the count climbing rather than a single ambiguous nan row.
+    # It stops one short of the in-memory total because every skip leaves
+    # `step` at 0, so log_step's same-step dedup suppresses the forced final
+    # row -- the run never reached a *new* step to write.
+    rows = [json.loads(l) for l in
+            (tmp_path / "run" / "metrics.jsonl").read_text().strip().splitlines()]
+    assert [r["skipped_updates"] for r in rows] == [1, 2, 3, 4]
+    assert all(math.isnan(r["loss"]) for r in rows)
+
+
+def test_an_occasional_skip_does_not_trip_the_stall_guard(tmp_path):
+    """The guard counts *consecutive* skips: a transient bad batch must not
+    accumulate toward it across an otherwise healthy run."""
+    args = _tiny_args(tmp_path / "run", max_steps=6, max_consecutive_skips=3)
+    t = Trainer(args)
+    real_net = t.net
+    calls = {"n": 0}
+
+    def flaky(x, targets=None, **kw):
+        calls["n"] += 1
+        if calls["n"] % 2 == 1:            # every other step is poisoned
+            return None, torch.tensor(float("nan")), None
+        return real_net(x, targets=targets, **kw)
+
+    t.net = flaky
+    t.fit()                                 # must not raise
+
+    assert t.step == 6
+    assert t._skipped_updates == 6
+    assert t._consecutive_skips == 0
+
+
 def test_the_skip_count_survives_a_crash_resume(tmp_path):
     """A resumed run that reset the count to zero would report a clean gate
     for a run that had already skipped updates."""

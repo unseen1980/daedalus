@@ -844,6 +844,33 @@ class TrainArgs:
     hub_every_sec: float = 7200.0        # ~2 h weights-only rolling copy
     hub_poll_sec: float = 300.0          # uploader's own directory-poll cadence
     hub_uploader: bool = True            # spawn the out-of-band upload process
+    # Consecutive skipped updates before `fit` raises `NonFiniteStall` rather
+    # than spinning. A transient bad batch recovers in one or two steps; a run
+    # that has skipped this many in a row is not going to finish, and neither
+    # of fit()'s break conditions can fire while it keeps skipping.
+    max_consecutive_skips: int = 25
+
+
+class NonFiniteStall(RuntimeError):
+    """Every recent step was skipped, so the run cannot make progress.
+
+    `train_step` returns early on a non-finite loss *without* advancing `step`
+    or `tokens_seen` -- correct, because a skipped update trained nothing and
+    should not be billed against the budget. But `fit`'s two break conditions
+    are `step >= max_steps` and `tokens_seen >= total_tokens`, and neither can
+    ever be reached if every step is skipped. The loop then spins: it burns
+    GPU, appends an identical metrics row each time, and never ends.
+
+    Measured on the first Phase 3 smoke run, whose released-checkpoint weights
+    produced a NaN loss from step one (see `qat._safe_reciprocal`): 2,794
+    skipped updates and 0.18 GPU-hours before it was killed by hand. Nothing in
+    the process would have stopped it -- `--max-steps 3` was set.
+
+    Raising hands the decision to the supervisor, which is the component that
+    knows whether to retry, halt, or move to the next arm. `watchdog.py` would
+    also have caught this eventually, but only a supervised run has one, and
+    "eventually" is the wrong unit for a loop that cannot progress.
+    """
 
 
 class NoOpResume(RuntimeError):
@@ -920,6 +947,10 @@ class Trainer:
         # metrics interval simply happened to land on. Carried in the durable
         # record so the gate can be decided from `metrics.jsonl` alone.
         self._skipped_updates = 0
+        # Skips since the last update that actually landed. Reset on any
+        # successful step, so an occasional bad batch never accumulates toward
+        # the stall limit -- only an inability to make progress does.
+        self._consecutive_skips = 0
 
         # `hub://owner/repo/path?rev=branch` is materialised to a local file
         # first, so a restore from the Hub takes exactly the same code path as
@@ -1744,6 +1775,23 @@ class Trainer:
                     print(f"batch source exhausted at step {self.step}; "
                          f"finishing run")
                     break
+                if stats.get("skipped"):
+                    self._consecutive_skips += 1
+                    if self._consecutive_skips >= args.max_consecutive_skips:
+                        # Log the row first: the evidence for *why* the run
+                        # stopped has to outlive the exception.
+                        self.log_step(stats, force=True)
+                        raise NonFiniteStall(
+                            f"{self._consecutive_skips} consecutive non-finite "
+                            f"updates at step {self.step} "
+                            f"({self._skipped_updates} total). Neither "
+                            f"max_steps nor total_tokens can be reached while "
+                            f"every step is skipped, so this run cannot "
+                            f"progress. Check the input weights and the shard "
+                            f"token ids -- `scripts/recovery_preflight.py` "
+                            f"tells the two apart.")
+                else:
+                    self._consecutive_skips = 0
                 self._last_stats = stats
                 self.log_step(stats)
                 self.maybe_checkpoint()

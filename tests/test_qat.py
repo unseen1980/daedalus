@@ -64,8 +64,25 @@ def test_q4_0_matches_scalar_c_reference():
 # ------------------------------------------------- real llama.cpp check ---
 
 def _find_libggml():
-    for pat in ("/tmp/llama.cpp/build/bin/libggml-base.so",
+    """The real `libggml-base.so`, wherever this box built llama.cpp.
+
+    These four tests are the ones that certify our Q4_0 grid *is*
+    llama.cpp's -- the single claim QAT rests on. They skip when the library
+    is absent, which is correct on a laptop and dangerous on a box that has
+    llama.cpp and simply keeps it somewhere the list did not name: the suite
+    then reports green having never checked the grid at all. That is what
+    happened here. llama.cpp lives at `/opt/llama.cpp` on the Vast image
+    (`gguf_eval.py` and the approved wrapper both point there), which no
+    pattern matched, so every grid test silently skipped through Phase 2 and
+    into the Phase 3 fix that changed the quantizer.
+    """
+    override = os.environ.get("DAEDALUS_LIBGGML")
+    if override and os.path.exists(override):
+        return override
+    for pat in ("/opt/llama.cpp/build/bin/libggml-base.so",
+                "/tmp/llama.cpp/build/bin/libggml-base.so",
                 "vendor/llama.cpp/build/bin/libggml-base.so",
+                "/opt/llama.cpp/build/**/libggml-base.so",
                 "/tmp/llama.cpp/build/**/libggml-base.so"):
         hits = glob.glob(pat, recursive=True)
         if hits:
@@ -327,6 +344,70 @@ def test_quantization_error_reads_the_master_weight_not_the_quantized_view():
     on = qat.quantization_error(m)["qat_rel_rmse"]
     assert off > 0
     assert on == pytest.approx(off, rel=1e-6)
+
+
+def test_a_near_dead_block_quantizes_finitely():
+    """The released checkpoint's own failure, reduced to one block.
+
+    `_safe_reciprocal` guards `d == 0`, which is where a *fully* dead channel
+    lands. A channel on its way there passes through a window where the block
+    absmax is denormal-small but not zero: `d = absmax / -8` is representable,
+    `1/d` is not, and it overflows fp32 to inf. Every element of the block that
+    is exactly zero then computes `0 * inf = NaN`, `floor(NaN + 8.5)` stays
+    NaN, and the whole tensor is poisoned.
+
+    Measured on `/root/daedalus/final/hero/checkpoint.pt`: 1,418 NaNs in
+    `layers.1.feed_forward.w1`, 1,674 in `layers.1.feed_forward.w3`, 3 in
+    `layers.13.feed_forward.w1` -- with every stored weight finite. A recovery
+    run on that checkpoint produced a NaN loss on its first step.
+    """
+    block = torch.zeros(1, qat.QK4_0)
+    block[0, 0] = 1e-40          # denormal: 1/(1e-40/8) overflows fp32
+    out = qat.q4_0_qdq(block)
+    assert torch.isfinite(out).all(), "a near-dead block poisoned the tensor"
+    # It is dead, so it quantizes to zero -- the same answer llama.cpp reaches
+    # under flush-to-zero, where `d` denormal makes `d ? 1/d : 0` take the
+    # zero branch.
+    assert torch.equal(out, torch.zeros_like(out))
+
+
+def test_the_near_dead_guard_does_not_disturb_ordinary_blocks():
+    """The bit-exactness certified against real llama-quantize output is the
+    reason this fix has to be surgical: it may only change blocks whose
+    reciprocal was not representable in the first place."""
+    torch.manual_seed(3)
+    w = (torch.randn(16, qat.QK4_0 * 4) * 0.02).float()
+    reference = w.clone()
+    out = qat.q4_0_qdq(w)
+    assert torch.isfinite(out).all()
+    # Recomputing by hand with the unguarded reciprocal must agree exactly.
+    x = reference.reshape(16, -1, qat.QK4_0)
+    signed_absmax = torch.gather(x, -1, x.abs().argmax(dim=-1, keepdim=True))
+    d = signed_absmax / -8.0
+    expected = (torch.clamp(torch.floor(x * (1.0 / d) + 8.5), 0, 15) - 8.0) \
+        * d.half().float()
+    assert torch.equal(out, expected.reshape(reference.shape))
+
+
+def test_a_fully_dead_block_still_quantizes_to_zero():
+    """The case the original guard was written for, kept under test."""
+    out = qat.q4_0_qdq(torch.zeros(1, qat.QK4_0))
+    assert torch.isfinite(out).all()
+    assert torch.equal(out, torch.zeros_like(out))
+
+
+def test_a_near_dead_block_does_not_poison_the_gradient():
+    """The reason the guard masks before dividing rather than after: a
+    `where` whose unselected branch is inf multiplies inf by a zero mask in
+    backward, and `clip_grad_norm_` then scales every parameter in the model
+    by a NaN total norm."""
+    w = torch.zeros(2, qat.QK4_0, requires_grad=True)
+    with torch.no_grad():
+        w[0, 0] = 1e-40
+        w[1, 0] = 0.02
+    fake = qat.FakeQuant("q4_0")
+    fake(w).sum().backward()
+    assert torch.isfinite(w.grad).all()
 
 
 def test_quantization_error_counts_tensors_and_elements_separately():
