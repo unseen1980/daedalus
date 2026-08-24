@@ -1527,15 +1527,16 @@ def _fertility_table(measurements: dict, reference: str) -> List[str]:
     return rows
 
 
-def write_report(root) -> Path:
+def write_report(root, sample_root="data/tokenizer-lab/sample") -> Path:
     """The migration report: what was measured, against what, and what it means."""
     root = Path(root)
     measurements = json.loads((root / "measurements.json").read_text())
     verdict = json.loads((root / "verdict.json").read_text()) \
         if (root / "verdict.json").exists() else {}
-    sample = json.loads(
-        Path("data/tokenizer-lab/sample/sample-manifest.json").read_text()) \
-        if Path("data/tokenizer-lab/sample/sample-manifest.json").exists() else {}
+    manifest_path = Path(sample_root) / "sample-manifest.json"
+    sample = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    gguf = json.loads((root / "gguf-check.json").read_text()) \
+        if (root / "gguf-check.json").exists() else {}
 
     lines = [
         "# V2 tokenizer migration report",
@@ -1639,6 +1640,30 @@ def write_report(root) -> Path:
             f"| {record['label']} | {record['protocol']} | "
             f"{record.get('tokens_seen') or 0:,} | {record['bpb']:.4f} | "
             f"{delta} |")
+
+    if gguf:
+        lines += [
+            "", "## Can stock llama.cpp convert these?", "",
+            "The constraint that decides whether any of this is actionable: "
+            "unmodified stock llama.cpp is a fixed program decision. "
+            "`conversion/base.py::get_vocab_base_pre` identifies a BPE "
+            "pre-tokenizer by hashing the token **ids** a fixed probe string "
+            "encodes to, checks that against a hard-coded list, and raises "
+            "`NotImplementedError` for anything absent. The hash is over ids, "
+            "so it moves with the vocabulary and the merges -- a newly trained "
+            "tokenizer cannot match a registered hash however faithfully it "
+            "copies SmolLM2's pre-tokenizer configuration.",
+            "",
+            "| tokenizer | converts | pre-tokenizer recognised |",
+            "|---|---|---|",
+        ]
+        for label, record in gguf.items():
+            if not record.get("ran"):
+                lines.append(f"| {label} | not run | {record.get('reason')} |")
+                continue
+            lines.append(
+                f"| {label} | {'yes' if record['converted'] else 'no'} | "
+                f"{'no' if record.get('pre_tokenizer_unrecognized') else 'yes'} |")
 
     if verdict:
         lines += [
@@ -1768,7 +1793,8 @@ def main(argv=None) -> int:
     gguf.add_argument("--llama-cpp-dir", default=None)
 
     sub.add_parser("decide", help="apply the preregistered rule")
-    sub.add_parser("report", help="render the migration report")
+    report = sub.add_parser("report", help="render the migration report")
+    report.add_argument("--sample", default="data/tokenizer-lab/sample")
 
     args = parser.parse_args(argv)
     root = Path(args.root)
@@ -1965,7 +1991,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "report":
-        path = write_report(root)
+        path = write_report(root, sample_root=args.sample)
         print(f"wrote {path}")
         return 0
 

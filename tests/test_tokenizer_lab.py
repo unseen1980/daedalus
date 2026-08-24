@@ -406,6 +406,46 @@ def test_a_failing_run_still_reports_a_failure(tmp_path):
     assert "written once" in result.stderr
 
 
+def test_the_report_states_the_rule_and_never_quotes_perplexity(tmp_path):
+    """The report is the deliverable, and the one thing it must not do is
+    present a per-token number as if it were comparable across vocabularies."""
+    from scripts.tokenizer_lab import write_report
+
+    def _reading(vocab, bytes_per_token, q6k, covered=256, passed=True):
+        return {
+            "vocab_size": vocab,
+            "fertility": {d: {"bytes_per_token": bytes_per_token}
+                          for d in ("general", "math", "technical",
+                                    "dialogue", "code", "__all__")},
+            "embedding": {"q6_k_bytes": q6k, "parameters": vocab * 768},
+            "kv": {"kv_bytes_per_context_token": 6144},
+            "round_trip": {"passed": passed,
+                           "byte_alphabet": {"covered": covered}},
+        }
+
+    (tmp_path / "measurements.json").write_text(json.dumps({
+        "32768": _reading(32768, 4.2, 100.0),
+        "49152-smollm2": _reading(49152, 4.0, 150.0, covered=235, passed=False),
+    }))
+    (tmp_path / "scored").mkdir()
+    report = write_report(tmp_path, sample_root=tmp_path / "no-sample").read_text()
+
+    assert RULE_TEXT in report
+    assert rule_digest() in report
+    assert "bits per byte" in report.lower()
+    # Perplexity may be *named*, and is -- the report has to say why it is not
+    # used. What must never appear is a perplexity *value*: no table row may
+    # carry one, because a number in a table is read as a result.
+    assert "never per-token perplexity" in report
+    assert not [line for line in report.splitlines()
+                if line.startswith("|") and "perplexity" in line.lower()]
+    # The scope disclaimer is not optional: the obvious misreading of this
+    # phase is that it improved something shipped.
+    assert "cannot be transplanted" in report
+    # The incumbent's byte-coverage failure has to survive into the report.
+    assert "235/256" in report
+
+
 def test_the_sweep_runs_the_rule_deciding_arms_first(tmp_path):
     """At ~37 minutes an arm, order is not an academic distinction: an
     interrupted sweep has to have answered the question it was run for."""

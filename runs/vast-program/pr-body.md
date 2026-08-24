@@ -16,7 +16,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 | 1 — Unattended control plane | passed |
 | 2 — Evaluation infrastructure | **passed**, verdict in `runs/eval/phase2-gate.json` |
 | 3 — QAT recovery of released Daedalus | **complete**, verdict in `runs/qat-recovery/verdict.json`, reading in `runs/eval/phase3-evidence.md` — **no arm accepted; two operator decisions below** |
-| 4 — Tokenizer lab for V2 | not started |
+| 4 — Tokenizer lab for V2 | **in progress**, rule and addendum preregistered, corpus and vocabularies built, fertility measured, tiny-model sweep running |
 | 5 — ShortConv channel death prevention | not started |
 | 6 — Architecture Pareto proxies | not started |
 | 7 — Improved general corpus and mixture | not started |
