@@ -26,6 +26,12 @@ data/shards-*/
 .DS_Store
 .deepeval/
 
+# Agent-local Claude Code settings and scratch worktrees. Machine-local by
+# construction -- they configure the agent session running on *this* box, not
+# the project -- so a committed copy would silently reconfigure someone else's
+# session, and `.claude/worktrees/` holds whole nested checkouts.
+.claude/
+
 # W&B local run cache — already synced to the cloud, don't bloat git history
 wandb/
 
