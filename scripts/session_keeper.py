@@ -16,6 +16,7 @@ from daedalus.program_state import ProgramStateStore
 from daedalus.session_keeper import (
     ClaudeSessionLauncher,
     KeeperPolicy,
+    PlanGuard,
     SessionKeeper,
     git_progress_probe,
 )
@@ -35,6 +36,12 @@ def build_keeper(args) -> SessionKeeper:
     )
     if system_prompt_path is not None and not system_prompt_path.is_file():
         raise SystemExit(f"missing system prompt {system_prompt_path}")
+
+    plan_guard = PlanGuard(hashes_path=Path(args.plan_hashes)) if args.plan_hashes else None
+    if plan_guard is not None:
+        verified, detail = plan_guard.verify()
+        if not verified:
+            raise SystemExit(f"plan verification failed: {detail}")
 
     policy = KeeperPolicy(
         max_resume_attempts=args.max_resume_attempts,
@@ -60,6 +67,8 @@ def build_keeper(args) -> SessionKeeper:
         launcher=launcher,
         policy=policy,
         progress_probe=git_progress_probe(repo),
+        plan_guard=plan_guard,
+        plan_context_path=args.plan_context,
     )
 
 
@@ -71,6 +80,8 @@ def main(argv=None) -> int:
     parser.add_argument("--prompt-dir")
     parser.add_argument("--default-prompt", required=True)
     parser.add_argument("--system-prompt-file")
+    parser.add_argument("--plan-hashes")
+    parser.add_argument("--plan-context")
     parser.add_argument("--claude-bin", default="claude")
     parser.add_argument("--model", default="opus")
     parser.add_argument("--effort", default="xhigh")

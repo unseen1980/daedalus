@@ -20,6 +20,8 @@ exec python -u scripts/session_keeper.py \
   --keeper-state "${source_repo}/runs/vast-program/keeper.json" \
   --prompt-dir "${source_repo}/ops/vast/prompts" \
   --default-prompt "${source_repo}/ops/vast/prompts/default.md" \
+  --plan-hashes "${config_dir}/plan-hashes.txt" \
+  --plan-context "${config_dir}/claude-plan-context.md" \
   --claude-bin "${DAEDALUS_CLAUDE_BIN:-/root/.local/bin/claude}" \
   --model opus \
   --effort xhigh \

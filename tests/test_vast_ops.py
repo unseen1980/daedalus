@@ -220,3 +220,12 @@ def test_evaluation_entry_points_are_reachable_through_the_wrapper():
         "eval-tasks",
     ):
         assert f"    {subcommand})" in wrapper
+
+
+def test_session_keeper_verifies_both_plans_before_every_launch():
+    wrapper = (ROOT / "ops/vast/daedalus_session_keeper.sh").read_text()
+    cli = (ROOT / "scripts/session_keeper.py").read_text()
+
+    assert "--plan-hashes" in wrapper and "plan-hashes.txt" in wrapper
+    assert "--plan-context" in wrapper and "claude-plan-context.md" in wrapper
+    assert "plan verification failed" in cli

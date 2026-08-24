@@ -10,6 +10,7 @@ import pytest
 from daedalus.program_state import ProgramDeadline, ProgramStateStore
 from daedalus.session_keeper import (
     ClaudeSessionLauncher,
+    PlanGuard,
     KeeperAction,
     KeeperPolicy,
     KeeperState,
@@ -560,3 +561,111 @@ class TestCommandLine:
         assert "standing prompt" in recorded
         assert "--permission-mode" in recorded and "dontAsk" in recorded
         assert json.loads((tmp_path / "keeper.json").read_text())["launches"] == 1
+
+
+def write_plan_manifest(tmp_path: Path) -> tuple:
+    import hashlib
+
+    versioned = tmp_path / "versioned-plan.md"
+    versioned.write_text("reviewable scope")
+    execution = tmp_path / "execution-plan.md"
+    execution.write_text("operational detail")
+    manifest = tmp_path / "plan-hashes.txt"
+    manifest.write_text(
+        "".join(
+            f"{hashlib.sha256(plan.read_bytes()).hexdigest()}  {plan}\n"
+            for plan in (versioned, execution)
+        )
+    )
+    return PlanGuard(hashes_path=manifest), versioned, execution
+
+
+class TestPlanGuard:
+    def test_matching_plans_verify(self, tmp_path):
+        guard, _, _ = write_plan_manifest(tmp_path)
+
+        assert guard.verify() == (True, "")
+
+    def test_a_silently_changed_plan_is_refused(self, tmp_path):
+        guard, versioned, _ = write_plan_manifest(tmp_path)
+        versioned.write_text("reviewable scope, quietly edited")
+
+        verified, detail = guard.verify()
+
+        assert verified is False
+        assert versioned.name in detail
+
+    def test_a_missing_plan_is_refused(self, tmp_path):
+        guard, _, execution = write_plan_manifest(tmp_path)
+        execution.unlink()
+
+        verified, detail = guard.verify()
+
+        assert verified is False
+        assert "unreadable plan" in detail
+
+    def test_an_unreadable_manifest_is_refused(self, tmp_path):
+        guard = PlanGuard(hashes_path=tmp_path / "absent.txt")
+
+        verified, detail = guard.verify()
+
+        assert verified is False
+        assert "unreadable plan manifest" in detail
+
+    def test_materializes_both_plans_into_a_root_only_prompt(self, tmp_path):
+        guard, _, _ = write_plan_manifest(tmp_path)
+        destination = tmp_path / "context" / "plan-context.md"
+
+        written = guard.materialize(destination)
+        body = written.read_text()
+
+        assert body.index("reviewable scope") < body.index("operational detail")
+        assert oct(written.stat().st_mode)[-3:] == "600"
+        assert not (tmp_path / "context" / "plan-context.md.tmp").exists()
+
+
+class TestSessionKeeperPlanEnforcement:
+    def test_a_verified_plan_is_appended_to_the_session(self, keeper_environment, tmp_path):
+        store, keeper_path = keeper_environment
+        guard, _, _ = write_plan_manifest(tmp_path)
+        context = tmp_path / "plan-context.md"
+        launcher = RecordingLauncher([LaunchOutcome(exit_code=0, session_id="s-1")])
+        keeper = SessionKeeper(
+            store=store,
+            keeper_state_path=keeper_path,
+            launcher=launcher,
+            plan_guard=guard,
+            plan_context_path=context,
+            progress_probe=lambda: "sha-1",
+            clock=lambda: START + timedelta(hours=1),
+            sleeper=lambda seconds: None,
+        )
+
+        action = keeper.step()
+
+        assert action.kind == "launch"
+        assert launcher.requests[0].system_prompt_path == context
+        assert "reviewable scope" in context.read_text()
+
+    def test_a_changed_plan_blocks_instead_of_launching(self, keeper_environment, tmp_path):
+        store, keeper_path = keeper_environment
+        guard, versioned, _ = write_plan_manifest(tmp_path)
+        versioned.write_text("scope changed without review")
+        launcher = RecordingLauncher([LaunchOutcome(exit_code=0)])
+        keeper = SessionKeeper(
+            store=store,
+            keeper_state_path=keeper_path,
+            launcher=launcher,
+            plan_guard=guard,
+            plan_context_path=tmp_path / "plan-context.md",
+            progress_probe=lambda: "sha-1",
+            clock=lambda: START + timedelta(hours=1),
+            sleeper=lambda seconds: None,
+        )
+
+        action = keeper.step()
+
+        assert action.kind == "block"
+        assert "changed plan" in action.reason
+        assert launcher.requests == []
+        assert store.load()["status"] == "blocked"

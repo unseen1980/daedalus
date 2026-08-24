@@ -20,7 +20,9 @@ Responsibilities, taken from the program's autonomous repair contract:
 without spawning Claude.
 """
 
+import hashlib
 import json
+import os
 import subprocess
 import time
 from dataclasses import asdict, dataclass, fields
@@ -122,6 +124,73 @@ class LaunchRequest:
     attempt: int
     resume_session_id: Optional[str] = None
     failure_context: str = ""
+    system_prompt_path: Optional[Path] = None
+
+
+@dataclass(frozen=True)
+class PlanGuard:
+    """Refuse to launch a session against a silently changed program plan.
+
+    ``hashes_path`` is an ordinary ``sha256sum`` manifest naming the versioned
+    plan and the protected execution plan. Both are verified before every launch
+    and concatenated, in manifest order, into a root-only prompt file so the
+    session sees reviewable scope together with operational detail.
+    """
+
+    hashes_path: Path
+
+    def entries(self):
+        """Parsed ``(digest, path)`` pairs from the sha256sum manifest."""
+
+        pairs = []
+        for line in Path(self.hashes_path).read_text().splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            digest, _, name = stripped.partition(" ")
+            name = name.strip().lstrip("*")
+            if not digest or not name:
+                raise ValueError(f"malformed plan hash line: {line!r}")
+            pairs.append((digest.lower(), Path(name)))
+        if not pairs:
+            raise ValueError(f"no plan hashes recorded in {self.hashes_path}")
+        return pairs
+
+    def verify(self):
+        """``(ok, detail)`` for the recorded plans, without printing content."""
+
+        try:
+            entries = self.entries()
+        except (OSError, ValueError) as error:
+            return False, f"unreadable plan manifest: {error}"
+        for expected, plan_path in entries:
+            try:
+                actual = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+            except OSError as error:
+                return False, f"unreadable plan {plan_path}: {error}"
+            if actual != expected:
+                return False, f"plan {plan_path} does not match its recorded hash"
+        return True, ""
+
+    def materialize(self, destination) -> Path:
+        """Write the verified concatenation to a fresh mode-0600 prompt file."""
+
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        sections = []
+        for _, plan_path in self.entries():
+            sections.append(f"# Plan: {plan_path.name}\n\n{plan_path.read_text()}")
+        temporary = destination.with_name(destination.name + ".tmp")
+        handle = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+        )
+        with os.fdopen(handle, "w") as stream:
+            stream.write("\n\n".join(sections))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+        os.chmod(destination, 0o600)
+        return destination
 
 
 @dataclass(frozen=True)
@@ -314,8 +383,9 @@ class ClaudeSessionLauncher:
             "--output-format",
             "json",
         ]
-        if self.system_prompt_path is not None:
-            argv += ["--append-system-prompt-file", str(self.system_prompt_path)]
+        system_prompt = request.system_prompt_path or self.system_prompt_path
+        if system_prompt is not None:
+            argv += ["--append-system-prompt-file", str(system_prompt)]
         if request.resume_session_id:
             argv += ["--resume", request.resume_session_id]
         return argv
@@ -392,6 +462,8 @@ class SessionKeeper:
         launcher: ClaudeSessionLauncher,
         policy: KeeperPolicy = KeeperPolicy(),
         progress_probe: Optional[Callable[[], str]] = None,
+        plan_guard: Optional[PlanGuard] = None,
+        plan_context_path=None,
         clock: Optional[Callable[[], datetime]] = None,
         sleeper: Callable[[float], None] = time.sleep,
     ):
@@ -400,6 +472,10 @@ class SessionKeeper:
         self.launcher = launcher
         self.policy = policy
         self.progress_probe = progress_probe
+        self.plan_guard = plan_guard
+        self.plan_context_path = (
+            Path(plan_context_path) if plan_context_path is not None else None
+        )
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.sleeper = sleeper
 
@@ -450,7 +526,22 @@ class SessionKeeper:
             self._block(program_state, keeper_state, action, now)
             return action
 
-        self._launch(program_state, keeper_state, action, now)
+        system_prompt_path = None
+        if self.plan_guard is not None:
+            verified, detail = self.plan_guard.verify()
+            if not verified:
+                refused = KeeperAction(
+                    kind="block",
+                    reason=f"refusing to launch against a changed plan: {detail}",
+                    generation=action.generation,
+                    attempt=action.attempt,
+                )
+                self._block(program_state, keeper_state, refused, now)
+                return refused
+            if self.plan_context_path is not None:
+                system_prompt_path = self.plan_guard.materialize(self.plan_context_path)
+
+        self._launch(program_state, keeper_state, action, now, system_prompt_path)
         return action
 
     def run(self, *, max_cycles: Optional[int] = None) -> KeeperAction:
@@ -492,6 +583,7 @@ class SessionKeeper:
         keeper_state: KeeperState,
         action: KeeperAction,
         now: datetime,
+        system_prompt_path: Optional[Path] = None,
     ) -> None:
         phase = str(program_state.get("phase", ""))
         request = LaunchRequest(
@@ -500,6 +592,7 @@ class SessionKeeper:
             attempt=action.attempt,
             resume_session_id=action.resume_session_id,
             failure_context=keeper_state.last_failure,
+            system_prompt_path=system_prompt_path,
         )
         before = self._fingerprint()
         self.store.append_event(
