@@ -46,6 +46,28 @@ supervisorctl start daedalus_session_keeper
 The blocker itself is in `runs/vast-program/state.json` under `details.blocker`,
 with the full history in `runs/vast-program/events.jsonl`.
 
+## Why phases are detached
+
+An engineering session runs in its own process group so the keeper can reap the
+whole tree when it ends a turn. Anything the session launches inherits that
+group, so a phase started in-session dies whenever the session ends -- on a
+normal exit as readily as on a timeout -- and takes the trainer with it. The
+phase 4 sweep lost its second arm that way and left the box idle until the next
+session noticed.
+
+`run-phase --detach` starts the phase controller in a fresh session, so a turn
+can end without reaping it, and `run-phase` now refuses an undetached phase
+estimated at 0.25h or more. The detached controller takes the same single-owner
+lease, so detaching never adds a second writer.
+
+```bash
+daedalus-approved phase run-phase --phase <name> --estimated-hours <h> --detach \
+    --log runs/<area>/<name>.log -- <command>
+```
+
+A detached phase is orphaned to init by design; `runs/vast-program/state.json`
+and `controller.lock` say whether one is still running.
+
 ## Changing repository files by hand
 
 An engineering session is a child process of the keeper, not a supervised

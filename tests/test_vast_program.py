@@ -210,6 +210,48 @@ def test_detached_phase_argv_round_trips_every_option(tmp_path):
     ]
 
 
+def test_long_phase_refuses_to_run_inside_the_calling_session(tmp_path):
+    """A forgotten --detach must fail loudly, not silently lose GPU hours."""
+
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+
+    with pytest.raises(SystemExit, match="--detach"):
+        main([
+            "--state", str(state),
+            "run-phase",
+            "--phase", "phase4-probe-sweep",
+            "--estimated-hours", "6.0",
+            "--", "python", "scripts/tokenizer_lab.py", "sweep",
+        ])
+
+    # The phase never started, so the state is untouched and the lease is free.
+    assert json.loads(state.read_text())["phase"] == "bootstrap"
+    assert not (tmp_path / "controller.lock").exists()
+
+
+def test_short_phase_still_runs_inline(tmp_path):
+    """The guard bounds long phases only; a quick command keeps its output."""
+
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    assert main([
+        "--state", str(state),
+        "run-phase",
+        "--phase", "phase4-budget",
+        "--estimated-hours", "0.01",
+        "--", "python", "-c", "pass",
+    ]) == 0
+
+    recorded = json.loads(state.read_text())
+    assert recorded["phase"] == "phase4-budget"
+    assert recorded["status"] == "passed"
+
+
 def test_detached_phase_survives_a_group_kill_of_its_launching_session(tmp_path):
     """The regression that cost phase 4 its second arm.
 

@@ -23,6 +23,12 @@ from daedalus.program_state import ProgramDeadline, ProgramStateStore, _timestam
 
 TERMINAL_STATUSES = {"completed", "halted"}
 
+#: Above this estimate a phase outlives the session that starts it, so it must be
+#: detached. A turn's own command timeout is ten minutes, so anything at or past
+#: this bound was never going to survive in-session anyway -- it would only look
+#: like it had until the session ended and killed the trainer with it.
+DETACH_REQUIRED_HOURS = 0.25
+
 
 class ControllerLeaseError(RuntimeError):
     """Raised when another live controller owns the program lease."""
@@ -436,6 +442,13 @@ def main(argv=None) -> int:
         command = command[1:]
     if not command:
         raise SystemExit("run-phase requires a command after --")
+
+    if not args.detach and args.estimated_hours >= DETACH_REQUIRED_HOURS:
+        raise SystemExit(
+            f"phase {args.phase!r} is estimated at {args.estimated_hours:g}h, at or "
+            f"past the {DETACH_REQUIRED_HOURS:g}h bound where a phase outlives the "
+            f"session that starts it; re-run it with --detach"
+        )
 
     if args.detach:
         # State and lease are left to the detached controller so the caller
