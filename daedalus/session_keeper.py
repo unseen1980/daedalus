@@ -219,6 +219,29 @@ def remaining_backoff(
     return max(0.0, owed - elapsed)
 
 
+def failure_context_for(program_state: dict, keeper_state: KeeperState) -> str:
+    """The previous failure's text, unless the program moved on since.
+
+    A failure report is only worth handing to the next turn while it still
+    describes the situation. If the controller transitioned after that exit --
+    an operator cleared the cause, or a phase advanced -- the report is history,
+    and passing it on sends the next session to re-fix something already fixed.
+    """
+
+    if not keeper_state.last_failure or not keeper_state.last_exit_at:
+        return ""
+    updated = program_state.get("updated_at")
+    if not updated:
+        return keeper_state.last_failure
+    try:
+        moved_on = _parse_timestamp(str(updated)) > _parse_timestamp(
+            keeper_state.last_exit_at
+        )
+    except ValueError:
+        return keeper_state.last_failure
+    return "" if moved_on else keeper_state.last_failure
+
+
 def decide(
     *,
     program_state: dict,
@@ -743,7 +766,7 @@ class SessionKeeper:
             attempt=action.attempt,
             resume_session_id=action.resume_session_id,
             session_id=assigned_session_id,
-            failure_context=keeper_state.last_failure,
+            failure_context=failure_context_for(program_state, keeper_state),
             system_prompt_path=system_prompt_path,
         )
         # Recorded before the launch: a keeper that dies mid-session must still

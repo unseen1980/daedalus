@@ -20,6 +20,7 @@ from daedalus.session_keeper import (
     LaunchRequest,
     SessionKeeper,
     decide,
+    failure_context_for,
     remaining_backoff,
     supervised_job_probe,
 )
@@ -955,3 +956,63 @@ class TestAssignedSessionIdentity:
 
         assert assigned is not None
         assert launcher.requests[1].resume_session_id == assigned
+
+
+class TestStaleFailureContext:
+    """A failure report is only useful while it still describes the situation."""
+
+    def _state(self, exited_at: str) -> KeeperState:
+        return KeeperState(
+            phase="phase3-qat-recovery",
+            last_failure="exit=-9 the workspace has not been trusted",
+            last_exit_at=exited_at,
+        )
+
+    def test_a_current_failure_is_handed_to_the_next_turn(self):
+        keeper_state = self._state("2026-08-24T14:36:02Z")
+
+        context = failure_context_for(
+            {"updated_at": "2026-08-24T14:30:00Z"}, keeper_state
+        )
+
+        assert "not been trusted" in context
+
+    def test_a_failure_the_controller_moved_past_is_dropped(self):
+        keeper_state = self._state("2026-08-24T14:36:02Z")
+
+        context = failure_context_for(
+            {"updated_at": "2026-08-24T14:39:18Z"}, keeper_state
+        )
+
+        assert context == ""
+
+    def test_no_failure_means_no_context(self):
+        assert failure_context_for({}, KeeperState()) == ""
+
+    def test_the_keeper_does_not_resend_a_repaired_failure(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        launcher = RecordingLauncher(
+            [
+                LaunchOutcome(exit_code=1, session_id="s-1", tail="already repaired"),
+                LaunchOutcome(exit_code=0, session_id="s-1"),
+            ]
+        )
+        keeper = build_keeper(
+            store,
+            keeper_path,
+            launcher,
+            progress=["sha-1"],
+            policy=KeeperPolicy(backoff_base_sec=0.0),
+        )
+
+        keeper.step()
+        # The operator repairs the cause and transitions the controller.
+        store.transition(
+            phase="phase2-evaluation",
+            status="running",
+            now=START + timedelta(hours=2),
+            details={"reason": "operator repaired the cause"},
+        )
+        keeper.step()
+
+        assert launcher.requests[1].failure_context == ""
