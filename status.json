@@ -4,7 +4,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-24T12:46:24.902517Z",
+  "heartbeat_at": "2026-08-24T12:51:19.271778Z",
   "metrics": {},
   "phase": "phase2-evaluation",
   "schema": 1,
@@ -12,5 +12,5 @@
   "source_sha": "9ef694888f87",
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "blocked",
-  "updated_at": "2026-08-24T12:39:21.436079Z"
+  "updated_at": "2026-08-24T12:51:16.586690Z"
 }
