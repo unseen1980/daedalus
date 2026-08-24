@@ -211,6 +211,7 @@ def train_command(probe: Probe, *, init_from: str, data_dir: str,
                   seq_len: int = SEQ_LEN, batch_tokens: int = BATCH_TOKENS,
                   loss_chunk_size: Optional[int] = None,
                   gradient_checkpointing: bool = False,
+                  no_compile: bool = False,
                   hub_repo: Optional[str] = None,
                   python: str = "python") -> List[str]:
     """The exact `train.py` argv for one arm.
@@ -246,10 +247,60 @@ def train_command(probe: Probe, *, init_from: str, data_dir: str,
         cmd += ["--loss-chunk-size", str(loss_chunk_size)]
     if gradient_checkpointing:
         cmd += ["--gradient-checkpointing"]
+    if no_compile:
+        cmd += ["--no-compile"]
     if val_dir:
         cmd += ["--val-dir", val_dir]
     cmd += ["--hub-repo", hub_repo or ""]
     return cmd
+
+
+def halt_marker_path(run_dir) -> str:
+    """Where `watchdog.py` records a deliberate stop for this run."""
+    return str(Path(run_dir) / "HALTED")
+
+
+def launch_supervised(probe: Probe, command: Sequence[str], *,
+                      run_root: str = "runs", stall_min: float = 20.0,
+                      max_attempts: int = 4) -> dict:
+    """Run one arm under the existing watchdog + resume supervisor.
+
+    Nothing here sits inside a training loop: `run_with_resume` owns the
+    subprocess and this returns when the arm is over. The three pieces matter
+    for different failures --
+
+    - the **watchdog** catches divergence and stalls, which a probe cannot
+      detect about itself;
+    - the **halt marker** is what makes a watchdog stop stick. Without it a
+      supervisor reads the watchdog's SIGTERM as an ordinary crash, resumes the
+      diverged checkpoint with no watchdog left running, and trains a broken
+      model for the rest of the budget before exiting 0;
+    - **`--resume` on retry only.** Attempt one must not carry it (that is what
+      `assert_no_resume` enforces on the command), but a retry must, and it
+      resumes the *probe's own* checkpoint rather than the released one.
+
+    `max_attempts` is deliberately small. These arms are an hour each, and a
+    crash that repeats is a defect to repair rather than to retry around.
+    """
+    from daedalus.supervise import run_with_resume, start_watchdog, stop_watchdog
+
+    assert_no_resume(command)
+    run_dir = Path(run_root) / probe.name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    marker = halt_marker_path(run_dir)
+
+    watchdog = start_watchdog(probe.name, str(run_dir), probe.total_tokens,
+                              stall_min=stall_min, supervised=True)
+    try:
+        report = run_with_resume(
+            list(command), str(run_dir / "checkpoint.pt"),
+            max_attempts=max_attempts, halt_marker=marker,
+            inflight_extra={"phase": "phase3-qat-recovery",
+                            "arm": probe.name, "muon_lr": probe.muon_lr,
+                            "total_tokens": probe.total_tokens})
+    finally:
+        stop_watchdog(watchdog)
+    return report
 
 
 def assert_no_resume(cmd: Sequence[str]) -> None:
@@ -719,6 +770,19 @@ def main(argv=None) -> int:
     cmd.add_argument("--loss-chunk-size", type=int, default=None)
     cmd.add_argument("--gradient-checkpointing", action="store_true")
 
+    launch = sub.add_parser("launch",
+                            help="run one arm under the watchdog + resume supervisor")
+    launch.add_argument("--arm", required=True)
+    launch.add_argument("--init-from", required=True)
+    launch.add_argument("--data-dir", required=True)
+    launch.add_argument("--val-dir", default=None)
+    launch.add_argument("--device", default="cuda")
+    launch.add_argument("--total-tokens", type=int, default=None)
+    launch.add_argument("--loss-chunk-size", type=int, default=None)
+    launch.add_argument("--gradient-checkpointing", action="store_true")
+    launch.add_argument("--no-compile", action="store_true")
+    launch.add_argument("--max-attempts", type=int, default=4)
+
     score = sub.add_parser("score", help="score one candidate against the plan")
     score.add_argument("--name", required=True)
     score.add_argument("--run-dir", required=True)
@@ -756,22 +820,50 @@ def main(argv=None) -> int:
     plan = json.loads(plan_path.read_text())
     baseline = Baseline.from_dict(plan["baseline"])
 
-    if args.command == "command":
+    def resolve(arm_args) -> tuple:
+        """The preregistered arm named on the command line, and its command.
+
+        Resolved from the plan rather than from the flags, so a run cannot be
+        launched at a learning rate nobody preregistered.
+        """
         arms = {a["name"]: a for a in plan["arms"]}
-        if args.arm not in arms:
+        if arm_args.arm not in arms:
             raise SystemExit(
-                f"{args.arm!r} is not a preregistered arm; known: {sorted(arms)}")
-        spec = arms[args.arm]
-        probe = Probe(name=spec["name"], muon_lr=float(spec["muon_lr"]),
-                      total_tokens=int(args.total_tokens or spec["total_tokens"]),
-                      stage=spec["stage"])
+                f"{arm_args.arm!r} is not a preregistered arm; "
+                f"known: {sorted(arms)}")
+        spec = arms[arm_args.arm]
+        probe = Probe(
+            name=spec["name"], muon_lr=float(spec["muon_lr"]),
+            total_tokens=int(getattr(arm_args, "total_tokens", None)
+                             or spec["total_tokens"]),
+            stage=spec["stage"])
         command = train_command(
-            probe, init_from=args.init_from, data_dir=args.data_dir,
-            val_dir=args.val_dir, device=args.device,
-            loss_chunk_size=args.loss_chunk_size,
-            gradient_checkpointing=args.gradient_checkpointing)
+            probe, init_from=arm_args.init_from, data_dir=arm_args.data_dir,
+            val_dir=arm_args.val_dir, device=arm_args.device,
+            loss_chunk_size=arm_args.loss_chunk_size,
+            gradient_checkpointing=arm_args.gradient_checkpointing,
+            no_compile=getattr(arm_args, "no_compile", False))
         assert_no_resume(command)
+        return probe, command
+
+    if args.command == "command":
+        _, command = resolve(args)
         print(" ".join(command))
+        return 0
+
+    if args.command == "launch":
+        probe, command = resolve(args)
+        print(f"launching {probe.name}: muon_lr={probe.muon_lr:g} "
+              f"adam_lr={probe.adam_lr:g} tokens={probe.total_tokens:,} "
+              f"warmup={probe.warmup_steps}")
+        report = launch_supervised(probe, command,
+                                   max_attempts=args.max_attempts)
+        out = root / "launched" / f"{probe.name}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(
+            {"arm": probe.name, "command": list(command), **report},
+            indent=2, sort_keys=True, default=str) + "\n")
+        print(json.dumps(report, indent=2, default=str))
         return 0
 
     if args.command == "score":

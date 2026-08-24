@@ -522,6 +522,82 @@ def test_preregister_then_command_then_score_round_trips(tmp_path):
     assert scored["accepted"] is False
 
 
+def test_launch_supervises_with_a_halt_marker_and_no_resume_on_attempt_one(
+        tmp_path, monkeypatch):
+    """The three supervision pieces, checked where they are wired rather than
+    where they are documented.
+
+    The halt marker is the one that costs most when missing: without it a
+    supervisor reads the watchdog's SIGTERM as an ordinary crash, resumes the
+    diverged checkpoint with no watchdog left running, and trains a broken
+    model for the rest of the budget before exiting 0.
+    """
+    seen = {}
+
+    def fake_run_with_resume(cmd, ckpt_path, **kw):
+        seen["cmd"] = list(cmd)
+        seen["ckpt_path"] = ckpt_path
+        seen["kw"] = kw
+        return {"attempts": 1, "resumed": False, "returncodes": [0]}
+
+    def fake_start_watchdog(run_name, run_dir, target_tokens, **kw):
+        seen["watchdog"] = {"run_name": run_name, "run_dir": run_dir,
+                            "target_tokens": target_tokens, **kw}
+        return "watchdog-proc"
+
+    stopped = []
+    monkeypatch.setattr("daedalus.supervise.run_with_resume",
+                        fake_run_with_resume)
+    monkeypatch.setattr("daedalus.supervise.start_watchdog",
+                        fake_start_watchdog)
+    monkeypatch.setattr("daedalus.supervise.stop_watchdog", stopped.append)
+
+    probe = qr.probe_arms()[0]
+    command = _command(probe)
+    report = qr.launch_supervised(probe, command, run_root=str(tmp_path))
+
+    assert report["returncodes"] == [0]
+    assert "--resume" not in seen["cmd"], "attempt one must not resume"
+    assert seen["kw"]["halt_marker"].endswith("HALTED")
+    # The retry resumes the probe's own checkpoint, never the released one.
+    assert seen["ckpt_path"] == str(tmp_path / probe.name / "checkpoint.pt")
+    assert seen["watchdog"]["supervised"] is True
+    assert seen["watchdog"]["target_tokens"] == probe.total_tokens
+    # The arm is identifiable from the inflight marker a boot resume reads.
+    assert seen["kw"]["inflight_extra"]["arm"] == probe.name
+
+
+def test_launch_stops_the_watchdog_even_when_the_arm_fails(tmp_path,
+                                                           monkeypatch):
+    """A failed arm must not leave a watchdog polling a dead directory for the
+    rest of the night."""
+    def boom(cmd, ckpt_path, **kw):
+        raise RuntimeError("arm died")
+
+    stopped = []
+    monkeypatch.setattr("daedalus.supervise.run_with_resume", boom)
+    monkeypatch.setattr("daedalus.supervise.start_watchdog",
+                        lambda *a, **k: "watchdog-proc")
+    monkeypatch.setattr("daedalus.supervise.stop_watchdog", stopped.append)
+
+    with pytest.raises(RuntimeError, match="arm died"):
+        qr.launch_supervised(qr.probe_arms()[0], _command(qr.probe_arms()[0]),
+                             run_root=str(tmp_path))
+    assert stopped == ["watchdog-proc"]
+
+
+def test_launch_refuses_a_command_carrying_resume(tmp_path, monkeypatch):
+    monkeypatch.setattr("daedalus.supervise.run_with_resume",
+                        lambda *a, **k: pytest.fail("should not have launched"))
+    monkeypatch.setattr("daedalus.supervise.start_watchdog",
+                        lambda *a, **k: None)
+    monkeypatch.setattr("daedalus.supervise.stop_watchdog", lambda p: None)
+    with pytest.raises(ValueError, match="init-from"):
+        qr.launch_supervised(qr.probe_arms()[0],
+                             _command(qr.probe_arms()[0]) + ["--resume", "x.pt"],
+                             run_root=str(tmp_path))
+
+
 def test_the_cli_refuses_an_arm_that_was_never_preregistered(tmp_path):
     baseline_path = tmp_path / "baseline.json"
     baseline_path.write_text(json.dumps({
