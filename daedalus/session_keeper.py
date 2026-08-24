@@ -67,6 +67,7 @@ class KeeperPolicy:
     backoff_cap_sec: float = 600.0
     session_timeout_sec: float = 3600.0
     busy_poll_sec: float = 900.0
+    finalization_phase: str = "phase9-finalization"
 
     def backoff_for(self, consecutive_failures: int) -> float:
         """Exponential backoff with a finite cap, per the reliability policy."""
@@ -240,10 +241,20 @@ def decide(
         return KeeperAction(kind="stop", reason=f"program status {status}")
 
     stage = deadline.stage(now)
-    if stage != "active":
-        return KeeperAction(kind="stop", reason=f"deadline stage {stage}")
+    if stage == "expired":
+        return KeeperAction(kind="stop", reason="deadline stage expired")
 
     phase = str(program_state.get("phase", ""))
+    if stage == "finalizing" and phase != policy.finalization_phase:
+        # The reserved window is for rescoring, uploads, and reports; it is the
+        # one transition the keeper makes on its own rather than waiting for a
+        # turn to make it.
+        return KeeperAction(
+            kind="finalize",
+            reason="reserved finalization window reached",
+            generation=1,
+            attempt=1,
+        )
     if phase in IDLE_PHASES:
         return KeeperAction(
             kind="wait",
@@ -638,6 +649,9 @@ class SessionKeeper:
         if action.kind == "block":
             self._block(program_state, keeper_state, action, now)
             return action
+        if action.kind == "finalize":
+            self._finalize(program_state, now)
+            return action
 
         system_prompt_path = None
         if self.plan_guard is not None:
@@ -668,6 +682,19 @@ class SessionKeeper:
             if action.kind in {"stop", "block"}:
                 break
         return action
+
+    def _finalize(self, program_state: dict, now: datetime) -> None:
+        """Hand the program to its finalization phase inside the reserve."""
+
+        details = dict(program_state.get("details") or {})
+        details["reason"] = "reserved finalization window reached"
+        details["previous_phase"] = str(program_state.get("phase", ""))
+        self.store.transition(
+            phase=self.policy.finalization_phase,
+            status="running",
+            now=now,
+            details=details,
+        )
 
     def _block(
         self,

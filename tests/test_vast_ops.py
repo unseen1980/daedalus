@@ -238,3 +238,12 @@ def test_session_keeper_yields_the_box_to_supervised_jobs():
     assert "--busy-poll-sec" in wrapper
     # Evaluation and training turns outlast a code slice.
     assert "DAEDALUS_SESSION_TIMEOUT_SEC:-7200" in wrapper
+
+
+def test_finalization_prompt_forbids_new_experiments_and_merges():
+    prompt = (ROOT / "ops/vast/prompts/phase9-finalization.md").read_text()
+
+    assert "No new experiment may start." in prompt
+    assert "Never merge." in prompt
+    assert "immutable final artifacts" in prompt
+    assert "/usr/local/bin/daedalus-approved" in prompt

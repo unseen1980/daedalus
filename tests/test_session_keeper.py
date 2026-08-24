@@ -145,13 +145,12 @@ class TestDecide:
         assert action.kind == "stop"
         assert status in action.reason
 
-    def test_no_engineering_session_starts_inside_the_finalization_window(self):
+    def test_no_experiment_session_starts_inside_the_finalization_window(self):
         now = START + timedelta(hours=137)
 
         action = decision(KeeperState(), now=now)
 
-        assert action.kind == "stop"
-        assert action.reason == "deadline stage finalizing"
+        assert action.kind != "launch"
 
     def test_no_engineering_session_starts_after_the_hard_deadline(self):
         now = START + timedelta(hours=145)
@@ -820,3 +819,53 @@ class TestTimeoutKillsTheWholeTree:
             time.sleep(0.2)
         else:
             raise AssertionError(f"child {child_pid} survived the timeout kill")
+
+
+class TestFinalizationWindow:
+    def test_the_reserve_hands_the_program_to_finalization(self):
+        action = decision(KeeperState(), now=START + timedelta(hours=137))
+
+        assert action.kind == "finalize"
+        assert action.reason == "reserved finalization window reached"
+
+    def test_finalization_turns_still_run_inside_the_reserve(self):
+        state = KeeperState(phase=POLICY.finalization_phase)
+
+        action = decision(
+            state,
+            now=START + timedelta(hours=137),
+            phase=POLICY.finalization_phase,
+        )
+
+        assert action.kind == "launch"
+
+    def test_nothing_launches_after_the_hard_deadline(self):
+        action = decision(
+            KeeperState(phase=POLICY.finalization_phase),
+            now=START + timedelta(hours=145),
+            phase=POLICY.finalization_phase,
+        )
+
+        assert action.kind == "stop"
+        assert action.reason == "deadline stage expired"
+
+    def test_the_keeper_records_the_finalization_transition(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        launcher = RecordingLauncher([])
+        keeper = SessionKeeper(
+            store=store,
+            keeper_state_path=keeper_path,
+            launcher=launcher,
+            progress_probe=lambda: "sha-1",
+            clock=lambda: START + timedelta(hours=137),
+            sleeper=lambda seconds: None,
+        )
+
+        action = keeper.step()
+        state = store.load()
+
+        assert action.kind == "finalize"
+        assert state["phase"] == POLICY.finalization_phase
+        assert state["status"] == "running"
+        assert state["details"]["previous_phase"] == "phase2-evaluation"
+        assert launcher.requests == []
