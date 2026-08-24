@@ -1,7 +1,9 @@
 """Bounded relaunch behaviour for unattended Claude engineering sessions."""
 
 import json
+import os
 import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from daedalus.session_keeper import (
     SessionKeeper,
     decide,
     remaining_backoff,
+    supervised_job_probe,
 )
 
 
@@ -43,13 +46,16 @@ def program_state(**overrides) -> dict:
     return state
 
 
-def decision(keeper_state: KeeperState, *, now=None, **state_overrides) -> KeeperAction:
+def decision(
+    keeper_state: KeeperState, *, now=None, supervised_job_live=False, **state_overrides
+) -> KeeperAction:
     return decide(
         program_state=program_state(**state_overrides),
         keeper_state=keeper_state,
         now=now or START + timedelta(hours=1),
         deadline=DEADLINE,
         policy=POLICY,
+        supervised_job_live=supervised_job_live,
     )
 
 
@@ -669,3 +675,148 @@ class TestSessionKeeperPlanEnforcement:
         assert "changed plan" in action.reason
         assert launcher.requests == []
         assert store.load()["status"] == "blocked"
+
+
+class TestRetryBudgetWithoutASessionId:
+    """A turn that times out or never starts reports no session id."""
+
+    def _spent(self, **overrides) -> KeeperState:
+        state = KeeperState(
+            phase="phase2-evaluation",
+            session_id=None,
+            attempt=POLICY.max_resume_attempts,
+            consecutive_failures=POLICY.max_resume_attempts,
+            last_exit_at=(START - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+        )
+        for key, value in overrides.items():
+            setattr(state, key, value)
+        return state
+
+    def test_a_spent_budget_escalates_even_with_no_recorded_session(self):
+        action = decision(self._spent())
+
+        assert action.kind == "launch"
+        assert action.reason == "independent review session"
+        assert (action.generation, action.attempt) == (2, 1)
+
+    def test_the_last_generation_blocks_rather_than_relaunching_forever(self):
+        action = decision(self._spent(generation=POLICY.max_generations))
+
+        assert action.kind == "block"
+
+    def test_repeated_timeouts_end_in_a_blocker(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        policy = KeeperPolicy(
+            max_resume_attempts=2, max_generations=2, backoff_base_sec=0.0
+        )
+        launcher = RecordingLauncher(
+            [LaunchOutcome(exit_code=124, session_id=None, tail="timeout")] * 10
+        )
+        keeper = build_keeper(
+            store, keeper_path, launcher, progress=["sha-1"], policy=policy
+        )
+
+        final = keeper.run(max_cycles=12)
+
+        assert final.kind == "block"
+        assert len(launcher.requests) == policy.max_resume_attempts * policy.max_generations
+
+
+class TestSupervisedJobBackpressure:
+    def test_no_session_starts_while_a_supervised_job_owns_the_box(self):
+        action = decision(KeeperState(), supervised_job_live=True)
+
+        assert action.kind == "wait"
+        assert action.reason == "supervised job in flight"
+        assert action.wait_seconds == POLICY.busy_poll_sec
+
+    def test_a_busy_box_neither_launches_nor_counts_a_failure(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        launcher = RecordingLauncher([])
+        keeper = SessionKeeper(
+            store=store,
+            keeper_state_path=keeper_path,
+            launcher=launcher,
+            busy_probe=lambda: True,
+            progress_probe=lambda: "sha-1",
+            clock=lambda: START + timedelta(hours=1),
+            sleeper=lambda seconds: None,
+        )
+
+        action = keeper.step()
+
+        assert action.kind == "wait"
+        assert launcher.requests == []
+        assert keeper.load_state().consecutive_failures == 0
+
+    def test_a_completed_marker_does_not_hold_the_program_idle(self, tmp_path):
+        run_dir = tmp_path / "hero"
+        run_dir.mkdir()
+        (run_dir / "inflight.json").write_text(
+            json.dumps({"schema": 1, "completed": True, "supervisor_pid": 1})
+        )
+
+        assert supervised_job_probe(tmp_path)() is False
+
+    def test_an_unknown_marker_does_not_hold_the_program_idle(self, tmp_path):
+        run_dir = tmp_path / "hero"
+        run_dir.mkdir()
+        (run_dir / "inflight.json").write_text(json.dumps({"schema": 1, "cmd": ["x"]}))
+
+        assert supervised_job_probe(tmp_path)() is False
+
+    @pytest.mark.skipif(
+        not Path("/proc").is_dir(), reason="process start ticks are read from /proc"
+    )
+    def test_a_live_supervisor_marks_the_box_busy(self, tmp_path):
+        from daedalus.supervise import proc_start_ticks
+
+        run_dir = tmp_path / "hero"
+        run_dir.mkdir()
+        (run_dir / "inflight.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "cmd": ["x"],
+                    "supervisor_pid": os.getpid(),
+                    "supervisor_start_ticks": proc_start_ticks(os.getpid()),
+                }
+            )
+        )
+
+        assert supervised_job_probe(tmp_path)() is True
+
+
+class TestTimeoutKillsTheWholeTree:
+    def test_a_timed_out_turn_does_not_leave_its_children_running(self, tmp_path):
+        child_marker = tmp_path / "child.pid"
+        script = tmp_path / "slow-claude"
+        script.write_text(
+            "#!/bin/bash\n"
+            "sleep 120 &\n"
+            f'echo $! > {child_marker}\n'
+            "sleep 120\n"
+        )
+        script.chmod(0o755)
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("work")
+        launcher = ClaudeSessionLauncher(
+            repo=tmp_path,
+            prompt_path=prompt,
+            claude_bin=str(script),
+            timeout_sec=2.0,
+        )
+
+        outcome = launcher.launch(LaunchRequest(phase="p", generation=1, attempt=1))
+
+        assert outcome.exit_code == 124
+        child_pid = int(child_marker.read_text().strip())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except OSError:
+                break
+            time.sleep(0.2)
+        else:
+            raise AssertionError(f"child {child_pid} survived the timeout kill")

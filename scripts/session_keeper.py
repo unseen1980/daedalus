@@ -19,6 +19,7 @@ from daedalus.session_keeper import (
     PlanGuard,
     SessionKeeper,
     git_progress_probe,
+    supervised_job_probe,
 )
 
 
@@ -49,6 +50,7 @@ def build_keeper(args) -> SessionKeeper:
         backoff_base_sec=args.backoff_base_sec,
         backoff_cap_sec=args.backoff_cap_sec,
         session_timeout_sec=args.session_timeout_sec,
+        busy_poll_sec=args.busy_poll_sec,
     )
     launcher = ClaudeSessionLauncher(
         repo=repo,
@@ -67,6 +69,7 @@ def build_keeper(args) -> SessionKeeper:
         launcher=launcher,
         policy=policy,
         progress_probe=git_progress_probe(repo),
+        busy_probe=supervised_job_probe(args.runs_root or repo / "runs"),
         plan_guard=plan_guard,
         plan_context_path=args.plan_context,
     )
@@ -80,6 +83,8 @@ def main(argv=None) -> int:
     parser.add_argument("--prompt-dir")
     parser.add_argument("--default-prompt", required=True)
     parser.add_argument("--system-prompt-file")
+    parser.add_argument("--runs-root")
+    parser.add_argument("--busy-poll-sec", type=float, default=900.0)
     parser.add_argument("--plan-hashes")
     parser.add_argument("--plan-context")
     parser.add_argument("--claude-bin", default="claude")

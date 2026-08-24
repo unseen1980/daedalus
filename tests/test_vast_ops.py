@@ -229,3 +229,12 @@ def test_session_keeper_verifies_both_plans_before_every_launch():
     assert "--plan-hashes" in wrapper and "plan-hashes.txt" in wrapper
     assert "--plan-context" in wrapper and "claude-plan-context.md" in wrapper
     assert "plan verification failed" in cli
+
+
+def test_session_keeper_yields_the_box_to_supervised_jobs():
+    wrapper = (ROOT / "ops/vast/daedalus_session_keeper.sh").read_text()
+
+    assert "--runs-root" in wrapper
+    assert "--busy-poll-sec" in wrapper
+    # Evaluation and training turns outlast a code slice.
+    assert "DAEDALUS_SESSION_TIMEOUT_SEC:-7200" in wrapper

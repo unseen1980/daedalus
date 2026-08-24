@@ -23,6 +23,7 @@ without spawning Claude.
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import time
 from dataclasses import asdict, dataclass, fields
@@ -65,6 +66,7 @@ class KeeperPolicy:
     backoff_base_sec: float = 30.0
     backoff_cap_sec: float = 600.0
     session_timeout_sec: float = 3600.0
+    busy_poll_sec: float = 900.0
 
     def backoff_for(self, consecutive_failures: int) -> float:
         """Exponential backoff with a finite cap, per the reliability policy."""
@@ -221,6 +223,7 @@ def decide(
     now: datetime,
     deadline: ProgramDeadline,
     policy: KeeperPolicy,
+    supervised_job_live: bool = False,
 ) -> KeeperAction:
     """Choose the next keeper action without performing any side effect."""
 
@@ -246,6 +249,17 @@ def decide(
             kind="wait",
             reason="no active phase",
             wait_seconds=policy.backoff_base_sec,
+        )
+
+    if supervised_job_live:
+        # A long training or evaluation job owns the box; an engineering turn
+        # would have nothing to do and its idleness would read as a failure.
+        return KeeperAction(
+            kind="wait",
+            reason="supervised job in flight",
+            wait_seconds=policy.busy_poll_sec,
+            generation=keeper_state.generation,
+            attempt=keeper_state.attempt,
         )
 
     if phase != keeper_state.phase:
@@ -277,7 +291,28 @@ def decide(
             attempt=keeper_state.attempt,
         )
 
-    if keeper_state.session_id and keeper_state.attempt < policy.max_resume_attempts:
+    # The attempt budget is spent whether or not the failing turn managed to
+    # report a session id: a turn that times out or never starts reports none.
+    if keeper_state.attempt >= policy.max_resume_attempts:
+        generation = keeper_state.generation + 1
+        if generation > policy.max_generations:
+            return KeeperAction(
+                kind="block",
+                reason=(
+                    f"{policy.max_resume_attempts} repair continuations failed "
+                    f"on phase {phase}"
+                ),
+                generation=keeper_state.generation,
+                attempt=keeper_state.attempt,
+            )
+        return KeeperAction(
+            kind="launch",
+            reason="independent review session",
+            generation=generation,
+            attempt=1,
+        )
+
+    if keeper_state.session_id:
         return KeeperAction(
             kind="launch",
             reason="repair continuation",
@@ -286,30 +321,11 @@ def decide(
             attempt=keeper_state.attempt + 1,
         )
 
-    if not keeper_state.session_id:
-        return KeeperAction(
-            kind="launch",
-            reason="fresh session",
-            generation=keeper_state.generation,
-            attempt=keeper_state.attempt + 1,
-        )
-
-    generation = keeper_state.generation + 1
-    if generation > policy.max_generations:
-        return KeeperAction(
-            kind="block",
-            reason=(
-                f"{policy.max_resume_attempts} repair continuations failed on "
-                f"phase {phase}"
-            ),
-            generation=keeper_state.generation,
-            attempt=keeper_state.attempt,
-        )
     return KeeperAction(
         kind="launch",
-        reason="independent review session",
-        generation=generation,
-        attempt=1,
+        reason="fresh session",
+        generation=keeper_state.generation,
+        attempt=keeper_state.attempt + 1,
     )
 
 
@@ -328,7 +344,7 @@ class ClaudeSessionLauncher:
         effort: str = "xhigh",
         permission_mode: str = "dontAsk",
         timeout_sec: float = 3600.0,
-        runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        runner: Optional[Callable[..., subprocess.CompletedProcess]] = None,
     ):
         self.repo = Path(repo)
         self.prompt_path = Path(prompt_path)
@@ -341,7 +357,7 @@ class ClaudeSessionLauncher:
         self.effort = effort
         self.permission_mode = permission_mode
         self.timeout_sec = timeout_sec
-        self.runner = runner
+        self.runner = runner or run_process_group
 
     def resolve_prompt_path(self, request: LaunchRequest) -> Path:
         """Phase-specific prompt when one exists, otherwise the standing prompt."""
@@ -429,6 +445,92 @@ class ClaudeSessionLauncher:
         )
 
 
+def run_process_group(
+    argv,
+    *,
+    cwd=None,
+    timeout=None,
+    text: bool = True,
+    capture_output: bool = True,
+    check: bool = False,
+) -> subprocess.CompletedProcess:
+    """Run ``argv`` in its own process group so a timeout kills the whole tree.
+
+    A Claude turn launches the approved wrapper, which launches llama.cpp on the
+    GPU. Killing only the direct child would leave that GPU process holding the
+    card while the next turn tries to score against it.
+    """
+
+    process = subprocess.Popen(
+        list(argv),
+        cwd=cwd,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        text=text,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(process)
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            list(argv), timeout, output=stdout, stderr=stderr
+        )
+    completed = subprocess.CompletedProcess(
+        list(argv), process.returncode, stdout, stderr
+    )
+    if check:
+        completed.check_returncode()
+    return completed
+
+
+def _kill_process_group(process: subprocess.Popen) -> None:
+    """Escalate from SIGTERM to SIGKILL across the launched process group."""
+
+    try:
+        group = os.getpgid(process.pid)
+    except OSError:
+        process.kill()
+        return
+    for signal_number in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(group, signal_number)
+        except OSError:
+            return
+        try:
+            process.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def supervised_job_probe(runs_root) -> Callable[[], bool]:
+    """True while a supervised training or evaluation run owns the box.
+
+    Liveness that cannot be established reads as *not* busy: an unrecognised or
+    stale marker must never leave the program permanently idle, and the
+    supervised launcher refuses to start a second trainer on its own.
+    """
+
+    root = Path(runs_root)
+
+    def probe() -> bool:
+        from daedalus.supervise import read_inflight, supervisor_is_live
+
+        if not root.is_dir():
+            return False
+        for marker_path in sorted(root.glob("*/inflight.json")):
+            marker = read_inflight(str(marker_path.parent))
+            if not marker or marker.get("completed"):
+                continue
+            if supervisor_is_live(marker) is True:
+                return True
+        return False
+
+    return probe
+
+
 def _session_id_from_output(stdout: Optional[str]) -> Optional[str]:
     """Read the session id Claude reports in ``--output-format json`` mode."""
 
@@ -464,6 +566,7 @@ class SessionKeeper:
         progress_probe: Optional[Callable[[], str]] = None,
         plan_guard: Optional[PlanGuard] = None,
         plan_context_path=None,
+        busy_probe: Optional[Callable[[], bool]] = None,
         clock: Optional[Callable[[], datetime]] = None,
         sleeper: Callable[[float], None] = time.sleep,
     ):
@@ -472,6 +575,7 @@ class SessionKeeper:
         self.launcher = launcher
         self.policy = policy
         self.progress_probe = progress_probe
+        self.busy_probe = busy_probe
         self.plan_guard = plan_guard
         self.plan_context_path = (
             Path(plan_context_path) if plan_context_path is not None else None
@@ -495,6 +599,14 @@ class SessionKeeper:
             reserve_hours=float(program_state.get("reserve_hours", 8.0)),
         )
 
+    def _supervised_job_live(self) -> bool:
+        if self.busy_probe is None:
+            return False
+        try:
+            return bool(self.busy_probe())
+        except Exception:  # an unreadable marker must not stop supervision
+            return False
+
     def _fingerprint(self) -> str:
         if self.progress_probe is None:
             return ""
@@ -515,6 +627,7 @@ class SessionKeeper:
             now=now,
             deadline=self._deadline(program_state),
             policy=self.policy,
+            supervised_job_live=self._supervised_job_live(),
         )
 
         if action.kind == "wait":
