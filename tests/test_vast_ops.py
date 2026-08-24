@@ -247,3 +247,12 @@ def test_finalization_prompt_forbids_new_experiments_and_merges():
     assert "Never merge." in prompt
     assert "immutable final artifacts" in prompt
     assert "/usr/local/bin/daedalus-approved" in prompt
+
+
+def test_session_keeper_refuses_to_run_beside_an_orphaned_session():
+    wrapper = (ROOT / "ops/vast/daedalus_session_keeper.sh").read_text()
+
+    # A keeper that dies leaves its session running; a restart must not add a
+    # second writer to the same working tree.
+    assert 'pgrep -f "^${claude_bin} -p"' in wrapper
+    assert "waiting" in wrapper
