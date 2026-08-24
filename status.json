@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 8.87,
-    "finalization_in_hours": 127.13,
+    "elapsed_hours": 8.89,
+    "finalization_in_hours": 127.11,
     "hard_hours": 144.0,
-    "remaining_hours": 135.13,
+    "remaining_hours": 135.11,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-24T19:36:41.645644Z",
+  "heartbeat_at": "2026-08-24T19:38:06.829693Z",
   "metrics": {},
   "phase": "phase3-qat-recovery",
   "schema": 1,
