@@ -341,6 +341,41 @@ class Baseline:
         )
 
 
+# The five tasks the project's headline mean is over, in the order
+# `scripts/peer_table.py`, `scripts/mcnemar.py` and `scripts/eval_noise.py`
+# already agree on. Restated here would be a fourth copy to drift; imported it
+# would drag those scripts' dependencies into a scorer, so the list is short
+# and the test asserts it still matches theirs.
+FIVE_TASKS = ("hellaswag", "arc_easy", "piqa", "openbookqa", "winogrande")
+
+
+def five_task_mean(payload: dict) -> Optional[float]:
+    """The five-task mean, in points, derived from an `eval.py` scorecard.
+
+    `eval.py` writes no `five_task_mean` field. It writes a `mean` *object* of
+    per-task scores plus their `_n` item counts and the alternative
+    accuracy/accuracy-norm readings, so the headline number every gate is
+    quoted against is derived rather than stored -- and reading `mean` as if it
+    were the scalar it is named like raises `TypeError: float() argument must
+    be a string or a real number, not 'dict'`.
+
+    Derived here from exactly the five headline entries, so a scorecard that
+    lost a task produces None rather than a mean over four that would read as
+    a small regression.
+    """
+    scores = payload.get("mean")
+    if not isinstance(scores, dict):
+        scores = payload.get("metrics") if isinstance(
+            payload.get("metrics"), dict) else payload
+    values = []
+    for task in FIVE_TASKS:
+        value = scores.get(task) if isinstance(scores, dict) else None
+        if not isinstance(value, (int, float)):
+            return None
+        values.append(float(value))
+    return 100.0 * sum(values) / len(values)
+
+
 def finiteness_from_metrics(rows: Sequence[dict]) -> dict:
     """Decide the finiteness gate from `metrics.jsonl` alone.
 
@@ -709,11 +744,7 @@ def collect_observation(name: str, *, run_dir, quant_comparison=None,
 
     if tasks is not None:
         payload = json.loads(Path(tasks).read_text())
-        metrics = payload.get("metrics", payload)
-        for key in ("five_task_mean", "mean", "task_mean"):
-            if key in metrics:
-                observed["five_task_mean"] = float(metrics[key])
-                break
+        observed["five_task_mean"] = five_task_mean(payload)
         observed["tasks_scorecard"] = str(tasks)
 
     if bpb is not None:
@@ -750,6 +781,13 @@ def main(argv=None) -> int:
     parser.add_argument("--root", default="runs/qat-recovery",
                         help="where the plan and verdicts live")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    base = sub.add_parser("baseline",
+                          help="assemble the baseline from measured scorecards")
+    base.add_argument("--quant-comparison", required=True)
+    base.add_argument("--tasks", required=True)
+    base.add_argument("--retrieval", action="append", default=[])
+    base.add_argument("--out", required=True)
 
     pre = sub.add_parser("preregister",
                          help="write the plan before the first probe")
@@ -798,6 +836,38 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
     root = Path(args.root)
+
+    if args.command == "baseline":
+        # Built from the scorecards rather than typed in. Every gate in this
+        # phase is measured against these five numbers, so a transcription
+        # slip here would move a bar without anyone editing one.
+        observed = collect_observation(
+            "released-base", run_dir=root,
+            quant_comparison=args.quant_comparison, tasks=args.tasks,
+            retrieval=args.retrieval)
+        missing = [k for k in ("q4_penalty_pct", "perplexity_fp16",
+                               "perplexity_q4_0", "five_task_mean")
+                   if observed.get(k) is None]
+        if missing:
+            raise SystemExit(f"baseline is missing {missing}; refusing to "
+                             f"preregister against an incomplete reference")
+        payload = {
+            "q4_penalty_pct": observed["q4_penalty_pct"],
+            "perplexity_fp16": observed["perplexity_fp16"],
+            "perplexity_q4_0": observed["perplexity_q4_0"],
+            "five_task_mean": observed["five_task_mean"],
+            "retrieval": observed.get("retrieval") or {},
+            "sources": {
+                "quant_comparison": args.quant_comparison,
+                "tasks": args.tasks,
+                "retrieval": list(args.retrieval),
+            },
+        }
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
 
     if args.command == "preregister":
         baseline = _load_baseline(args.baseline)

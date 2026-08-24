@@ -482,6 +482,49 @@ def test_collect_observation_reads_the_numbers_from_the_written_scorecards(
                                      "retrieval-passkey:d2048": 0.8}
 
 
+def test_the_five_task_mean_is_derived_from_the_real_scorecard_shape():
+    """`eval.py` writes `mean` as an *object* of per-task scores, not a scalar.
+    Reading it as the number it is named like raises `TypeError: float()
+    argument must be a string or a real number, not 'dict'`, which is what the
+    released model's own scorecard would have done."""
+    payload = {"mean": {
+        "hellaswag": 0.3791077474606652, "arc_easy": 0.502104377104377,
+        "piqa": 0.6599564744287268, "openbookqa": 0.324,
+        "winogrande": 0.5035516969218626,
+        # The noise the object also carries, which must not enter the mean.
+        "hellaswag_n": 10042.0, "piqa_acc": 0.6659412404787813,
+        "arc_easy_acc": 0.5787037037037037, "openbookqa_acc": 0.21,
+    }}
+    # 47.374 is the figure Phase 2 recorded for this host.
+    assert qr.five_task_mean(payload) == pytest.approx(47.374, abs=0.001)
+
+
+def test_a_scorecard_missing_a_task_yields_no_mean_rather_than_a_smaller_one():
+    """A mean over four tasks is not a five-task mean, and it would read as a
+    regression of roughly the size the gate is watching for."""
+    payload = {"mean": {"hellaswag": 0.38, "arc_easy": 0.50, "piqa": 0.66,
+                        "openbookqa": 0.32}}
+    assert qr.five_task_mean(payload) is None
+
+
+def test_the_task_list_matches_the_rest_of_the_project():
+    """Three other scripts hold this list. A fourth copy that drifted would
+    silently change what 'the five-task mean' means."""
+    from scripts.peer_table import TASKS
+    assert list(qr.FIVE_TASKS) == list(TASKS)
+
+
+def test_collect_observation_reads_the_released_models_own_task_scorecard():
+    """The scorer must handle the real file, not a shape invented for a test."""
+    import json as _json
+    from pathlib import Path as _Path
+    card = _Path("runs/eval/baseline-hero-tasks.json")
+    if not card.exists():                       # not on a fresh clone
+        pytest.skip("released-model task scorecard not present")
+    assert qr.five_task_mean(_json.loads(card.read_text())) == pytest.approx(
+        47.374, abs=0.01)
+
+
 def test_collect_observation_reports_a_dead_run_as_failing(tmp_path):
     run_dir = tmp_path / "empty"
     run_dir.mkdir()
