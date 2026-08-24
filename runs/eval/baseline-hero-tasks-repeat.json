@@ -1,0 +1,115 @@
+{
+  "provenance": {
+    "schema": 1,
+    "created_at": "2026-08-24T14:06:43.965177Z",
+    "git_sha": "ff126ee",
+    "config": "daedalus-150m",
+    "seed": 20260824,
+    "device": "cuda",
+    "hf_model": null,
+    "checkpoints": [
+      {
+        "path": "/root/daedalus/final/hero/checkpoint.pt",
+        "sha256": "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153"
+      }
+    ],
+    "tokenizer": {
+      "sha256": "c191819e74634ef249cd609f55bb135ac4789069ce90e98dc9d3dee52e3e22af",
+      "name_or_path": "HuggingFaceTB/SmolLM2-135M"
+    },
+    "bpb": {
+      "mode": "not-applicable",
+      "max_batches": null,
+      "shard_dir": null,
+      "batch_size": 8,
+      "seq_len": 2048
+    },
+    "tasks": {
+      "hellaswag": {
+        "repo": "Rowan/hellaswag",
+        "config": null,
+        "split": "validation",
+        "revision": null,
+        "n": 10042,
+        "limit": null
+      },
+      "arc_easy": {
+        "repo": "allenai/ai2_arc",
+        "config": "ARC-Easy",
+        "split": "test",
+        "revision": null,
+        "n": 2376,
+        "limit": null
+      },
+      "piqa": {
+        "repo": "ybisk/piqa",
+        "config": null,
+        "split": "validation",
+        "revision": null,
+        "n": 1838,
+        "limit": null
+      },
+      "openbookqa": {
+        "repo": "allenai/openbookqa",
+        "config": "main",
+        "split": "test",
+        "revision": null,
+        "n": 500,
+        "limit": null
+      },
+      "winogrande": {
+        "repo": "allenai/winogrande",
+        "config": "winogrande_xl",
+        "split": "validation",
+        "revision": null,
+        "n": 1267,
+        "limit": null
+      }
+    }
+  },
+  "per_checkpoint": [
+    {
+      "hellaswag": 0.3791077474606652,
+      "hellaswag_acc": 0.326229834694284,
+      "hellaswag_n": 10042,
+      "hellaswag_acc_norm": 0.3791077474606652,
+      "arc_easy": 0.502104377104377,
+      "arc_easy_acc": 0.5787037037037037,
+      "arc_easy_n": 2376,
+      "arc_easy_acc_norm": 0.502104377104377,
+      "piqa": 0.6599564744287268,
+      "piqa_acc": 0.6659412404787813,
+      "piqa_n": 1838,
+      "piqa_acc_norm": 0.6599564744287268,
+      "openbookqa": 0.324,
+      "openbookqa_acc": 0.21,
+      "openbookqa_n": 500,
+      "openbookqa_acc_norm": 0.324,
+      "winogrande": 0.5035516969218626,
+      "winogrande_acc": 0.5035516969218626,
+      "winogrande_n": 1267,
+      "checkpoint": "/root/daedalus/final/hero/checkpoint.pt"
+    }
+  ],
+  "mean": {
+    "arc_easy_acc": 0.5787037037037037,
+    "winogrande_n": 1267.0,
+    "piqa_acc_norm": 0.6599564744287268,
+    "openbookqa": 0.324,
+    "hellaswag_acc_norm": 0.3791077474606652,
+    "openbookqa_acc_norm": 0.324,
+    "hellaswag_acc": 0.326229834694284,
+    "piqa_n": 1838.0,
+    "hellaswag_n": 10042.0,
+    "winogrande": 0.5035516969218626,
+    "arc_easy_acc_norm": 0.502104377104377,
+    "openbookqa_n": 500.0,
+    "winogrande_acc": 0.5035516969218626,
+    "hellaswag": 0.3791077474606652,
+    "arc_easy": 0.502104377104377,
+    "openbookqa_acc": 0.21,
+    "piqa_acc": 0.6659412404787813,
+    "piqa": 0.6599564744287268,
+    "arc_easy_n": 2376.0
+  }
+}

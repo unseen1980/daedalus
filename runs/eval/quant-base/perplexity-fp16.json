@@ -1,0 +1,42 @@
+{
+  "created_at": "2026-08-24T13:48:42.446911Z",
+  "details": {
+    "n_ctx": 512,
+    "text_file": "data/eval/ppl-finewiki-150k.txt"
+  },
+  "item_count": 292,
+  "item_digest": "3e49e756fd9cf95d0bb9be6e9fb33bff",
+  "kind": "paired-quant",
+  "metrics": {
+    "mean_nll": 1.8891130144839652,
+    "perplexity": 6.613500000000001
+  },
+  "name": "perplexity-fp16",
+  "provenance": {
+    "artifact": {
+      "config": null,
+      "kind": "gguf-f16",
+      "path": "/root/daedalus/gguf/hero-base-f16.gguf",
+      "revision": null,
+      "sha256": "95f1e6795b715be82495fcc68df68946727c4d198589992eccf31d50ed08eeff"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "8e44215",
+    "runtime": {
+      "llama_cpp_commit": "7584430",
+      "llama_perplexity": "/opt/llama.cpp/build/bin/llama-perplexity",
+      "threads": 16
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<embedded-in-gguf>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}
