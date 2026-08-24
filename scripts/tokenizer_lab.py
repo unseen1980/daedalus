@@ -931,13 +931,42 @@ def score_probe(*, vocab_size: int, label: str, protocol: str, shard_root,
 
     root = Path(shard_root) / label
 
-    def bpb(directory: Path) -> float:
-        return evaluate_bpb(model, str(directory), PROBE_SEQ_LEN, tokenizer,
-                            device, batch_size=batch_size, max_batches=None)
+    def bpb(directory: Path) -> Tuple[Optional[float], dict]:
+        """BPB over one holdout directory, with the shape that produced it.
 
-    by_domain = {directory.name: bpb(directory)
-                 for directory in sorted((root / "holdout").iterdir())
-                 if (directory / "manifest.json").exists()}
+        The batch size is capped at the number of non-overlapping windows the
+        directory actually holds. `make_loader` drops the last partial batch,
+        so a directory with fewer windows than one batch yields *no* batches at
+        all and `evaluate_bpb` returns NaN -- which is not a score, serialises
+        as invalid JSON, and would reach the report as a number. The dialogue
+        holdout is exactly that case: `everyday-conversations` is 403k tokens in
+        the whole corpus, so its 2% holdout is ~7k tokens, six windows at
+        `seq_len` 1024. Batching is only how the windows are grouped, so
+        lowering it changes the arithmetic not at all.
+        """
+        manifest = json.loads((directory / "manifest.json").read_text())
+        tokens = int(manifest["total_tokens"])
+        windows = max(0, (tokens - PROBE_SEQ_LEN) // PROBE_SEQ_LEN + 1)
+        shape = {"tokens": tokens, "windows": windows,
+                 "batch_size": min(batch_size, windows)}
+        if windows == 0:
+            shape["skipped"] = (
+                f"{tokens:,} tokens is under one {PROBE_SEQ_LEN}-token window")
+            return None, shape
+        return evaluate_bpb(model, str(directory), PROBE_SEQ_LEN, tokenizer,
+                            device, batch_size=shape["batch_size"],
+                            max_batches=None), shape
+
+    by_domain, shapes = {}, {}
+    for directory in sorted((root / "holdout").iterdir()):
+        if not (directory / "manifest.json").exists():
+            continue
+        value, shape = bpb(directory)
+        shapes[directory.name] = shape
+        if value is not None:
+            by_domain[directory.name] = value
+
+    pooled, pooled_shape = bpb(root / "holdout-all")
     return {
         "vocab_size": vocab_size,
         "label": label,
@@ -946,8 +975,11 @@ def score_probe(*, vocab_size: int, label: str, protocol: str, shard_root,
         "checkpoint": str(checkpoint),
         "steps": info.get("step"),
         "tokens_seen": info.get("tokens_seen"),
-        "bpb": bpb(root / "holdout-all"),
+        "bpb": pooled,
         "bpb_by_domain": by_domain,
+        # Every domain's holdout size travels with its score, so a reader can
+        # see that dialogue rests on six windows and general on ~4,800.
+        "holdout_shape": {**shapes, "__all__": pooled_shape},
     }
 
 
@@ -1414,8 +1446,15 @@ def sweep_order(tokenizer_root, include_matched: bool = False
 
 def run_sweep(*, root, shard_root, tokenizer_root, device: str = "cuda",
               include_matched: bool = False, skip_existing: bool = True,
-              log=print) -> dict:
-    """Train and score every arm in order, writing each result as it lands."""
+              score_only: bool = False, log=print) -> dict:
+    """Train and score every arm in order, writing each result as it lands.
+
+    `score_only` re-scores arms that are already trained. Scoring is minutes
+    and training is ~37 an arm, so a defect found in the scorer while a sweep
+    is in flight is repaired by re-scoring afterwards rather than by killing
+    the sweep -- which would restart the running arm from step zero, since
+    attempt one of a fresh launch deliberately carries no `--resume`.
+    """
     root = Path(root)
     results = {}
     arms = sweep_order(tokenizer_root, include_matched=include_matched)
@@ -1426,14 +1465,21 @@ def run_sweep(*, root, shard_root, tokenizer_root, device: str = "cuda",
             results[f"{label}-{protocol}"] = json.loads(scored_path.read_text())
             continue
         size, path = resolve_label(label, tokenizer_root)
-        log(f"[{index}/{len(arms)}] {label} {protocol}: training", flush=True)
-        launched = launch_probe(vocab_size=size, label=label, protocol=protocol,
-                                shard_root=shard_root, tokenizer_path=path,
-                                device=device)
-        probe_path = root / "probes" / f"{label}-{protocol}.json"
-        probe_path.parent.mkdir(parents=True, exist_ok=True)
-        probe_path.write_text(json.dumps(launched, indent=2, sort_keys=True,
-                                         default=str) + "\n")
+        if score_only:
+            checkpoint = Path("runs") / probe_run_name(label, protocol) / "checkpoint.pt"
+            if not checkpoint.exists():
+                log(f"[{index}/{len(arms)}] {label} {protocol}: no checkpoint, "
+                    f"skipping")
+                continue
+        else:
+            log(f"[{index}/{len(arms)}] {label} {protocol}: training", flush=True)
+            launched = launch_probe(
+                vocab_size=size, label=label, protocol=protocol,
+                shard_root=shard_root, tokenizer_path=path, device=device)
+            probe_path = root / "probes" / f"{label}-{protocol}.json"
+            probe_path.parent.mkdir(parents=True, exist_ok=True)
+            probe_path.write_text(json.dumps(launched, indent=2, sort_keys=True,
+                                             default=str) + "\n")
 
         log(f"[{index}/{len(arms)}] {label} {protocol}: scoring", flush=True)
         record = score_probe(vocab_size=size, label=label, protocol=protocol,
@@ -1772,6 +1818,9 @@ def main(argv=None) -> int:
                             "not read by the rule)")
     sweep.add_argument("--rerun", action="store_true",
                        help="re-train arms that already have a score")
+    sweep.add_argument("--score-only", action="store_true",
+                       help="re-score already-trained arms without training; "
+                            "implies --rerun")
 
     score = sub.add_parser("score", help="held-out BPB for one arm")
     score.add_argument("--label", required=True)
@@ -1941,10 +1990,11 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "sweep":
-        results = run_sweep(root=root, shard_root=args.shards,
-                            tokenizer_root=args.tokenizers, device=args.device,
-                            include_matched=args.include_matched,
-                            skip_existing=not args.rerun)
+        results = run_sweep(
+            root=root, shard_root=args.shards, tokenizer_root=args.tokenizers,
+            device=args.device, include_matched=args.include_matched,
+            skip_existing=not (args.rerun or args.score_only),
+            score_only=args.score_only)
         print(json.dumps({name: record["bpb"]
                           for name, record in results.items()},
                          indent=2, sort_keys=True))

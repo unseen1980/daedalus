@@ -8,6 +8,9 @@ recorded negative result rather than a relaxed bar.
 """
 
 import json
+import sys
+import types
+from pathlib import Path
 
 import pytest
 
@@ -404,6 +407,60 @@ def test_a_failing_run_still_reports_a_failure(tmp_path):
         cwd=root, capture_output=True, text=True)
     assert result.returncode != 0
     assert "written once" in result.stderr
+
+
+def test_a_holdout_smaller_than_one_batch_is_skipped_not_scored_nan(tmp_path,
+                                                                    monkeypatch):
+    """`make_loader` drops the last partial batch, so a directory with fewer
+    windows than one batch yields no batches and `evaluate_bpb` returns NaN.
+    NaN is not a score: it serialises as invalid JSON and reaches the report as
+    a number. The dialogue holdout is exactly that case -- 7k tokens, six
+    windows at seq_len 1024 -- so this is the live path, not a hypothetical."""
+    import scripts.tokenizer_lab as lab
+
+    shards = tmp_path / "shards" / "32768"
+    for name, tokens in (("general", 5_000_000), ("dialogue", 6_983),
+                         ("tiny", 500)):
+        directory = shards / "holdout" / name
+        directory.mkdir(parents=True)
+        (directory / "manifest.json").write_text(
+            json.dumps({"total_tokens": tokens}))
+    (shards / "holdout-all").mkdir(parents=True)
+    (shards / "holdout-all" / "manifest.json").write_text(
+        json.dumps({"total_tokens": 6_868_649}))
+
+    seen = {}
+
+    def fake_bpb(model, directory, seq_len, tokenizer, device, batch_size=8,
+                 max_batches=None):
+        seen[Path(directory).name] = batch_size
+        return 1.234
+
+    monkeypatch.setitem(sys.modules, "eval", types.SimpleNamespace(
+        evaluate_bpb=fake_bpb))
+    monkeypatch.setattr(lab, "probe_config_name", lambda v: "tiny")
+    monkeypatch.setitem(sys.modules, "train", types.SimpleNamespace(
+        load_checkpoint=lambda *a, **k: {"step": 1, "tokens_seen": 2}))
+    monkeypatch.setitem(sys.modules, "daedalus.model", types.SimpleNamespace(
+        Daedalus=lambda cfg: types.SimpleNamespace(
+            to=lambda d: types.SimpleNamespace(eval=lambda: None))))
+    monkeypatch.setattr(lab, "get_tokenizer", lambda p: None, raising=False)
+    monkeypatch.setitem(sys.modules, "daedalus.data", types.SimpleNamespace(
+        get_tokenizer=lambda p: None))
+
+    record = lab.score_probe(vocab_size=32768, label="32768",
+                             protocol="equal-bytes", shard_root=tmp_path / "shards",
+                             tokenizer_path="t", run_root=str(tmp_path),
+                             device="cpu")
+
+    assert "tiny" not in record["bpb_by_domain"]         # under one window
+    assert "skipped" in record["holdout_shape"]["tiny"]
+    assert record["bpb_by_domain"]["dialogue"] == 1.234  # scored, small batch
+    # (6983 - 1024) // 1024 + 1 = 6 non-overlapping windows, so the batch is
+    # capped at 6 and yields one full batch instead of none.
+    assert seen["dialogue"] == 6
+    assert seen["general"] == 8                           # the normal path
+    assert record["holdout_shape"]["dialogue"]["tokens"] == 6_983
 
 
 def test_the_report_states_the_rule_and_never_quotes_perplexity(tmp_path):
