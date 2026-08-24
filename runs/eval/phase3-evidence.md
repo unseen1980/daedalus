@@ -247,9 +247,149 @@ recorded here before any arm's Q4 penalty was measured. Every candidate that is
 arms get measured on the criteria that cannot change their rank, not what any
 of them has to pass.
 
+## Result: the Q4 penalty is gone, and no arm was accepted
+
+`runs/qat-recovery/verdict.json`, produced by the preregistered scorer:
+
+> no 100M probe passed both the improvement and retention gates; reporting the
+> negative result rather than escalating
+
+That verdict is mechanical — `select_winner` returned `None`, so
+`escalation_decision` refused the 300M follow-up and the 1B escalation. The
+numbers behind it are more interesting than the word "negative" suggests.
+
+| | released base | lr 2e-4 | lr 5e-4 | lr 1e-3 |
+|---|---|---|---|---|
+| FP16 perplexity | **6.6135** | 6.7126 | 6.7034 | 6.7305 |
+| Q4_0 perplexity | **6.9798** | 6.7057 | **6.6873** | 6.7054 |
+| Q4 penalty | **+5.539%** | −0.103% | −0.240% | −0.373% |
+| penalty reduction | — | 101.9% | 104.3% | **106.7%** |
+| FP16 regression | — | +1.498% | +1.359% | +1.769% |
+| five-task mean | **47.374** | 47.050 | 47.632 | **48.082** |
+| five-task change | — | −0.324 | +0.258 | **+0.708** |
+| retrieval, worst depth | — | −7.0 | −23.0 | −7.0 |
+| skipped updates | — | **0** | **0** | **0** |
+
+### What worked
+
+**The quantization penalty is not merely halved, it is inverted.** Every arm
+lands between −0.10% and −0.37%: after recovery the Q4_0 artifact scores
+*better* than its own FP16 parent, which is the expected end state when a model
+has been trained to expect the lattice it ships on. Against the improvement
+gate — halve the 5.539% — the reductions are 102–107%. Target (≤3%) and stretch
+(≤1%) are both cleared with room.
+
+**The artifact that actually ships got better.** Q4_0 perplexity falls from
+6.9798 to 6.6873 at the best arm: a **4.19% improvement on the ship format**,
+from 100M tokens, 1.03 GPU-hours and about $0.46. The paired view backs it: 164
+of 292 chunks improve.
+
+**Task quality held, and mostly improved.** Two of three arms *raised* the
+five-task mean, by 0.26 and 0.71 points. No arm came close to the 0.5-point
+drop limit in the wrong direction except lr 2e-4 at −0.324, which still passed.
+
+**Nothing diverged.** Zero skipped updates and zero non-finite rows across all
+three arms and 573 steps.
+
+### What failed, and which failure is the real one
+
+Two gates blocked every arm, and they are not equally serious.
+
+**FP16 perplexity regressed 1.36–1.77% against a 0.5% limit.** This is
+inherent to what QAT does rather than a symptom of a bad run. The
+straight-through estimator optimizes the *quantized* model; the FP16 artifact is
+the float master, which nothing in the objective asks to stay put. The gate is
+doing exactly what it was written to do — refusing a candidate that shrank the
+penalty ratio by moving its FP16 numerator — but here the ratio closed from
+*both* ends: Q4 improved 4.19% in absolute terms while FP16 gave up 1.36%. A
+model that ships as Q4_0 is better after this trade, not worse, and the
+five-task mean agrees.
+
+That is a finding about the gate, not a reason to move it. The gate stays as
+preregistered and every arm stays rejected. Whether a 0.5% FP16 limit is the
+right constraint on a *ship-format* recovery is a question for the operator,
+and it is the single most consequential open item in this phase.
+
+**Retrieval degraded, and this one is real.** Per depth, against the 100-item
+baseline:
+
+| task, depth | base | lr 2e-4 | lr 5e-4 | lr 1e-3 |
+|---|---|---|---|---|
+| passkey d256 | 0.83 | 0.76 | **0.60** | 0.79 |
+| passkey d512 | 0.81 | 0.81 | 0.80 | 0.82 |
+| passkey d1024 | 0.86 | 0.83 | 0.80 | 0.87 |
+| passkey d2048 | 0.88 | 0.88 | 0.82 | 0.81 |
+| MQAR d256 | 0.99 | 0.99 | 0.99 | 0.99 |
+| MQAR d512 | 0.96 | 0.94 | 0.94 | 0.93 |
+| MQAR d1024 | 0.91 | 0.87 | 0.85 | 0.88 |
+| MQAR d2048 | 0.86 | 0.81 | 0.83 | 0.85 |
+
+Copy-control stays at 1.000 for all three, so the prompt formatter is intact
+and these are model differences.
+
+The honest reading separates two things. **MQAR degrades consistently** — every
+arm is worse at d512, d1024 and d2048, by 2 to 6 points, with the damage growing
+with depth. Three independent arms moving the same way at the same depths is a
+pattern, not noise. **The −23 points at passkey d256 for lr 5e-4 is one cell**,
+it is not reproduced by the neighbouring rates (−7 and −4), and at n=100 with
+p≈0.83 one cell carries about 3.8 points of binomial noise. It should not be
+quoted as the headline; the consistent 2–6 point MQAR decline should.
+
+Either way the gate fails: even 2 points is twice the 1-point limit. And unlike
+the FP16 result, this one is a genuine capability loss on the format that
+ships, in the dimension the plan singles out for protection.
+
+### Why this is a stop and not a setback
+
+The preregistered stop rule exists for exactly this: a result that is
+*measurably good on the headline number* and fails a protection gate should not
+spend 1B tokens before anyone looks at it. Escalating would have cost about 11
+GPU-hours to make a retrieval regression larger.
+
+The recovery recipe works. What is not yet established is whether it can be made
+retrieval-safe — and that is a question about the recipe (replay mixture, LR
+floor, which tensors QAT touches), not about the budget.
+
+## Artifacts
+
+Kept on the box, hashed, and **not published**. Publishing implies endorsement,
+and the preregistered verdict endorses none of these.
+
+| artifact | sha256 |
+|---|---|
+| `runs/qat-recovery-lr0.0002/checkpoint.pt` | `ea4719e62998e842df969bf9dc716eabf13a469fb825ce602cd7fb12c7297a6a` |
+| `runs/qat-recovery-lr0.0005/checkpoint.pt` | `1b7b65644c18bece548afe8b8f2cf4072b93b854de16cb5874fa20ccd821ed90` |
+| `runs/qat-recovery-lr0.001/checkpoint.pt` | `fc01bea145d5e339e0906409d93996b26ef3aeb6b0c49a86eedded34d1e0194c` |
+| `runs/qat-recovery/export/lr0.0005/model-f16.gguf` | `35fb7a2b33f75fb5980c2ac30793e035410904cd975b658e9edcf9e0eabd79da` |
+| `runs/qat-recovery/export/lr0.0005/model-q4_0.gguf` | `30dd89dcef47392cfda5027286bb01b0ef8128ef6d4f52a61300b1c0db772d9a` |
+
+The released repositories are untouched. The input checkpoint
+(`cfbf27dc…`) was opened read-only and every arm started from it with
+`--init-from`.
+
+## What the operator has to decide
+
+1. **Is a 0.5% FP16 perplexity limit the right gate for a ship-format
+   recovery?** As written it rejects a model whose Q4_0 artifact is 4.19%
+   better and whose five-task mean is up 0.26–0.71 points. If the answer is
+   "score the ship format against the ship format", the correct comparison is
+   Q4_0 6.6873 against the released Q4_0 6.9798, and lr 5e-4 passes
+   comfortably. That is a change to a preregistered gate and is therefore the
+   operator's call, not this session's.
+2. **Is the MQAR decline acceptable, or does the recipe need fixing first?**
+   The consistent 2–6 point loss at depth is the one result here that is
+   unambiguously a regression.
+
 ## Still open
 
-- The three 100M arms have not run. Nothing below the smoke run is measured
-  yet, and no claim about recovered quality appears in this file.
-- The retrieval baseline at 100 items per depth is in flight; the
-  preregistration is written once it lands, and the arms start after that.
+- **The 300M follow-up and the 1B escalation were not run**, per the
+  preregistered stop rule. Roughly 14 GPU-hours were deliberately not spent.
+- **Nothing is published.** The artifacts above are on the box with hashes; the
+  decision to publish any of them privately waits on the two questions above.
+- **No retrieval-safe variant has been tried.** The obvious candidates —
+  raising the general-replay share, flooring the LR earlier, or leaving
+  attention projections out of the QAT plan so the retrieval path is not
+  retrained on the lattice — are untested and would each need a fresh
+  preregistration.
+- **The `_safe_reciprocal` fix should be carried into Phase 8.** Daedalus-Code
+  starts from the same checkpoint family and would hit the identical NaN.

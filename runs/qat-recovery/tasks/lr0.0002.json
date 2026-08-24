@@ -1,0 +1,115 @@
+{
+  "provenance": {
+    "schema": 1,
+    "created_at": "2026-08-24T19:14:15.538309Z",
+    "git_sha": "bb5fe46",
+    "config": "daedalus-150m",
+    "seed": 20260824,
+    "device": "cuda",
+    "hf_model": null,
+    "checkpoints": [
+      {
+        "path": "runs/qat-recovery-lr0.0002/checkpoint.pt",
+        "sha256": "ea4719e62998e842df969bf9dc716eabf13a469fb825ce602cd7fb12c7297a6a"
+      }
+    ],
+    "tokenizer": {
+      "sha256": "c191819e74634ef249cd609f55bb135ac4789069ce90e98dc9d3dee52e3e22af",
+      "name_or_path": "HuggingFaceTB/SmolLM2-135M"
+    },
+    "bpb": {
+      "mode": "not-applicable",
+      "max_batches": null,
+      "shard_dir": null,
+      "batch_size": 8,
+      "seq_len": 2048
+    },
+    "tasks": {
+      "hellaswag": {
+        "repo": "Rowan/hellaswag",
+        "config": null,
+        "split": "validation",
+        "revision": null,
+        "n": 10042,
+        "limit": null
+      },
+      "arc_easy": {
+        "repo": "allenai/ai2_arc",
+        "config": "ARC-Easy",
+        "split": "test",
+        "revision": null,
+        "n": 2376,
+        "limit": null
+      },
+      "piqa": {
+        "repo": "ybisk/piqa",
+        "config": null,
+        "split": "validation",
+        "revision": null,
+        "n": 1838,
+        "limit": null
+      },
+      "openbookqa": {
+        "repo": "allenai/openbookqa",
+        "config": "main",
+        "split": "test",
+        "revision": null,
+        "n": 500,
+        "limit": null
+      },
+      "winogrande": {
+        "repo": "allenai/winogrande",
+        "config": "winogrande_xl",
+        "split": "validation",
+        "revision": null,
+        "n": 1267,
+        "limit": null
+      }
+    }
+  },
+  "per_checkpoint": [
+    {
+      "hellaswag": 0.37333200557657836,
+      "hellaswag_acc": 0.3280223063134834,
+      "hellaswag_n": 10042,
+      "hellaswag_acc_norm": 0.37333200557657836,
+      "arc_easy": 0.502104377104377,
+      "arc_easy_acc": 0.5681818181818182,
+      "arc_easy_n": 2376,
+      "arc_easy_acc_norm": 0.502104377104377,
+      "piqa": 0.6594124047878128,
+      "piqa_acc": 0.6670293797606094,
+      "piqa_n": 1838,
+      "piqa_acc_norm": 0.6594124047878128,
+      "openbookqa": 0.322,
+      "openbookqa_acc": 0.21,
+      "openbookqa_n": 500,
+      "openbookqa_acc_norm": 0.322,
+      "winogrande": 0.4956590370955012,
+      "winogrande_acc": 0.4956590370955012,
+      "winogrande_n": 1267,
+      "checkpoint": "runs/qat-recovery-lr0.0002/checkpoint.pt"
+    }
+  ],
+  "mean": {
+    "hellaswag_n": 10042.0,
+    "arc_easy_n": 2376.0,
+    "openbookqa": 0.322,
+    "openbookqa_n": 500.0,
+    "hellaswag_acc": 0.3280223063134834,
+    "piqa": 0.6594124047878128,
+    "piqa_n": 1838.0,
+    "hellaswag": 0.37333200557657836,
+    "arc_easy_acc": 0.5681818181818182,
+    "winogrande": 0.4956590370955012,
+    "openbookqa_acc": 0.21,
+    "arc_easy": 0.502104377104377,
+    "openbookqa_acc_norm": 0.322,
+    "winogrande_n": 1267.0,
+    "arc_easy_acc_norm": 0.502104377104377,
+    "hellaswag_acc_norm": 0.37333200557657836,
+    "piqa_acc": 0.6670293797606094,
+    "winogrande_acc": 0.4956590370955012,
+    "piqa_acc_norm": 0.6594124047878128
+  }
+}

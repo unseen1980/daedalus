@@ -1,0 +1,49 @@
+{
+  "created_at": "2026-08-24T19:02:00.305752Z",
+  "details": {},
+  "item_count": 400,
+  "item_digest": "28b9474080a0167a492de20fe41cc2b5",
+  "kind": "retrieval",
+  "metrics": {
+    "exact_match": 0.9025,
+    "exact_match_d1024": 0.87,
+    "exact_match_d2048": 0.81,
+    "exact_match_d256": 0.99,
+    "exact_match_d512": 0.94,
+    "n": 400.0,
+    "n_d1024": 100.0,
+    "n_d2048": 100.0,
+    "n_d256": 100.0,
+    "n_d512": 100.0,
+    "query_accuracy": 0.9025
+  },
+  "name": "retrieval-mqar",
+  "provenance": {
+    "artifact": {
+      "config": "daedalus-150m",
+      "kind": "checkpoint",
+      "path": "runs/qat-recovery-lr0.0002/checkpoint.pt",
+      "revision": null,
+      "sha256": "ea4719e62998e842df969bf9dc716eabf13a469fb825ce602cd7fb12c7297a6a"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "bb5fe46",
+    "runtime": {
+      "backend": "torch",
+      "device": "cuda",
+      "max_new_tokens": 24,
+      "torch": "2.11.0+cu128"
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<none>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}
