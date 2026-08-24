@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 9.81,
-    "finalization_in_hours": 126.19,
+    "elapsed_hours": 9.9,
+    "finalization_in_hours": 126.1,
     "hard_hours": 144.0,
-    "remaining_hours": 134.19,
+    "remaining_hours": 134.1,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-24T20:33:25.195622Z",
+  "heartbeat_at": "2026-08-24T20:38:26.861829Z",
   "metrics": {},
   "phase": "phase4-smolxs-probe",
   "schema": 1,
