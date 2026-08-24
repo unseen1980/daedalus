@@ -1,0 +1,14 @@
+{
+  "revision": "tok-probe-smoke-stable-end-step12",
+  "step": 12,
+  "tokens_seen": 1572864,
+  "total_steps": 62,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 0.12,
+  "muon_lr": 0.02,
+  "adam_lr": 0.0003,
+  "config": "tok-probe-32768",
+  "repo": null,
+  "path_in_repo": "milestone/tok-probe-smoke/checkpoint.pt",
+  "created_at": 1787605965.2888663
+}
