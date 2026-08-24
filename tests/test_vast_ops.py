@@ -267,3 +267,13 @@ def test_runbook_covers_the_traps_an_operator_will_hit():
     assert "supervisorctl start daedalus_session_keeper" in runbook
     assert "install_supervisor.sh" in runbook
     assert "Operation not permitted" in runbook
+
+
+def test_phase_four_prompt_compares_bpb_not_token_perplexity():
+    prompt = (ROOT / "ops/vast/prompts/phase4-tokenizer-lab.md").read_text()
+
+    # Token-level perplexity is not comparable across vocabularies.
+    assert "never token-level perplexity" in prompt
+    assert "24,576" in prompt and "32,768" in prompt and "40,960" in prompt
+    assert "do not adjust it after seeing the numbers" in prompt
+    assert "/usr/local/bin/daedalus-approved" in prompt
