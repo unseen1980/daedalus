@@ -70,12 +70,58 @@ _REQUIRED_FLAGS = ("-m", "-f", "-n", "-c", "--temp")
 
 # Flags that improve determinism or output hygiene but whose spelling has
 # changed across upstream releases. Included only when `--help` advertises them.
+#
+# Both spellings of the conversation switch are listed. Upstream has shipped it
+# as `-no-cnv` and as `--no-conversation`, and the pinned build advertises only
+# the long form -- so a probe that knew the short form alone found nothing, left
+# conversation mode on, and every item died waiting for a person to type.
 _OPTIONAL_FLAGS = ("--top-k", "-s", "-t", "-ngl", "--no-warmup", "-no-cnv",
+                   "--no-conversation", "-st", "--single-turn",
                    "--no-display-prompt")
+
+# Ways to stop `llama-cli` sitting at an interactive prompt, best first.
+# `-no-cnv`/`--no-conversation` disable chat outright and are what a base-model
+# completion harness wants. Builds after those were dropped offer `-st` /
+# `--single-turn`, which still runs one templated turn but does exit -- enough
+# to score with, and verified with `--show-prompt` rather than assumed.
+# Passing two aliases of one switch would be a duplicate argument, so the first
+# supported entry wins.
+_CONVERSATION_FLAGS = ("-no-cnv", "--no-conversation", "-st", "--single-turn")
+
+# Bare switches, in the order they are appended.
+_BARE_FLAGS = ("--no-warmup", _CONVERSATION_FLAGS, "--no-display-prompt")
 
 
 class ControlFailure(RuntimeError):
     """Raised when the synthetic controls do not score 100%."""
+
+
+_CONVERSATION_HELP = re.compile(
+    r"^.*(conversation|chat|interactive|single-turn).*$",
+    flags=re.MULTILINE | re.IGNORECASE)
+
+
+def _conversation_help_lines(help_text: str, limit: int = 12) -> str:
+    """The binary's own help lines about chat mode, for a rename we did not see.
+
+    Upstream has renamed this switch more than once. Quoting what this binary
+    actually says turns "then what does it call it?" into something the error
+    message already answers, instead of a guess per rebuild.
+    """
+
+    lines = [match.group(0).strip()
+             for match in _CONVERSATION_HELP.finditer(help_text)]
+    return "\n".join(f"  {line}" for line in lines[:limit]) if lines else "  (none)"
+
+
+def _tail(stream, limit: int = 800) -> str:
+    """The last of whatever a killed child managed to write, as text."""
+
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        stream = stream.decode("utf-8", "replace")
+    return stream.strip()[-limit:]
 
 
 def parse_depths(value: str):
@@ -107,6 +153,8 @@ class LlamaCppBackend:
     def __init__(self, gguf_path, binary, *, threads: int = 8, n_ctx: int = 4096,
                  max_new_tokens: int = 24, seed: int = 20260824,
                  timeout_s: float = GENERATION_TIMEOUT_S,
+                 require_non_interactive: bool = True,
+                 show_prompt: bool = False,
                  runner: Callable[..., subprocess.CompletedProcess] = subprocess.run):
         self.gguf_path = Path(gguf_path)
         self.binary = Path(binary)
@@ -115,6 +163,8 @@ class LlamaCppBackend:
         self.max_new_tokens = max_new_tokens
         self.seed = seed
         self.timeout_s = timeout_s
+        self.require_non_interactive = require_non_interactive
+        self.show_prompt = show_prompt
         self.runner = runner
         self._supported: Optional[set] = None
 
@@ -123,7 +173,8 @@ class LlamaCppBackend:
         if self._supported is not None:
             return self._supported
         result = self.runner([str(self.binary), "--help"], capture_output=True,
-                             text=True, timeout=HELP_TIMEOUT_S)
+                             text=True, timeout=HELP_TIMEOUT_S,
+                             stdin=subprocess.DEVNULL)
         help_text = (result.stdout or "") + (result.stderr or "")
         missing = [flag for flag in _REQUIRED_FLAGS
                    if not re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])",
@@ -132,10 +183,27 @@ class LlamaCppBackend:
             raise RuntimeError(
                 f"{self.binary} does not advertise required flags {missing}; "
                 "this does not look like llama-cli")
-        self._supported = {
+        supported = {
             flag for flag in _REQUIRED_FLAGS + _OPTIONAL_FLAGS
             if re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])", help_text)
         }
+        # Modern `llama-cli` starts a chat when the model carries a template,
+        # and then waits at its `> ` prompt. With no switch to turn that off,
+        # every item burns the full generation timeout and the run learns
+        # nothing, so refuse now and name what the binary does advertise --
+        # upstream has spelled this switch more than one way.
+        if self.require_non_interactive and \
+                not any(flag in supported for flag in _CONVERSATION_FLAGS):
+            raise RuntimeError(
+                f"{self.binary} advertises no way to leave conversation mode "
+                f"(looked for {list(_CONVERSATION_FLAGS)}); it would wait at an "
+                "interactive prompt for every item. Optional flags it does "
+                f"advertise: {sorted(supported - set(_REQUIRED_FLAGS))}.\n"
+                "Help lines mentioning conversation/chat/interactive:\n"
+                f"{_conversation_help_lines(help_text)}\n"
+                "Pass require_non_interactive=False only for a binary old "
+                "enough to predate conversation mode.")
+        self._supported = supported
         return self._supported
 
     def _command(self, prompt_file: str) -> List[str]:
@@ -151,10 +219,28 @@ class LlamaCppBackend:
                             ("-t", str(self.threads)), ("-ngl", "0")):
             if flag in supported:
                 command += [flag, value]
-        for flag in ("--no-warmup", "-no-cnv", "--no-display-prompt"):
-            if flag in supported:
-                command.append(flag)
+        for entry in _BARE_FLAGS:
+            aliases = (entry,) if isinstance(entry, str) else entry
+            # `--no-display-prompt` is what makes stdout the completion alone;
+            # dropping it is how an operator sees the text the binary actually
+            # fed the model, chat template and all.
+            if entry == "--no-display-prompt" and self.show_prompt:
+                continue
+            match = next((flag for flag in aliases if flag in supported), None)
+            if match is not None:
+                command.append(match)
         return command
+
+    def resolved_flags(self) -> List[str]:
+        """The optional flags this binary actually accepted, for provenance.
+
+        Two runs of "stock llama.cpp" that differ only in which switches the
+        binary advertised are not the same measurement, and no other field in
+        the scorecard would record the difference.
+        """
+
+        supported = self.supported_flags()
+        return [flag for flag in _OPTIONAL_FLAGS if flag in supported]
 
     # -- generation ----------------------------------------------------------
     def generate(self, item: RetrievalItem) -> str:
@@ -167,15 +253,32 @@ class LlamaCppBackend:
         try:
             with os.fdopen(handle, "w") as stream:
                 stream.write(item.prompt)
-            result = self.runner(self._command(prompt_file), capture_output=True,
-                                 text=True, timeout=self.timeout_s)
+            # A closed stdin, not just the conversation flag. The flag's
+            # spelling is upstream's to change; EOF on stdin is not, and it
+            # turns "wait for a person who is not there" into a clean exit.
+            try:
+                result = self.runner(self._command(prompt_file),
+                                     capture_output=True, text=True,
+                                     timeout=self.timeout_s,
+                                     stdin=subprocess.DEVNULL)
+            except subprocess.TimeoutExpired as expired:
+                # `subprocess` kills the child and carries whatever it had
+                # already written. Discarding that leaves "timed out after 60s"
+                # as the entire diagnosis, which cannot distinguish a binary
+                # stuck before the model loaded from one still decoding -- a
+                # distinction worth a lot at 60 s an item.
+                raise RuntimeError(
+                    f"llama-cli did not finish item {item.id} within "
+                    f"{self.timeout_s:.0f}s. Last output:\n"
+                    f"{_tail(expired.stderr)}\n{_tail(expired.stdout)}"
+                ) from expired
         finally:
             os.unlink(prompt_file)
         if result.returncode != 0:
             raise RuntimeError(
                 f"llama-cli exited {result.returncode} for item {item.id}: "
                 f"{(result.stderr or '').strip()[-500:]}")
-        return _clean_completion(result.stdout or "")
+        return _clean_completion(result.stdout or "", item.prompt)
 
     def generate_all(self, items: Sequence[RetrievalItem]) -> List[str]:
         return [self.generate(item) for item in items]
@@ -185,11 +288,66 @@ _NOISE = re.compile(
     r"\[end of text\]|^llama_perf.*$|^llama_print_timings.*$|^main:.*$",
     flags=re.MULTILINE)
 
+# The chat UI's own footer. Builds that run this harness in conversation mode
+# close with a throughput line and a goodbye, both on stdout.
+_CHAT_FOOTER = re.compile(r"\[ *Prompt:[^\]]*\]|^Exiting\.\.\..*$",
+                          flags=re.MULTILINE)
 
-def _clean_completion(text: str) -> str:
-    """Drop llama-cli's end-of-text marker and any timing lines on stdout."""
+# The chat UI elides a long echoed prompt rather than printing it whole, so for
+# the deeper retrieval items there is no full prompt in stdout to anchor on.
+_ECHO_TRUNCATION = " ... (truncated)"
 
-    return _NOISE.sub("", text).strip()
+# Text that must never reach a scorecard. If any of it survives extraction the
+# layout has changed and the completion was not found, which previously scored
+# as a confident zero.
+_BANNER_SIGNATURES = ("Loading model...", "available commands:")
+
+
+def _clean_completion(text: str, prompt: Optional[str] = None) -> str:
+    """The model's completion alone, from whatever the binary put on stdout.
+
+    Stripping known noise markers is not enough on a build that runs the chat
+    UI: it prints a loading spinner, an ASCII-art banner, a build/model block
+    and a command list to *stdout*, ignores `--no-display-prompt`, and echoes
+    the prompt. Measured against the pinned binary, that made every recorded
+    completion the string "Loading model..." -- a silently zero score that
+    looks exactly like a model that cannot retrieve.
+
+    So the completion is located rather than filtered: everything the binary
+    printed before the prompt it echoed is preamble by construction, whatever
+    that preamble happens to contain. The *first* occurrence is the echo -- a
+    model that repeats its prompt back (these do) would otherwise have its own
+    repetition mistaken for the echo and its answer cut away.
+
+    A binary that honours `--no-display-prompt` echoes nothing, the prompt is
+    not found, and the older noise-stripping path is used unchanged.
+
+    Whatever survives is checked for banner text before it is returned. Every
+    anchor here describes one binary's UI, which upstream is free to change; a
+    changed UI must surface as a failed run rather than as a model that
+    suddenly cannot retrieve.
+    """
+
+    if prompt:
+        marker = prompt.strip()
+        index = text.find(marker)
+        if index >= 0:
+            text = text[index + len(marker):]
+        else:
+            # Long prompts are echoed truncated ("... (truncated)"), so the
+            # full prompt never appears and there is nothing to match on.
+            cut = text.find(_ECHO_TRUNCATION)
+            if cut >= 0:
+                text = text[cut + len(_ECHO_TRUNCATION):]
+    cleaned = _CHAT_FOOTER.sub("", _NOISE.sub("", text)).strip()
+    leaked = [signature for signature in _BANNER_SIGNATURES if signature in cleaned]
+    if leaked:
+        raise RuntimeError(
+            f"llama-cli's banner survived completion extraction ({leaked}); the "
+            "binary's output layout is not the one this backend knows, and "
+            "scoring it would record banner text as the model's answer. "
+            f"Got: {cleaned[:300]!r}")
+    return cleaned
 
 
 # ------------------------------------------------------------ torch backend ---
@@ -306,6 +464,11 @@ def main(argv=None) -> int:
     parser.add_argument("--max-new-tokens", type=int, default=24)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--out-dir", default="runs/eval/retrieval")
+    parser.add_argument("--show-prompt", action="store_true",
+                        help="keep llama-cli's prompt echo, so the text the "
+                             "binary actually fed the model -- chat template "
+                             "included -- can be read back. Diagnostic only: "
+                             "the echo lands in the recorded completion.")
     args = parser.parse_args(argv)
 
     from daedalus.data import get_tokenizer
@@ -324,12 +487,13 @@ def main(argv=None) -> int:
         backend = LlamaCppBackend(args.gguf, args.llama_cli, threads=args.threads,
                                   n_ctx=args.n_ctx,
                                   max_new_tokens=args.max_new_tokens,
-                                  seed=args.seed)
+                                  seed=args.seed, show_prompt=args.show_prompt)
         artifact = _artifact_ref(args.gguf,
                                  "gguf-q4_0" if "q4" in Path(args.gguf).name.lower()
                                  else "gguf-f16")
         runtime["llama_cli"] = str(args.llama_cli)
         runtime["threads"] = args.threads
+        runtime["llama_cli_flags"] = backend.resolved_flags()
     elif args.backend == "torch":
         if not args.checkpoint:
             parser.error("--checkpoint is required for the torch backend")
