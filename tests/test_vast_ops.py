@@ -20,6 +20,7 @@ def test_supervisor_wrappers_are_valid_and_pass_logging_argument():
 
 def test_supervisor_config_keeps_progress_alive_and_resume_one_shot():
     config = (ROOT / "ops/vast/supervisord.conf").read_text()
+    installer = (ROOT / "ops/vast/install_supervisor.sh").read_text()
 
     assert "[program:daedalus_progress]" in config
     assert "command=/opt/supervisor-scripts/daedalus_progress.sh" in config
@@ -27,6 +28,8 @@ def test_supervisor_config_keeps_progress_alive_and_resume_one_shot():
     assert "[program:daedalus_resume]" in config
     assert "command=/opt/supervisor-scripts/daedalus_resume.sh" in config
     assert "autorestart=false" in config
+    assert "supervisorctl status daedalus_progress" in installer
+    assert "supervisorctl status daedalus_resume || true" in installer
 
 
 def test_approved_command_broker_refuses_commit_from_main(tmp_path):

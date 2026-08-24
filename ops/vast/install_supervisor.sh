@@ -18,4 +18,5 @@ install -m 0644 "${repo_root}/ops/vast/supervisord.conf" \
 
 supervisorctl reread
 supervisorctl update
-supervisorctl status daedalus_progress daedalus_resume
+supervisorctl status daedalus_progress
+supervisorctl status daedalus_resume || true
