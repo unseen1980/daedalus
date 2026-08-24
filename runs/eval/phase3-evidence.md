@@ -148,6 +148,27 @@ retrieving; what it cannot do is certify retrieval is unchanged to within a
 point. Verdicts report the observed drop next to the limit rather than implying
 a precision the instrument does not have.
 
+## The controller lease serializes work that does not contend
+
+`run_phase` takes a single program-wide lease, so only one phase command can
+run at a time. That is right for two trainers and wrong for the mix this phase
+actually has: exporting a checkpoint, converting it to GGUF and measuring
+perplexity are **CPU** jobs that could run beside a **GPU** training arm, and
+instead they queue behind it.
+
+Attempting an export while arm 1 was training returns
+`ControllerLeaseError: active controller pid 63637 owns
+runs/vast-program/controller.lock`, which is the lease doing its job — there is
+just no way to say "this phase wants the CPU, not the GPU". The practical cost
+here is that scoring an arm (~45 min, mostly `llama-perplexity` on 16 threads)
+cannot overlap the next arm's training (~1 h on the GPU), so the phase runs
+about 2.2 hours longer than the resources require.
+
+Not worth fixing mid-phase — a second lease class is a control-plane change,
+and Phase 1's drills are what certify that layer. Recorded because the same
+cost recurs in Phase 6 and Phase 8, where the proxy sweeps have far more
+CPU-side evaluation per GPU-hour than this one does.
+
 ## A control-plane wrinkle worth an operator's attention
 
 `scripts/vast_program.py::run_phase` writes `halted` — a **terminal** status —
