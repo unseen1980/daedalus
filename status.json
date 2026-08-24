@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 9.56,
-    "finalization_in_hours": 126.44,
+    "elapsed_hours": 9.65,
+    "finalization_in_hours": 126.35,
     "hard_hours": 144.0,
-    "remaining_hours": 134.44,
+    "remaining_hours": 134.35,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-24T20:18:19.539137Z",
+  "heartbeat_at": "2026-08-24T20:23:21.288823Z",
   "metrics": {},
   "phase": "phase4-tokenizer-lab",
   "schema": 1,
@@ -24,5 +24,5 @@
   "source_sha": "b8579cb6e85f",
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
-  "updated_at": "2026-08-24T20:01:43.961685Z"
+  "updated_at": "2026-08-24T20:23:21.172680Z"
 }
