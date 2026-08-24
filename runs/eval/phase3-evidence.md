@@ -183,6 +183,70 @@ treats a failed phase command as terminal — but the controller still writes th
 same status for both meanings, so the next operator to run a check that
 correctly fails will hit it again.
 
+## The arms, as trained
+
+Preregistered in `runs/qat-recovery/preregistration.json` before any of them
+started. All three share data, order, seed, schedule shape and budget; only the
+learning rates differ, with Adam following the shipped 0.015 Muon:Adam ratio.
+
+| arm | Muon LR | Adam LR | tokens | steps | wall | skipped updates |
+|---|---|---|---|---|---|---|
+| `qat-recovery-lr0.0002` | 2e-4 | 3e-6 | 100,139,008 | 191 | 1.03 h | **0** |
+| `qat-recovery-lr0.0005` | 5e-4 | 7.5e-6 | — | — | — | — |
+| `qat-recovery-lr0.001` | 1e-3 | 1.5e-5 | — | — | — | — |
+
+Arm 1 ran in one attempt with no resume, reached lr 1.3e-6 at step 191 (the
+schedule is fully decayed as required), and held peak memory at 17.4 GB of 24.
+
+### `qat_rel_rmse` rose, and that is not obviously wrong
+
+| step | 0 (released) | 20 | 40 | 120 | 191 |
+|---|---|---|---|---|---|
+| `qat_rel_rmse` | 0.034945 | 0.034979 | 0.035051 | 0.035285 | 0.035351 |
+
+The metric QAT exists to drive down went **up** by 1.2% relative over the arm,
+while the training loss fell from 2.578 to 2.441.
+
+That combination is consistent rather than contradictory, and it is worth being
+precise about why. The straight-through estimator makes the *forward* pass
+quantized, so what the run minimises is the loss of the **quantized** model.
+Nothing in that objective asks the float master weights to sit near the grid;
+`qat_rel_rmse` measures only how far the masters are from it. Masters drifting
+slightly off-grid while the quantized model improves is exactly what optimizing
+the stated objective looks like.
+
+It does have a consequence the gates need to catch. The shipped FP16 artifact
+*is* the master, so masters drifting away from the grid widens the gap between
+the FP16 and Q4_0 artifacts — and the Q4 penalty is a ratio between them. A run
+could therefore shrink the penalty by degrading FP16 rather than by improving
+Q4, which would satisfy the improvement gate while making the model worse. That
+is precisely what the mandatory FP16-retention gate (regression at most 0.5%)
+is there to refuse, and it is why acceptance requires both gates rather than
+either.
+
+Nothing is concluded from `qat_rel_rmse` here. The gate reads the paired Q4
+perplexity from the exported artifacts, which is measured after training.
+
+## Scoring order, decided before any Q4 number was seen
+
+Scoring one arm costs roughly an hour: GGUF export plus paired perplexity on
+CPU, then the five-task battery and 100-item retrieval on GPU. Three arms is
+three hours on top of three hours of training, and the controller lease
+(above) means none of it overlaps.
+
+The preregistered selection order is lexicographic — paired Q4 reduction first,
+then FP16 retention, then BPB, then the five-task mean, then retrieval — so the
+later criteria only matter for ties. Q4 penalty and FP16 perplexity both come
+out of the *same* CPU-side paired measurement, which is the cheap half. So all
+three arms are measured on that half, and the full retention battery runs on
+the leader; if the leader fails a mandatory gate, it runs on the next.
+
+This is a resource-allocation decision, not a threshold change, and it is
+recorded here before any arm's Q4 penalty was measured. Every candidate that is
+*selected* still has to clear every mandatory gate — the staging changes which
+arms get measured on the criteria that cannot change their rank, not what any
+of them has to pass.
+
 ## Still open
 
 - The three 100M arms have not run. Nothing below the smoke run is measured
