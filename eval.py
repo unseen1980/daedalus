@@ -30,6 +30,7 @@ and the harness's own task config lists only `acc`.
 """
 import argparse
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -290,6 +291,45 @@ _LOAD_TRACE: List[dict] = []
 LAST_TASK_SOURCES: Dict[str, dict] = {}
 
 
+# Several of these benchmark repos still load through a script, and `datasets`
+# 3.x asks on stdin before running one. Unattended there is nobody to answer, and
+# the prompt does not simply fail: it arms a SIGALRM and raises when the alarm
+# fires, which lands inside whatever happened to be running by then. Observed
+# once as a `datasets` ValueError thrown from the middle of a model forward,
+# minutes into scoring, after PIQA had already loaded from cache.
+#
+# So the answer is given here, in code, where it is auditable. `True` keeps the
+# repo each cached dataset was already built from; answering `False` would push
+# PIQA onto a different mirror, and a baseline gate that must reproduce 47.31
+# cannot quietly change which items it scores.
+TRUST_DATASET_SCRIPTS = True
+
+
+def _trust_remote_code_kwargs() -> dict:
+    """`trust_remote_code`, where the installed `datasets` still accepts it.
+
+    Probed rather than assumed because `_load_with_fallback` treats any
+    exception as "try the next candidate": on a `datasets` that dropped the
+    parameter, passing it unconditionally would raise TypeError for every
+    candidate and be reported as all three repos being unloadable.
+
+    A `**kwargs` in the signature counts as accepting it. That is not a
+    technicality -- `load_dataset` is reached through decorators and test
+    doubles that forward keywords they never name, and a probe that demanded an
+    explicit parameter would answer "unsupported" for a function that in fact
+    passes the argument straight through.
+    """
+
+    from datasets import load_dataset
+
+    parameters = inspect.signature(load_dataset).parameters.values()
+    accepts = any(
+        parameter.name == "trust_remote_code"
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters)
+    return {"trust_remote_code": TRUST_DATASET_SCRIPTS} if accepts else {}
+
+
 def _load_with_fallback(candidates, split):
     """Try each (repo_id, config) candidate in turn, and for each, try the
     normal loading path then a parquet-conversion fallback -- `datasets` 5.x
@@ -299,11 +339,12 @@ def _load_with_fallback(candidates, split):
     equivalent and continue" policy from the dataprep job.
     """
     from datasets import load_dataset
+    trust = _trust_remote_code_kwargs()
     last_err = None
     for repo, config in candidates:
         for revision in (None, "refs/convert/parquet"):
             try:
-                kwargs = {"split": split}
+                kwargs = {"split": split, **trust}
                 if revision:
                     kwargs["revision"] = revision
                 ds = (load_dataset(repo, config, **kwargs) if config

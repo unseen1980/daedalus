@@ -95,6 +95,53 @@ def test_real_load_with_fallback_records_what_it_resolved(monkeypatch):
         "revision": None}
 
 
+def test_load_with_fallback_answers_the_remote_code_prompt_in_code(monkeypatch):
+    """The trust decision is passed explicitly, so no prompt is ever armed.
+
+    `datasets` 3.x asks on stdin before running a benchmark repo's loading
+    script, and arms a SIGALRM to give up waiting. Unattended, that alarm fires
+    *later* -- the observed failure landed inside a model forward several
+    minutes into scoring the five tasks, which looks nothing like a dataset
+    problem. Passing the answer removes the prompt rather than racing it.
+    """
+    import datasets
+
+    seen = {}
+
+    def fake_load_dataset(repo, *args, **kwargs):
+        seen.update(kwargs)
+        return ["row"]
+
+    monkeypatch.setattr(datasets, "load_dataset", fake_load_dataset)
+
+    eval_module._load_with_fallback([("ybisk/piqa", None)], "validation")
+
+    assert seen["trust_remote_code"] is True
+
+
+def test_load_with_fallback_omits_trust_where_datasets_dropped_it(monkeypatch):
+    """`datasets` 4.x removed the parameter; passing it there is a TypeError.
+
+    `_load_with_fallback` swallows every exception to try the next candidate, so
+    an unsupported keyword would not surface as a bug -- it would silently
+    exhaust all three PIQA candidates and report "no candidate dataset could be
+    loaded", blaming the repos for a local signature mismatch.
+    """
+    import datasets
+
+    seen = {}
+
+    def fake_load_dataset(repo, *args, split=None, revision=None):
+        seen["split"] = split
+        return ["row"]
+
+    monkeypatch.setattr(datasets, "load_dataset", fake_load_dataset)
+
+    eval_module._load_with_fallback([("ybisk/piqa", None)], "validation")
+
+    assert seen == {"split": "validation"}
+
+
 def test_load_all_tasks_records_the_repo_split_and_item_count(monkeypatch):
     rows = [{"goal": "g", "sol1": "a", "sol2": "b", "label": 0}]
     monkeypatch.setattr(eval_module, "TASK_LOADERS",
