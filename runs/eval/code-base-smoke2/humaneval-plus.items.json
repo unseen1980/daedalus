@@ -1,0 +1,229 @@
+{
+  "item_count": 20,
+  "item_digest": "79d4b47aa916c7a9758722ff93a29da6",
+  "items": [
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def is_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> is_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> is_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n\ndef is_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> is_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> is_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n\ndef is_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> is_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> is_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n\ndef is_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-2wgxlu5b/candidate.py\", line 95, in <module>\n    check(has_close_elements)\n  File \"/tmp/daedalus-code-eval-2wgxlu5b/candidate.py\", line 87, in check\n    assert candidate([1.0, 2.0, 3.9, 4.0, 5.0, 2.2], 0.3) == True\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/0",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def separate_paren_groups(paren_string: str) -> List[str]:\n    \"\"\" Input to this function is a string containing multiple groups of nested parentheses. Your goal is to\n    separate those group into separate strings and return the list of those.\n    Separate groups are balanced (each open brace is properly closed) and not nested within each other\n    Ignore any spaces in the input string.\n    >>> separate_paren_groups('( ) (( )) (( )( ))')\n    ['()', '(())', '(()())']\n    \"\"\"\n\ndef separate_paren_groups(paren_string: str) -> List[str]:\n    \"\"\" Input to this function is a string containing multiple groups of nested parentheses. Your goal is to\n    separate those group into separate strings and return the list of those.\n    Separate groups are balanced (each open brace is properly closed) and not nested within each other\n    Ignore any spaces in the input string.\n    >>> separate_paren_groups('( ) (( )) (( )( ))')\n    ['()', '(())', '(()())']\n    \"\"\"\n\ndef separate_paren_groups(paren_string: str) -> List[str]:\n    \"\"\" Input to this function is a string containing multiple groups of nested parentheses. Your goal is to\n    separate those group into separate strings and return the list of those.\n    Separate groups are balanced (each open brace is properly closed) and not nested within each other\n    Ignore any spaces in the input string.\n    >>> separate_paren_groups('( ) (( )) (( )( ))')\n    ['()', '(())', '(()())']\n    \"\"\"\n\ndef separate_paren_groups(paren_string: str) -> List[str]:\n    \"\"\" Input to this function is a string containing multiple groups of nested parentheses. Your goal is to\n    separate those group into separate",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-oc1uniox/candidate.py\", line 98, in <module>\n    check(separate_paren_groups)\n  File \"/tmp/daedalus-code-eval-oc1uniox/candidate.py\", line 87, in check\n    assert candidate('(()()) ((())) () ((())()())') == [\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/1",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef separate_paren_groups(paren_string: str) -> List[str]:\n    \"\"\" Input to this function is a string containing multiple groups of nested parentheses. Your goal is to\n    separate those group into separate strings and return the list of those.\n    Separate groups are balanced (each open brace is properly closed) and not nested within each other\n    Ignore any spaces in the input string.\n    >>> separate_paren_groups('( ) (( )) (( )( ))')\n    ['()', '(())', '(()())']\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def truncate_number_to_decimal(number: float) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller than 1).\n\n    Return the decimal part of the number.\n    >>> truncate_number_to_decimal(3.5)\n    0.5\n    \"\"\"\n\ndef truncate_number_to_decimal_to_integer(number: float) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller than 1).\n\n    Return the integer part of the number.\n    >>> truncate_number_to_decimal_to_integer(3.5)\n    0.5\n    \"\"\"\n\ndef truncate_number_to_decimal_to_decimal(number: float) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller than 1).\n\n    Return the integer part of the number.\n    >>> truncate_number_to_decimal_to_decimal(3.5)\n    0.5\n    \"\"\"\n\ndef truncate_number_to_decimal_to_decimal_to_integer(number: float) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller than 1).\n\n    Return the integer part of the number.\n    >>> truncate_number_to_decimal_to_decimal_to_integer(3.5)\n    0.",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-xts5vhxc/candidate.py\", line 91, in <module>\n    check(truncate_number)\n  File \"/tmp/daedalus-code-eval-xts5vhxc/candidate.py\", line 87, in check\n    assert candidate(3.5) == 0.5\n           ^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/2",
+      "plus_passed": 0,
+      "solution": "\n\ndef truncate_number(number: float) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller than 1).\n\n    Return the decimal part of the number.\n    >>> truncate_number(3.5)\n    0.5\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def below_zero_with_zero(operations: List[int]) -> bool:\n    \"\"\" You're given a list of deposit and withdrawal operations on a bank account that starts with\n    zero balance. Your task is to detect if at any point the balance of account fallls below zero, and\n    at that point function should return True. Otherwise it should return False.\n    >>> below_zero_with_zero([1, 2, 3])\n    False\n    >>> below_zero_with_zero([1, 2, -4, 5])\n    True\n    \"\"\"\n\ndef below_zero_with_zero_with_zero(operations: List[int]) -> bool:\n    \"\"\" You're given a list of deposit and withdrawal operations on a bank account that starts with\n    zero balance. Your task is to detect if at any point the balance of account fallls below zero, and\n    at that point function should return True. Otherwise it should return False.\n    >>> below_zero_with_zero_with_zero([1, 2, 3])\n    False\n    >>> below_zero_with_zero_with_zero([1, 2, -4, 5])\n    True\n    \"\"\"\n\ndef below_zero_with_zero_with_zero(operations: List[int]) -> bool:\n    \"\"\" You're given a list of deposit and withdrawal operations on a bank account that starts with\n    zero balance. Your task is to detect if at any point the balance of account fallls below zero, and\n    at that point function should return True. Otherwise it should return False.\n    >>> below_zero_with_zero_with_zero([1, 2, 3])\n    False\n    >>> below_zero_with_zero_with_zero([1, 2, -4, 5",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-89x3gxsu/candidate.py\", line 95, in <module>\n    check(below_zero)\n  File \"/tmp/daedalus-code-eval-89x3gxsu/candidate.py\", line 88, in check\n    assert candidate([]) == False\n           ^^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/3",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef below_zero(operations: List[int]) -> bool:\n    \"\"\" You're given a list of deposit and withdrawal operations on a bank account that starts with\n    zero balance. Your task is to detect if at any point the balance of account fallls below zero, and\n    at that point function should return True. Otherwise it should return False.\n    >>> below_zero([1, 2, 3])\n    False\n    >>> below_zero([1, 2, -4, 5])\n    True\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "exception",
+      "completion": "def mean_absolute_deviation_from_mean(numbers: List[float]) -> float:\n    \"\"\" For a given list of input numbers, calculate Mean Absolute Deviation\n    around the mean of this dataset.\n    Mean Absolute Deviation is the average absolute difference between each\n    element and a centerpoint (mean in this case):\n    MAD = average | x - x_mean |\n    >>> mean_absolute_deviation_from_mean([1.0, 2.0, 3.0, 4.0])\n    1.0\n    \"\"\"\n\ndef mean_absolute_deviation_from_mean_to_mean(numbers: List[float]) -> float:\n    \"\"\" For a given list of input numbers, calculate Mean Absolute Deviation\n    around the mean of this dataset.\n    Mean Absolute Deviation is the average absolute difference between each\n    element and a centerpoint (mean in this case):\n    MAD = average | x - x_mean |\n    >>> mean_absolute_deviation_from_mean_to_mean([1.0, 2.0, 3.0, 4.0])\n    1.0\n    \"\"\"\n\ndef mean_absolute_deviation_from_mean_to_mean_from_mean(numbers: List[float]) -> float:\n    \"\"\" For a given list of input numbers, calculate Mean Absolute Deviation\n    around the mean of this dataset.\n    Mean Absolute Deviation is the average absolute difference between each\n    element and a centerpoint (mean in this case):\n    MAD = average | x - x_mean |\n    >>> mean_absolute_deviation_from_mean_from_mean([1.0, 2.0, 3.0, 4.0])\n    1.0\n    \"\"\"",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-usd2mw7r/candidate.py\", line 92, in <module>\n    check(mean_absolute_deviation)\n  File \"/tmp/daedalus-code-eval-usd2mw7r/candidate.py\", line 88, in check\n    assert abs(candidate([1.0, 2.0, 3.0]) - 2.0/3.0) < 1e-6\n               ~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~\nTypeError: unsupported operand type(s) for -: 'NoneType' and 'float'",
+      "id": "HumanEval/4",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef mean_absolute_deviation(numbers: List[float]) -> float:\n    \"\"\" For a given list of input numbers, calculate Mean Absolute Deviation\n    around the mean of this dataset.\n    Mean Absolute Deviation is the average absolute difference between each\n    element and a centerpoint (mean in this case):\n    MAD = average | x - x_mean |\n    >>> mean_absolute_deviation([1.0, 2.0, 3.0, 4.0])\n    1.0\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def intersperse(numbers: List[int], delimeter: int) -> List[int]:\n    \"\"\" Insert a number 'delimeter' between every two consecutive elements of input list `numbers'\n    >>> intersperse([1, 2, 3], 4)\n    [1, 4, 2, 4, 3]\n    \"\"\"\n    for i in range(delimeter):\n        numbers.append(numbers[i])\n    delimeter = delimeter - 1\n    return numbers\n\n\ndef intersperse(numbers: List[int], delimeter: int) -> List[int]:\n    \"\"\" Insert a number 'delimeter' between every two consecutive elements of input list `numbers'\n    >>> intersperse([1, 2, 3], 4)\n    [1, 4, 2, 4, 3]\n    \"\"\"\n    for i in range(delimeter):\n        numbers.append(numbers[i])\n    delimeter = delimeter - 1\n    return numbers\n\n\ndef intersperse(numbers: List[int], delimeter: int) -> List[int]:\n    \"\"\" Insert a number 'delimeter' between every two consecutive elements of input list `numbers'\n    >>> intersperse([1, 2, 3], 4)\n    [1, 4, 2, 4, 3]\n    \"\"\"\n    for i in range(delimeter):\n        numbers.append(numbers[i])\n    delimeter = delimeter - 1\n    return numbers\n\n\ndef intersperse(numbers: List[int], delimeter: int) -> List[int]:\n    \"\"\" Insert a number 'delimeter' between every two consecutive elements of input list `numbers'\n    >>> intersperse([1, 2, 3], 4)",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-kq7o8jgv/candidate.py\", line 90, in <module>\n    check(intersperse)\n  File \"/tmp/daedalus-code-eval-kq7o8jgv/candidate.py\", line 86, in check\n    assert candidate([], 7) == []\n           ^^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/5",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef intersperse(numbers: List[int], delimeter: int) -> List[int]:\n    \"\"\" Insert a number 'delimeter' between every two consecutive elements of input list `numbers'\n    >>> intersperse([], 4)\n    []\n    >>> intersperse([1, 2, 3], 4)\n    [1, 4, 2, 4, 3]\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def parse_nested_parens_nested(paren_string: str) -> List[int]:\n    \"\"\" Input to this function is a string represented multiple groups for nested parentheses separated by spaces.\n    For each of the group, output the deepest level of nesting of parentheses.\n    E.g. (()()) has maximum two levels of nesting while ((())) has three.\n\n    >>> parse_nested_parens_nested('(()()) ((())) (()) (())')\n    [2, 3, 1, 3]\n    \"\"\"\n\ndef parse_nested_parens_nested_nested(paren_string: str) -> List[int]:\n    \"\"\" Input to this function is a string represented multiple groups for nested parentheses separated by spaces.\n    For each of the group, output the deepest level of nesting of parentheses.\n    E.g. (()()) has maximum two levels of nesting while ((())) has three.\n\n    >>> parse_nested_parens_nested_nested('(()()) ((())) (()) (())')\n    [2, 3, 1, 3]\n    \"\"\"\n\ndef parse_nested_parens_nested_nested_nested(paren_string: str) -> List[int]:\n    \"\"\" Input to this function is a string represented multiple groups for nested parentheses separated by spaces.\n    For each of the group, output the deepest level of nesting of parentheses.\n    E.g. (()()) has maximum two levels of nesting while ((())) has three.\n\n    >>> parse_nested_parens_nested_nested_nested_nested('(()()) ((())) (()) (())')\n    [2, 3, 1, 3]\n    \"\"\"\n\ndef parse_nested_parens_nested_nested_nested(paren_string: str) -> List[int]:\n    \"\"\"",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-bhdu34_6/candidate.py\", line 91, in <module>\n    check(parse_nested_parens)\n  File \"/tmp/daedalus-code-eval-bhdu34_6/candidate.py\", line 87, in check\n    assert candidate('(()()) ((())) () ((())()())') == [2, 3, 1, 3]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/6",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef parse_nested_parens(paren_string: str) -> List[int]:\n    \"\"\" Input to this function is a string represented multiple groups for nested parentheses separated by spaces.\n    For each of the group, output the deepest level of nesting of parentheses.\n    E.g. (()()) has maximum two levels of nesting while ((())) has three.\n\n    >>> parse_nested_parens('(()()) ((())) () ((())()())')\n    [2, 3, 1, 3]\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def filter_by_substring_with_substring(strings: List[str], substring: str) -> List[str]:\n    \"\"\" Filter an input list of strings only for ones that contain given substring\n    >>> filter_by_substring_with_substring(['a', 'b', 'c'], 'a')\n    ['a', 'b', 'c']\n    >>> filter_by_substring(['a', 'b', 'c'], 'a')\n    ['a', 'b', 'c']\n    \"\"\"\n\ndef filter_by_substring_with_substring_with_substring(strings: List[str], substring: str) -> List[str]:\n    \"\"\" Filter an input list of strings only for ones that contain given substring\n    >>> filter_by_substring_with_substring(['a', 'b', 'c'], 'a')\n    ['a', 'b', 'c']\n    \"\"\"\n\ndef filter_by_substring_with_substring_with_substring(strings: List[str], substring: str) -> List[str]:\n    \"\"\" Filter an input list of strings only for ones that contain given substring\n    >>> filter_by_substring_with_substring(['a', 'b', 'c'], 'a')\n    ['a', 'b', 'c']\n    \"\"\"\n\ndef filter_by_substring_with_substring_with_substring(strings: List[str], substring: str) -> List[str]:\n    \"\"\" Filter an input list of strings only for ones that contain given substring\n    >>> filter_by_substring_with_substring(['a', 'b', 'c'], 'a')\n    ['a', 'b', 'c']\n    \"\"\"\n\ndef filter",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-td1mq0j1/candidate.py\", line 91, in <module>\n    check(filter_by_substring)\n  File \"/tmp/daedalus-code-eval-td1mq0j1/candidate.py\", line 86, in check\n    assert candidate([], 'john') == []\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/7",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef filter_by_substring(strings: List[str], substring: str) -> List[str]:\n    \"\"\" Filter an input list of strings only for ones that contain given substring\n    >>> filter_by_substring([], 'a')\n    []\n    >>> filter_by_substring(['abc', 'bacd', 'cde', 'array'], 'a')\n    ['abc', 'bacd', 'array']\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def sum_product_of_list(numbers: List[int]) -> Tuple[int, int]:\n    \"\"\" For a given list of integers, return a tuple consisting of a sum and a product of all the integers in a list.\n    Empty sum should be equal to 0 and empty product should be equal to 1.\n    >>> sum_product_of_list([1, 2, 3, 4])\n    (10, 24)\n    \"\"\"\n\ndef sum_product_of_list_of_numbers(numbers: List[int]) -> Tuple[int, int]:\n    \"\"\" For a given list of integers, return a tuple consisting of a sum and a product of all the integers in a list.\n    Empty sum should be equal to 0 and empty product should be equal to 1.\n    >>> sum_product_of_list_of_numbers([1, 2, 3, 4])\n    (10, 24)\n    \"\"\"\n\ndef sum_product_of_list_of_numbers_of_numbers(numbers: List[int]) -> Tuple[int, int]:\n    \"\"\" For a given list of integers, return a tuple consisting of a sum and a product of all the integers in a list.\n    Empty sum should be equal to 0 and empty product should be equal to 1.\n    >>> sum_product_of_list_of_numbers_of_numbers([1, 2, 3, 4])\n    (10, 24)\n    \"\"\"\n\ndef sum_product_of_list_of_numbers_of_numbers_of_numbers(numbers: List[int]) -> Tuple[int, int]:\n    \"\"\" For a given list of integers, return a tuple consisting of a sum and a product",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-gdmpk63y/candidate.py\", line 93, in <module>\n    check(sum_product)\n  File \"/tmp/daedalus-code-eval-gdmpk63y/candidate.py\", line 87, in check\n    assert candidate([]) == (0, 1)\n           ^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/8",
+      "plus_passed": 0,
+      "solution": "from typing import List, Tuple\n\n\ndef sum_product(numbers: List[int]) -> Tuple[int, int]:\n    \"\"\" For a given list of integers, return a tuple consisting of a sum and a product of all the integers in a list.\n    Empty sum should be equal to 0 and empty product should be equal to 1.\n    >>> sum_product([])\n    (0, 1)\n    >>> sum_product([1, 2, 3, 4])\n    (10, 24)\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def rolling_min(numbers: List[int]) -> List[int]:\n    \"\"\" From a given list of integers, generate a list of rolling minimum element found until given moment\n    in the sequence.\n    >>> rolling_min([1, 2, 3, 2, 3, 4, 2])\n    [1, 2, 3, 3, 3, 4, 4]\n    \"\"\"\n\ndef rolling_max_min(numbers: List[int]) -> List[int]:\n    \"\"\" From a given list of integers, generate a list of rolling maximum element found until given moment\n    in the sequence.\n    >>> rolling_max_min([1, 2, 3, 2, 3, 4, 2])\n    [1, 2, 3, 3, 3, 4, 4]\n    \"\"\"\n\ndef rolling_min_max(numbers: List[int]) -> List[int]:\n    \"\"\" From a given list of integers, generate a list of rolling minimum element found until given moment\n    in the sequence.\n    >>> rolling_min_max([1, 2, 3, 2, 3, 4, 2])\n    [1, 2, 3, 3, 3, 4, 4]\n    \"\"\"\n\ndef rolling_max_min_max(numbers: List[int]) -> List[int]:\n    \"\"\" From a given list of integers, generate a list of rolling maximum element found until given moment\n    in the sequence.\n    >>> rolling_max_min_max([1, 2, 3, 2, 3, 4, 2])\n    [1, 2, 3, 3, 3, 4, 4",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-xvfxflz8/candidate.py\", line 90, in <module>\n    check(rolling_max)\n  File \"/tmp/daedalus-code-eval-xvfxflz8/candidate.py\", line 85, in check\n    assert candidate([]) == []\n           ^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/9",
+      "plus_passed": 0,
+      "solution": "from typing import List, Tuple\n\n\ndef rolling_max(numbers: List[int]) -> List[int]:\n    \"\"\" From a given list of integers, generate a list of rolling maximum element found until given moment\n    in the sequence.\n    >>> rolling_max([1, 2, 3, 2, 3, 4, 2])\n    [1, 2, 3, 3, 3, 4, 4]\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def is_palindrome_of_string(string: str) -> bool:\n    \"\"\" Test if given string is a palindrome \"\"\"\n    return string.is_palindrome()\n\n\ndef is_palindrome_of_string_of_string(string: str) -> bool:\n    \"\"\" Test if given string is a palindrome \"\"\"\n    return is_palindrome_of_string(string)\n\n\ndef is_palindrome_of_string_of_string(string: str) -> bool:\n    \"\"\" Test if given string is a palindrome \"\"\"\n    return is_palindrome_of_string(string)\n\n\ndef is_palindrome_of_string_of_string(string: str) -> bool:\n    \"\"\" Test if given string is a palindrome \"\"\"\n    return is_palindrome_of_string(string)\n\n\ndef is_palindrome_of_string_of_string(string: str) -> bool:\n    \"\"\" Test if given string is a palindrome \"\"\"\n    return is_palindrome_of_string(string)\n\n\ndef is_palindrome_of_string_of_string(string: str) -> bool:\n    \"\"\" Test if given string is a palindrome \"\"\"\n    return is_palindrome_of_string(string)\n\n\ndef is_palindrome_of_string_of_string(string: str) -> bool:\n    \"\"\" Test if given string is a palindrome \"\"\"\n    return is_palindrome_of_string(string)\n\n\ndef is_palindrome_of_string_of_string(string: str) -> bool:\n    \"\"\" Test if given string is a palindrome \"\"\"\n    return is_palindrome",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-lmv_8z4o/candidate.py\", line 101, in <module>\n    check(make_palindrome)\n  File \"/tmp/daedalus-code-eval-lmv_8z4o/candidate.py\", line 95, in check\n    assert candidate('') == ''\n           ^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/10",
+      "plus_passed": 0,
+      "solution": "\n\ndef is_palindrome(string: str) -> bool:\n    \"\"\" Test if given string is a palindrome \"\"\"\n    return string == string[::-1]\n\n\ndef make_palindrome(string: str) -> str:\n    \"\"\" Find the shortest palindrome that begins with a supplied string.\n    Algorithm idea is simple:\n    - Find the longest postfix of supplied string that is a palindrome.\n    - Append to the end of the string reverse of a string prefix that comes before the palindromic suffix.\n    >>> make_palindrome('')\n    ''\n    >>> make_palindrome('cat')\n    'catac'\n    >>> make_palindrome('cata')\n    'catac'\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def string_xor_with_bits(a: str, b: str) -> str:\n    \"\"\" Input are two strings a and b consisting only of 1s and 0s.\n    Perform binary XOR on these inputs and return result also as a string.\n    >>> string_xor_with_bits('010', '110')\n    '100'\n    \"\"\"\n\ndef string_xor_with_bits_with_bits(a: str, b: str) -> str:\n    \"\"\" Input are two strings a and b consisting only of 1s and 0s.\n    Perform binary XOR on these inputs and return result also as a string.\n    >>> string_xor_with_bits_with_bits('010', '110')\n    '100'\n    \"\"\"\n\ndef string_xor_with_bits_with_bits_with_bits(a: str, b: str) -> str:\n    \"\"\" Input are two strings a and b consisting only of 1s and 0s.\n    Perform binary XOR on these inputs and return result also as a string.\n    >>> string_xor_with_bits_with_bits_with_bits_with_bits('010', '110')\n    '100'\n    \"\"\"\n\ndef string_xor_with_bits_with_bits_with_bits(a: str, b: str) -> str:\n    \"\"\" Input are two strings a and b consisting only of 1s and 0s.\n    Perform binary XOR on these inputs and return result also as a string.\n    >>> string_xor_with_bits_with_bits_with_bits_with_bits('010', '1",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-j7x48yh0/candidate.py\", line 89, in <module>\n    check(string_xor)\n  File \"/tmp/daedalus-code-eval-j7x48yh0/candidate.py\", line 85, in check\n    assert candidate('111000', '101010') == '010010'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/11",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef string_xor(a: str, b: str) -> str:\n    \"\"\" Input are two strings a and b consisting only of 1s and 0s.\n    Perform binary XOR on these inputs and return result also as a string.\n    >>> string_xor('010', '110')\n    '100'\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def longest_list(strings: List[str]) -> List[str]:\n    \"\"\" Out of list of strings, return the longest one. Return the first one in case of multiple\n    strings of the same length. Return None in case the input list is empty.\n    >>> longest_list(['a', 'b', 'c'])\n    ['a', 'b', 'c']\n    \"\"\"\n\ndef longest_list_of_strings(strings: List[str]) -> List[str]:\n    \"\"\" Out of list of strings, return the longest one. Return the first one in case of multiple\n    strings of the same length. Return None in case the input list is empty.\n    >>> longest_list_of_strings(['a', 'b', 'c'])\n    ['a', 'b', 'c']\n    \"\"\"\n\ndef longest_list_of_strings_of_strings(strings: List[str]) -> List[str]:\n    \"\"\" Out of list of strings, return the longest one. Return the first one in case of multiple\n    strings of the same length. Return None in case the input list is empty.\n    >>> longest_list_of_strings_of_strings(['a', 'b', 'c'])\n    ['a', 'b', 'c']\n    \"\"\"\n\ndef longest_list_of_strings_of_strings_of_strings(strings: List[str]) -> List[str]:\n    \"\"\" Out of list of strings, return the longest one. Return the first one in case of multiple\n    strings of the same length. Return None in case the input list is empty.\n    >>> longest_list_of_strings_of_strings(['a', 'b', 'c'])\n    ['a', 'b', 'c']\n    \"\"\"\n\ndef longest_list_of_strings_of_",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-gnbnbdaa/candidate.py\", line 93, in <module>\n    check(longest)\n  File \"/tmp/daedalus-code-eval-gnbnbdaa/candidate.py\", line 90, in check\n    assert candidate(['x', 'y', 'z']) == 'x'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/12",
+      "plus_passed": 0,
+      "solution": "from typing import List, Optional\n\n\ndef longest(strings: List[str]) -> Optional[str]:\n    \"\"\" Out of list of strings, return the longest one. Return the first one in case of multiple\n    strings of the same length. Return None in case the input list is empty.\n    >>> longest([])\n\n    >>> longest(['a', 'b', 'c'])\n    'a'\n    >>> longest(['a', 'bb', 'ccc'])\n    'ccc'\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def greatest_common_divisor_of_two_integers(a: int, b: int) -> int:\n    \"\"\" Return the greatest common divisor of two integers a and b\n    >>> greatest_common_divisor_of_two_integers(3, 5)\n    1\n    >>> greatest_common_divisor_of_two_integers(25, 15)\n    5\n    \"\"\"\n\ndef greatest_common_divisor_of_two_integers_of_two_integers(a: int, b: int) -> int:\n    \"\"\" Return the greatest common divisor of two integers a and b\n    >>> greatest_common_divisor_of_two_integers_of_two_integers(3, 5)\n    1\n    >>> greatest_common_divisor_of_two_integers_of_two_integers(25, 15)\n    5\n    \"\"\"\n\ndef greatest_common_divisor_of_two_integers_of_two_integers(a: int, b: int) -> int:\n    \"\"\" Return the greatest common divisor of two integers a and b\n    >>> greatest_common_divisor_of_two_integers_of_two_integers(3, 5)\n    1\n    >>> greatest_common_divisor_of_two_integers_of_two_integers(25, 15)\n    5\n    \"\"\"\n\ndef greatest_common_divisor_of_two_integers_of_two_integers(a: int, b: int) -> int:\n    \"\"\" Return the greatest common divisor of two integers a and b\n    >>> greatest_common_divisor_of_two",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-c0n_0ray/candidate.py\", line 90, in <module>\n    check(greatest_common_divisor)\n  File \"/tmp/daedalus-code-eval-c0n_0ray/candidate.py\", line 85, in check\n    assert candidate(3, 7) == 1\n           ^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/13",
+      "plus_passed": 0,
+      "solution": "\n\ndef greatest_common_divisor(a: int, b: int) -> int:\n    \"\"\" Return a greatest common divisor of two integers a and b\n    >>> greatest_common_divisor(3, 5)\n    1\n    >>> greatest_common_divisor(25, 15)\n    5\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def all_prefixes_with_prefix(string: str) -> List[str]:\n    \"\"\" Return list of all prefixes from shortest to longest of the input string\n    >>> all_prefixes_with_prefix('abc')\n    ['a', 'ab', 'abc']\n    \"\"\"\n\ndef all_prefixes_with_prefix_with_prefix(string: str) -> List[str]:\n    \"\"\" Return list of all prefixes from shortest to longest of the input string\n    >>> all_prefixes_with_prefix_with_prefix('abc')\n    ['a', 'ab', 'abc']\n    \"\"\"\n\ndef all_prefixes_with_prefix_with_prefix_with_prefix(string: str) -> List[str]:\n    \"\"\" Return list of all prefixes from shortest to longest of the input string\n    >>> all_prefixes_with_prefix_with_prefix_with_prefix('abc')\n    ['a', 'ab', 'abc']\n    \"\"\"\n\ndef all_prefixes_with_prefix_with_prefix_with_prefix(string: str) -> List[str]:\n    \"\"\" Return list of all prefixes from shortest to longest of the input string\n    >>> all_prefixes_with_prefix_with_prefix_with_prefix('abc')\n    ['a', 'ab', 'abc']\n    \"\"\"\n\ndef all_prefixes_with_prefix_with_prefix_with_prefix(string: str) -> List[str]:\n    \"\"\" Return list of all prefixes from shortest to longest of the input string\n    >>> all_prefixes_with_prefix_with_prefix_with_prefix('abc')\n    ['a', 'ab', 'abc']\n    \"\"\"\n\ndef all_prefixes_with_prefix_with_prefix_with_prefix(string: str)",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-wnuaux3z/candidate.py\", line 88, in <module>\n    check(all_prefixes)\n  File \"/tmp/daedalus-code-eval-wnuaux3z/candidate.py\", line 84, in check\n    assert candidate('') == []\n           ^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/14",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef all_prefixes(string: str) -> List[str]:\n    \"\"\" Return list of all prefixes from shortest to longest of the input string\n    >>> all_prefixes('abc')\n    ['a', 'ab', 'abc']\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def string_sequence_with_spaces(n: int) -> str:\n    \"\"\" Return a string containing space-delimited numbers starting from 0 upto n inclusive.\n    >>> string_sequence_with_spaces(5)\n    '0 1 2 3 4 5'\n    \"\"\"\n\ndef string_sequence_with_spaces_with_spaces(n: int) -> str:\n    \"\"\" Return a string containing space-delimited numbers starting from 0 upto n inclusive.\n    >>> string_sequence_with_spaces_with_spaces(5)\n    '0 1 2 3 4 5'\n    \"\"\"\n\ndef string_sequence_with_spaces_with_spaces_with_spaces(n: int) -> str:\n    \"\"\" Return a string containing space-delimited numbers starting from 0 upto n inclusive.\n    >>> string_sequence_with_spaces_with_spaces_with_spaces_with_spaces(5)\n    '0 1 2 3 4 5'\n    \"\"\"\n\ndef string_sequence_with_spaces_with_spaces_with_spaces(n: int) -> str:\n    \"\"\" Return a string containing space-delimited numbers starting from 0 upto n inclusive.\n    >>> string_sequence_with_spaces_with_spaces_with_spaces_with_spaces(5)\n    '0 1 2 3 4 5'\n    \"\"\"\n\ndef string_sequence_with_spaces_with_spaces_with_spaces(n: int) -> str:\n    \"\"\" Return a string containing space-delimited numbers starting from 0 upto n inclusive.\n    >>> string_sequence_with_spaces_with_spaces_with_spaces_with_spaces(",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-1wl5hhqz/candidate.py\", line 89, in <module>\n    check(string_sequence)\n  File \"/tmp/daedalus-code-eval-1wl5hhqz/candidate.py\", line 85, in check\n    assert candidate(0) == '0'\n           ^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/15",
+      "plus_passed": 0,
+      "solution": "\n\ndef string_sequence(n: int) -> str:\n    \"\"\" Return a string containing space-delimited numbers starting from 0 upto n inclusive.\n    >>> string_sequence(0)\n    '0'\n    >>> string_sequence(5)\n    '0 1 2 3 4 5'\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def count_distinct_characters_with_case(string: str) -> int:\n    \"\"\" Given a string, count the number of distinct characters (regardless of case) in the string\n    >>> count_distinct_characters_with_case('Jerry')\n    3\n    >>> count_distinct_characters_with_case('Jerry')\n    4\n    \"\"\"\n\ndef count_distinct_characters_with_case_with_case(string: str) -> int:\n    \"\"\" Given a string, count the number of distinct characters (regardless of case) in the string\n    >>> count_distinct_characters_with_case_with_case('Jerry')\n    3\n    >>> count_distinct_characters_with_case_with_case('Jerry')\n    4\n    \"\"\"\n\ndef count_distinct_characters_with_case_with_case_with_case(string: str) -> int:\n    \"\"\" Given a string, count the number of distinct characters (regardless of case) in the string\n    >>> count_distinct_characters_with_case_with_case_with_case('Jerry')\n    3\n    >>> count_distinct_characters_with_case_with_case('Jerry')\n    4\n    \"\"\"\n\ndef count_distinct_characters_with_case_with_case_with_case(string: str) -> int:\n    \"\"\" Given a string, count the number of distinct characters (regardless of case) in the string\n    >>> count_distinct_characters_with_case_with_case_with_case('Jerry')\n    3\n    >>> count_distinct_characters_with_case_with_case('Jer",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-9koym7a7/candidate.py\", line 91, in <module>\n    check(count_distinct_characters)\n  File \"/tmp/daedalus-code-eval-9koym7a7/candidate.py\", line 85, in check\n    assert candidate('') == 0\n           ^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/16",
+      "plus_passed": 0,
+      "solution": "\n\ndef count_distinct_characters(string: str) -> int:\n    \"\"\" Given a string, find out how many distinct characters (regardless of case) does it consist of\n    >>> count_distinct_characters('xyzXYZ')\n    3\n    >>> count_distinct_characters('Jerry')\n    4\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def parse_music_list(music_list: List[int]) -> List[int]:\n    \"\"\" Input to this function is a list of integers representing how many beats does each not last.\n    Your task is to parse this list and return list of integers corresponding to how many beats does each\n    not last.\n\n    Here is a legend:\n    'o' - whole note, lasts four beats\n    'o| .| o| .| .| .| .| .| .| o o| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .| .",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-ghdhofno/candidate.py\", line 98, in <module>\n    check(parse_music)\n  File \"/tmp/daedalus-code-eval-ghdhofno/candidate.py\", line 92, in check\n    assert candidate('') == []\n           ^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/17",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef parse_music(music_string: str) -> List[int]:\n    \"\"\" Input to this function is a string representing musical notes in a special ASCII format.\n    Your task is to parse this string and return list of integers corresponding to how many beats does each\n    not last.\n\n    Here is a legend:\n    'o' - whole note, lasts four beats\n    'o|' - half note, lasts two beats\n    '.|' - quater note, lasts one beat\n\n    >>> parse_music('o o| .| o| o| .| .| .| .| o o')\n    [4, 2, 1, 2, 2, 1, 1, 1, 1, 4, 4]\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def how_many_times_with_substring(string: str, substring: str) -> int:\n    \"\"\" Find how many times a given substring can be found in the original string. Count overlaping cases.\n    >>> how_many_times_with_substring('aaa', 'a')\n    3\n    >>> how_many_times_with_substring('aaaa', 'aa')\n    3\n    \"\"\"\n\ndef how_many_times_with_substring_with_substring(string: str, substring: str) -> int:\n    \"\"\" Find how many times a given substring can be found in the original string. Count overlaping cases.\n    >>> how_many_times_with_substring_with_substring('aaa', 'a')\n    3\n    >>> how_many_times_with_substring('aaaa', 'aa')\n    3\n    \"\"\"\n\ndef how_many_times_with_substring_with_substring_with_substring(string: str, substring: str) -> int:\n    \"\"\" Find how many times a given substring can be found in the original string. Count overlaping cases.\n    >>> how_many_times_with_substring_with_substring('aaa', 'a')\n    3\n    >>> how_many_times_with_substring('aaaa', 'aa')\n    3\n    \"\"\"\n\ndef how_many_times_with_substring_with_substring_with_substring(string: str, substring: str) -> int:\n    \"\"\" Find how many times a given substring can be found in the original string. Count overlaping cases.\n    >>> how_many_times_with_substring_with_substring('aa",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-ozvfi5u6/candidate.py\", line 92, in <module>\n    check(how_many_times)\n  File \"/tmp/daedalus-code-eval-ozvfi5u6/candidate.py\", line 87, in check\n    assert candidate('', 'x') == 0\n           ^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/18",
+      "plus_passed": 0,
+      "solution": "\n\ndef how_many_times(string: str, substring: str) -> int:\n    \"\"\" Find how many times a given substring can be found in the original string. Count overlaping cases.\n    >>> how_many_times('', 'a')\n    0\n    >>> how_many_times('aaa', 'a')\n    3\n    >>> how_many_times('aaaa', 'aa')\n    3\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    },
+    {
+      "base_passed": 0,
+      "category": "assertion_failed",
+      "completion": "def sort_numbers_by_number(numbers: str) -> str:\n    \"\"\" Input is a space-delimited string of numberals from 'zero' to 'nine'.\n    Valid choices are 'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight' and 'nine'.\n    Return the string with numbers sorted from smallest to largest\n    >>> sort_numbers_by_number('one two three four five six seven eight nine')\n    'one two three four five six seven eight nine'\n    \"\"\"\n\ndef sort_numbers_by_number_by_number(numbers: str) -> str:\n    \"\"\" Input is a space-delimited string of numberals from 'zero' to 'nine'.\n    Valid choices are 'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight' and 'nine'.\n    Return the string with numbers sorted from smallest to largest\n    >>> sort_numbers_by_number_by_number_by_number('one two three four five six seven eight nine')\n    'one two three four five six seven eight nine'\n    \"\"\"\n\ndef sort_numbers_by_number_by_number_by_number(numbers: str) -> str:\n    \"\"\" Input is a space-delimited string of numberals from 'zero' to 'nine'.\n    Valid choices are 'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight' and 'nine'.\n    Return the string with numbers sorted from smallest to largest\n    >>> sort_numbers_by_number_by_number_by_number('one two three four five six seven eight nine')\n    'one two three four five six",
+      "detail": "Traceback (most recent call last):\n  File \"/tmp/daedalus-code-eval-j65eedj0/candidate.py\", line 92, in <module>\n    check(sort_numbers)\n  File \"/tmp/daedalus-code-eval-j65eedj0/candidate.py\", line 86, in check\n    assert candidate('') == ''\n           ^^^^^^^^^^^^^^^^^^^\nAssertionError",
+      "id": "HumanEval/19",
+      "plus_passed": 0,
+      "solution": "from typing import List\n\n\ndef sort_numbers(numbers: str) -> str:\n    \"\"\" Input is a space-delimited string of numberals from 'zero' to 'nine'.\n    Valid choices are 'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight' and 'nine'.\n    Return the string with numbers sorted from smallest to largest\n    >>> sort_numbers('three one five')\n    'one three five'\n    \"\"\"",
+      "syntax_error": null,
+      "syntax_valid": 1
+    }
+  ],
+  "kind": "code-execution",
+  "name": "humaneval-plus",
+  "schema": 1
+}

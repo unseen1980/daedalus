@@ -1,0 +1,22 @@
+{
+  "item_count": 1,
+  "item_digest": "2e1f6d928151c0f0c9f61f67961cd21a",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "nectar harbor kelp",
+      "extracted": "The phrase is:cannibal",
+      "id": "copy-control-0",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nnectar harbor kelp\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "The phrase is:cannibal\ncannibalassistant\n\nThe phrase is:cann",
+      "task": "copy-control"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-copy-control",
+  "schema": 1
+}

@@ -1,0 +1,35 @@
+{
+  "item_count": 2,
+  "item_digest": "57e7fff055fd1838efbd671de7337c68",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 256,
+      "expected": "69688",
+      "extracted": "",
+      "id": "passkey-d256-0",
+      "needle_depth_frac": 0.0,
+      "prompt": "There is an important piece of information hidden somewhere in the text below. Read the text and remember the information. The pass key is 69688. Remember it. 69688 is the pass key. There and back again along the same worn path by the wall. The grass is green and the sky above is a pale washed blue. The bread cools on the sill while the kettle begins to sing. The sun rises over the hill and the long shadows retreat. Dust settles on the shelf where the empty jars are kept. Dust settles on the shelf where the empty jars are kept. The grass is green and the sky above is a pale washed blue. A slow river runs past the mill and turns the old wheel. The bread cools on the sill while the kettle begins to sing. Dust settles on the shelf where the empty jars are kept. Here we go again around the garden and back to the gate. The grass is green and the sky above is a pale washed blue. There and back again along the same worn path by the wall. Dust settles on the shelf where the empty jars are kept. Dust settles on the shelf where the empty jars are kept.\nWhat is the pass key? The pass key is",
+      "prompt_tokens": 252,
+      "query_accuracy": 0.0,
+      "response": "There is an important piece of information hidden somewhere in the text below. Read the text and remember the information. The pass",
+      "task": "passkey"
+    },
+    {
+      "correct": 0,
+      "depth": 512,
+      "expected": "34494",
+      "extracted": "",
+      "id": "passkey-d512-0",
+      "needle_depth_frac": 0.0,
+      "prompt": "There is an important piece of information hidden somewhere in the text below. Read the text and remember the information. The pass key is 34494. Remember it. 34494 is the pass key. The wind moves through the tall pines and carries the salt air. The bread cools on the sill while the kettle begins to sing. Here we go again around the garden and back to the gate. The sun rises over the hill and the long shadows retreat. The bread cools on the sill while the kettle begins to sing. The sun rises over the hill and the long shadows retreat. Dust settles on the shelf where the empty jars are kept. Here we go again around the garden and back to the gate. Here we go again around the garden and back to the gate. There and back again along the same worn path by the wall. There and back again along the same worn path by the wall. Dust settles on the shelf where the empty jars are kept. The bread cools on the sill while the kettle begins to sing. The bread cools on the sill while the kettle begins to sing. The bread cools on the sill while the kettle begins to sing. The wind moves through the tall pines and carries the salt air. Dust settles on the shelf where the empty jars are kept. Here we go again around the garden and back to the gate. The bread cools on the sill while the kettle begins to sing. A slow river runs past the mill and turns the old wheel. A slow river runs past the mill and turns the old wheel. The grass is green and the sky above is a pale washed blue. A slow river runs past the mill and turns the old wheel. The grass is green and the sky above is a pale washed blue. The wind moves through the tall pines and carries the salt air. The sun rises over the hill and the long shadows retreat. The sun rises over the hill and the long shadows retreat. The wind moves through the tall pines and carries the salt air. Dust settles on the shelf where the empty jars are kept. There and back again along the same worn path by the wall. The wind moves through the tall pines and carries the salt air. The sun rises over the hill and the long shadows retreat. The wind moves through the tall pines and carries the salt air. The sun rises over the hill and the long shadows retreat. The wind moves through the tall pines and carries the salt air.\nWhat is the pass key? The pass key is",
+      "prompt_tokens": 511,
+      "query_accuracy": 0.0,
+      "response": "There is an important piece of information hidden somewhere in the text below. Read the text and remember the information. The pass",
+      "task": "passkey"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-passkey",
+  "schema": 1
+}

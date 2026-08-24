@@ -1,0 +1,54 @@
+{
+  "created_at": "2026-08-24T14:07:01.035628Z",
+  "details": {},
+  "item_count": 1,
+  "item_digest": "e54b1c25026c0244d1d1ed1877be7431",
+  "kind": "retrieval",
+  "metrics": {
+    "exact_match": 0.0,
+    "exact_match_d256": 0.0,
+    "n": 1.0,
+    "n_d256": 1.0,
+    "query_accuracy": 0.0
+  },
+  "name": "retrieval-passkey",
+  "provenance": {
+    "artifact": {
+      "config": null,
+      "kind": "gguf-f16",
+      "path": "/root/daedalus/gguf/hero-base-f16.gguf",
+      "revision": null,
+      "sha256": "95f1e6795b715be82495fcc68df68946727c4d198589992eccf31d50ed08eeff"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "ff126ee",
+    "runtime": {
+      "backend": "llama-cpp",
+      "device": "cpu",
+      "llama_cli": "/opt/llama.cpp/build/bin/llama-cli",
+      "llama_cli_flags": [
+        "--top-k",
+        "-s",
+        "-t",
+        "-ngl",
+        "--no-warmup",
+        "-st",
+        "--single-turn",
+        "--no-display-prompt"
+      ],
+      "max_new_tokens": 24,
+      "threads": 8
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<none>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

@@ -38,6 +38,15 @@ Worth stating plainly, because the number has been misread before: the "~6%" in
 file* made Q4 damage read ~6% **low**, not a measurement of 6% damage. The two
 happen to land near each other. This measurement is the direct one.
 
+It is also much larger than anything measured during preflight, and that gap is
+the interesting part. Every earlier figure came from 0.5B-token proxies:
++1.549% annealed (`q4-task-damage.md`), +1.558% and +2.576% non-annealed. The
+released model, at 59.9B tokens, takes **+5.539%** — between two and three and a
+half times as much. A better-trained model has sharper weights and more to lose
+to a 4-bit lattice, so this is the expected direction, but the size of it means
+the proxy numbers should not be used to size Phase 3's budget. QAT is
+load-bearing here by a wider margin than preflight suggested.
+
 ## Retrieval baseline
 
 Through PyTorch, on the released base checkpoint:
@@ -101,9 +110,11 @@ with the weights held fixed. Phase 3 must compare QAT checkpoints against
 historical 47.313. Comparing across hosts spends two thirds of the gate's
 margin on arithmetic.
 
-## Three defects found by trying to use the evaluators
+## Four defects found by trying to use the evaluators
 
-None of these were visible from the tests; all three needed the real artifacts.
+None of these were visible from the tests; all four needed the real artifacts.
+Three of them scored rather than failed, which is the property that makes them
+worth writing down: each one produced a confident number.
 
 **The pinned `llama-cli` runs a chat UI.** Build `b1-7584430` has dropped
 `-no-cnv`/`--no-conversation` in favour of `-st`/`--single-turn`, so the flag
@@ -121,6 +132,27 @@ exactly like a model which cannot retrieve. Fixed by locating the completion
 after the echoed prompt instead of filtering around it, handling the elided echo
 long prompts get, and **raising if banner text survives**: a changed UI must
 fail the run rather than become the score.
+
+**`pass@1` measured nothing at all.** `evaluate_problems` read
+`problem.get("test", "")` and `problem.get("plus_test")`. EvalPlus ships neither
+in that form: `test` holds HumanEval's original suite, which only *defines*
+`check(candidate)` and never calls it, and there is no `plus_test` key — the
+extended suite is inputs whose expectations come from the canonical solution. So
+every candidate ran a program containing no assertions, exited zero, and scored
+as a pass. **Measured: the released 150M base model scored `pass@1 = 1.0` on
+HumanEval+**, while emitting function bodies that were nothing but a repeated
+signature and docstring. Phase 8's entire code gate would have rested on a
+metric that returns 1.0 for anything that parses.
+
+The fixture was the reason it survived review: it invented `test` as a bare
+assertion and a `plus_test` key that does not exist, so every test agreed with
+the code and none touched the real schema. Fixed by calling `check(entry_point)`
+for the base suite, building the plus suite as a differential test against the
+executed reference (deep-copying arguments, so a candidate that mutates its
+input cannot feed the reference something else), and removing the default
+entirely — a missing suite now raises, because the empty string *was* the bug.
+The same 20 problems now score `pass@1 = 0.0` with 19 assertion failures and one
+exception.
 
 **The code sandbox did not contain what the gate claimed.** It patched
 `socket` and `urllib`, which stops code that asks Python politely, but the child
@@ -143,8 +175,12 @@ through `llama-cli`, and the completions contain a leaked `assistant` role
 marker. The paired FP16-vs-Q4_0 *perplexity* comparison is unaffected — it runs
 through `llama-perplexity`, which does no templating — and that is where the
 quantization evidence comes from. GGUF retrieval numbers should not be quoted
-as this model's retrieval ability. Whether the base export should carry a chat
-template at all is a question for Phase 3's export work.
+as this model's retrieval ability, and the same caution applies to *any*
+`llama-cli` generation on this build, including code: the baselines below were
+taken through PyTorch for that reason. Whether the base export should carry a
+chat template at all is a question for Phase 3's export work — a base model that
+triggers conversation mode in stock `llama-cli` is arguably an export defect, and
+it is the released artifact that does it.
 
 **No held-out shards on this box, so there is no BPB baseline.** The released
 tree holds `gguf/` and `final/` and no tokenized shards: `/root/daedalus/data`,
