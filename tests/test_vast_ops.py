@@ -198,3 +198,25 @@ def test_phase_three_prompt_preregisters_its_gates():
     assert "50% reduction" in prompt
     assert "Do not tune a threshold after seeing an outcome." in prompt
     assert "/usr/local/bin/daedalus-approved" in prompt
+
+
+def test_pr_edit_uses_the_rest_endpoint_the_run_token_can_reach():
+    wrapper = (ROOT / "ops/vast/run-approved").read_text()
+
+    # gh pr edit resolves org fields and fails with only the repo scope.
+    assert "gh pr edit" not in wrapper
+    assert "gh api -X PATCH" in wrapper
+    assert "/pulls/${number}" in wrapper
+
+
+def test_evaluation_entry_points_are_reachable_through_the_wrapper():
+    wrapper = (ROOT / "ops/vast/run-approved").read_text()
+
+    for subcommand in (
+        "eval-retrieval",
+        "eval-quant",
+        "eval-code",
+        "eval-bpb",
+        "eval-tasks",
+    ):
+        assert f"    {subcommand})" in wrapper

@@ -179,7 +179,12 @@ case "${command_name}" in
         [[ ${number} =~ ^[0-9]+$ ]] || { echo "PR number required" >&2; exit 2; }
         [[ -n ${body_file} ]] || { echo "body file required" >&2; exit 2; }
         validate_path "${body_file}"
-        exec gh pr edit "${number}" --body-file "${body_file}"
+        # The pull-request edit subcommand resolves org fields and needs
+        # read:org; the REST endpoint
+        # updates the same body with the repo scope the run token actually has.
+        exec gh api -X PATCH \
+            "repos/${GITHUB_REPOSITORY:-unseen1980/daedalus}/pulls/${number}" \
+            -F "body=@${body_file}" --silent
         ;;
     commit-push)
         require_source_branch
