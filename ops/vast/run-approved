@@ -79,6 +79,7 @@ case "${command_name}" in
         ;;
     phase)
         source "${venv_dir}/bin/activate"
+        export PYTHONPATH="${repo}${PYTHONPATH:+:${PYTHONPATH}}"
         exec python scripts/vast_program.py "$@"
         ;;
     hash)

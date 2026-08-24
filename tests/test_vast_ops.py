@@ -119,6 +119,32 @@ def test_safe_log_allows_portal_log_paths():
     assert "/var/log/portal/*.log)" in wrapper
 
 
+def test_phase_command_runs_controller_with_repository_on_pythonpath(tmp_path):
+    wrapper = ROOT / "ops/vast/run-approved"
+    fake_venv = tmp_path / "venv"
+    (fake_venv / "bin").mkdir(parents=True)
+    (fake_venv / "bin" / "activate").write_text("")
+    runtime = tmp_path / "runtime.env"
+    runtime.write_text("")
+    state = tmp_path / "state.json"
+    environment = os.environ.copy()
+    environment.update({
+        "DAEDALUS_REPO": str(ROOT),
+        "DAEDALUS_RUNTIME_ENV": str(runtime),
+        "DAEDALUS_VENV": str(fake_venv),
+    })
+
+    result = subprocess.run(
+        [str(wrapper), "phase", "--state", str(state), "init", "--phase", "bootstrap", "--status", "running"],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert state.exists()
+
+
 def test_pr_status_script_renders_draft_commands_without_merge_or_close():
     script = ROOT / "scripts/pr_status.py"
     subprocess.run(["python", "-m", "py_compile", str(script)], check=True)
