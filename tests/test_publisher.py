@@ -327,6 +327,79 @@ def test_a_missing_extra_file_is_skipped_not_fatal(tmp_path, monkeypatch):
     assert api.folders, "the model itself still published"
 
 
+# ------------------------------------------ did the bytes actually land ---
+
+def test_verification_passes_when_the_remote_copy_matches(tmp_path):
+    local = tmp_path / "model-q4_0.gguf"
+    local.write_bytes(b"weights" * 100)
+
+    def downloader(repo_id, filename, local_dir):
+        copy = os.path.join(local_dir, "fetched.bin")
+        with open(copy, "wb") as f:
+            f.write(local.read_bytes())
+        return copy
+
+    result = publisher.verify_published(
+        "Unseen1980/x", ["gguf/model-q4_0.gguf"], [str(local)],
+        downloader=downloader, log=lambda m: None)
+    assert result["passed"] and result["mismatched"] == []
+    assert result["checked"][0]["sha256"] == publisher.sha256_file(str(local))
+
+
+def test_a_truncated_upload_is_caught(tmp_path):
+    """The failure this exists for is quiet: a truncated GGUF downloads fine,
+    loads far enough to produce numbers, and those numbers are wrong."""
+    local = tmp_path / "model-q4_0.gguf"
+    local.write_bytes(b"weights" * 100)
+
+    def downloader(repo_id, filename, local_dir):
+        copy = os.path.join(local_dir, "fetched.bin")
+        with open(copy, "wb") as f:
+            f.write(local.read_bytes()[:10])       # truncated in transit
+        return copy
+
+    result = publisher.verify_published(
+        "Unseen1980/x", ["gguf/model-q4_0.gguf"], [str(local)],
+        downloader=downloader, log=lambda m: None)
+    assert not result["passed"]
+    assert result["mismatched"] == ["gguf/model-q4_0.gguf"]
+    assert result["checked"][0]["downloaded_sha256"] != result["checked"][0]["sha256"]
+
+
+def test_verification_downloads_into_a_directory_that_does_not_persist(tmp_path):
+    """It must not be able to read back a cached copy of what was just
+    uploaded -- that would verify the local file against itself."""
+    local = tmp_path / "a.bin"
+    local.write_bytes(b"x" * 32)
+    seen = {}
+
+    def downloader(repo_id, filename, local_dir):
+        seen["dir"] = local_dir
+        copy = os.path.join(local_dir, "f.bin")
+        with open(copy, "wb") as f:
+            f.write(local.read_bytes())
+        return copy
+
+    publisher.verify_published("Unseen1980/x", ["a.bin"], [str(local)],
+                               downloader=downloader, log=lambda m: None)
+    assert not os.path.exists(seen["dir"]), "scratch directory outlived the check"
+
+
+def test_the_cli_reports_a_failed_verification_with_a_nonzero_exit(
+        tmp_path, monkeypatch):
+    model_dir = make_model_dir(tmp_path)
+    monkeypatch.setattr(publisher, "find_ggufs", lambda *a: [])
+    monkeypatch.setattr(publisher, "publish_model",
+                        lambda md, repo, **kw: {"repo_id": repo})
+    monkeypatch.setattr(publisher, "verify_published",
+                        lambda *a, **k: {"passed": False,
+                                         "mismatched": ["gguf/x.gguf"],
+                                         "checked": []})
+    assert publisher._cli(["--model-dir", model_dir, "--repo-id",
+                           "Unseen1980/x", "--verify",
+                           "--extra-file", "a.bin:gguf/x.gguf"]) == 1
+
+
 def test_the_cli_parses_extra_file_specs(tmp_path, monkeypatch):
     monkeypatch.setenv("HF_TOKEN_WRITE", "t")
     model_dir = make_model_dir(tmp_path)

@@ -207,6 +207,59 @@ def publish_model(model_dir: str, repo_id: str = DEFAULT_RELEASE_REPO, *,
             "url": f"https://huggingface.co/{repo_id}"}
 
 
+def sha256_file(path: str, chunk: int = 1 << 20) -> str:
+    import hashlib
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(chunk), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_published(repo_id: str, paths_in_repo: Iterable[str],
+                     local_paths: Iterable[str], *, token: Optional[str] = None,
+                     dest: Optional[str] = None, downloader=None,
+                     log=print) -> dict:
+    """Re-download published files and check they hash-match what was sent.
+
+    A successful `upload_file` means the request was accepted, not that the
+    bytes on the Hub are the bytes on disk. The failure this catches is quiet
+    by construction: a truncated or empty artifact downloads fine, loads in
+    llama.cpp far enough to produce numbers, and those numbers are wrong. For
+    a repository whose entire purpose is letting someone re-decide a gate
+    against real artifacts, "it uploaded" is not the claim that matters.
+
+    Downloads into a fresh directory rather than reading the local cache, so a
+    cached copy of the file we just uploaded cannot stand in for the remote one.
+    """
+    token = token or os.environ.get("HF_TOKEN_WRITE")
+    if downloader is None:
+        from huggingface_hub import hf_hub_download
+
+        def downloader(repo_id, filename, local_dir):
+            return hf_hub_download(repo_id=repo_id, filename=filename,
+                                   repo_type="model", token=token,
+                                   local_dir=local_dir, force_download=True)
+
+    import tempfile
+    checked, mismatched = [], []
+    with tempfile.TemporaryDirectory(dir=dest) as scratch:
+        for path_in_repo, local in zip(paths_in_repo, local_paths):
+            expected = sha256_file(local)
+            fetched = downloader(repo_id, path_in_repo, scratch)
+            actual = sha256_file(fetched)
+            entry = {"path_in_repo": path_in_repo, "sha256": expected,
+                     "matched": actual == expected}
+            if not entry["matched"]:
+                entry["downloaded_sha256"] = actual
+                mismatched.append(path_in_repo)
+            checked.append(entry)
+            log(f"publisher: verified {path_in_repo} "
+                f"{'OK' if entry['matched'] else 'MISMATCH'}")
+    return {"repo_id": repo_id, "checked": checked,
+            "mismatched": mismatched, "passed": not mismatched}
+
+
 def _cli(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--model-dir", required=True,
@@ -230,6 +283,10 @@ def _cli(argv=None):
                    metavar="LOCAL:IN_REPO",
                    help="additional file to upload, e.g. a gate verdict or "
                         "scorecard; repeatable")
+    p.add_argument("--verify", action="store_true",
+                   help="after uploading, re-download every --extra-file into a "
+                        "fresh directory and check it hash-matches the local "
+                        "copy. Exits non-zero on any mismatch.")
     a = p.parse_args(argv)
 
     extra_files = []
@@ -251,6 +308,15 @@ def _cli(argv=None):
                            allow_released=a.allow_released,
                            extra_files=extra_files)
     print(json.dumps(result, indent=2))
+
+    if a.verify and extra_files:
+        verified = verify_published(
+            a.repo_id, [in_repo for _, in_repo in extra_files],
+            [local for local, _ in extra_files])
+        print(json.dumps(verified, indent=2))
+        if not verified["passed"]:
+            print(f"VERIFICATION FAILED: {verified['mismatched']}")
+            return 1
     return 0
 
 
