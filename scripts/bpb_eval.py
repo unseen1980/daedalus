@@ -82,7 +82,8 @@ def evaluate_sources(root, *, bpb_fn: Callable[[Path], float]) -> List[dict]:
 
 
 def build_holdout(mixture_root, holdout_root, train_root,
-                  holdout_frac: float = 0.02) -> dict:
+                  holdout_frac: float = 0.02,
+                  weights: Optional[Dict[str, float]] = None) -> dict:
     """Materialize the train/holdout split this evaluator requires, and record
     what was reserved.
 
@@ -103,6 +104,13 @@ def build_holdout(mixture_root, holdout_root, train_root,
     They are named in `skipped` rather than dropped silently, because a
     scorecard that omits a source it did not measure describes a different
     mixture than the one it claims to.
+
+    That is not a hypothetical. On this box seven of the corpus's ten sources
+    arrived as a single shard each, so no holdout can be carved from them at
+    all, and the aggregate covers the three that remain. Naming the skips is
+    necessary but not sufficient -- a reader counting names cannot tell whether
+    the gap is 5% of the mixture or half of it. `mixture_share_covered` answers
+    that directly, so a partial measurement cannot be read as a whole one.
     """
     from daedalus.data import make_mixture_holdout_split
 
@@ -119,11 +127,17 @@ def build_holdout(mixture_root, holdout_root, train_root,
         }
         for name, split in splits.items()
     }
+    if weights is None:
+        from daedalus.dataprep import MIXTURE
+        weights = {spec.key: spec.share for spec in MIXTURE}
+    on_disk = sum(weights.get(name, 0.0) for name in present)
+    covered = sum(weights.get(name, 0.0) for name in sources)
     return {
         "mixture_root": str(mixture_root),
         "holdout_frac": holdout_frac,
         "sources": sources,
         "skipped": sorted(present - set(sources)),
+        "mixture_share_covered": covered / on_disk if on_disk else 0.0,
     }
 
 
@@ -316,7 +330,7 @@ def main(argv=None) -> int:
         train_root = args.train_root or f"{args.holdout_root.rstrip('/')}-train"
         details_extra["holdout_build"] = build_holdout(
             args.build_holdout_from, args.holdout_root, train_root,
-            holdout_frac=args.holdout_frac)
+            holdout_frac=args.holdout_frac, weights=weights)
     if args.exposure_tokens:
         source_root = args.build_holdout_from or args.holdout_root
         details_extra["exposure"] = recovery_exposure(

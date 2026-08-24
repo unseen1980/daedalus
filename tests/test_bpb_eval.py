@@ -317,6 +317,23 @@ def test_build_holdout_records_a_source_too_small_to_split(tmp_path):
     assert not (tmp_path / "holdout" / "tiny").exists()
 
 
+def test_build_holdout_reports_how_much_of_the_mixture_it_covers(tmp_path):
+    """Naming the skipped sources is not enough: a reader counting names cannot
+    tell whether the gap is 5% of the training mixture or half of it. On this
+    box seven of ten sources are single-shard, and the answer is 31%."""
+    from scripts.bpb_eval import build_holdout
+
+    mixture = tmp_path / "shards"
+    _write_source(mixture, "python", tokens=1000, shard_tokens=100)
+    _write_source(mixture, "tiny", tokens=50, shard_tokens=1000)
+
+    record = build_holdout(mixture, tmp_path / "holdout", tmp_path / "train",
+                           holdout_frac=0.1,
+                           weights={"python": 0.75, "tiny": 0.25})
+
+    assert record["mixture_share_covered"] == pytest.approx(0.75)
+
+
 # ---------------------------------------------------------------- exposure ---
 #
 # A holdout carved out of the training corpus *after* a run has trained on it is
