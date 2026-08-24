@@ -4,11 +4,21 @@ Every other evaluator in this program reads logits. This one *runs code a model
 wrote*, on the same box that holds the checkpoints, the corpus and the run
 credentials. So the sandbox is the primary artifact here, not the score:
 
-  - **No network.** A preamble replaces `socket.socket`, `socket.create_connection`,
-    `socket.getaddrinfo` and `urllib.request.urlopen` with functions that raise.
-    Benchmark solutions never need the network, so anything that reaches for it
-    is either a hallucinated import or something worse, and either way must fail
+  - **No network, and no way to shell out to one.** A preamble replaces
+    `socket.socket`, `socket.create_connection`, `socket.getaddrinfo` and
+    `urllib.request.urlopen` with functions that raise. That alone only stops
+    code that asks Python politely -- `subprocess.run(["curl", ...])` reaches the
+    internet with every socket block still in place -- so process creation is
+    removed too: `subprocess`, `os.system`, `os.popen`, and the `exec`/`spawn`/
+    `fork` families. Benchmark solutions never need either, so anything that
+    reaches for one is a hallucinated import or something worse, and must fail
     loudly rather than succeed quietly.
+  - **Not root.** The child drops to an unprivileged uid, verified inside the
+    child before anything runs, and the sandbox refuses to start if the drop did
+    not take. Without it the candidate runs as root on the box holding the
+    checkpoints and the mode-0600 credential files, and reads them without
+    tripping a single Python-level block. Network namespaces are unavailable in
+    this container, so file permissions are what carries the containment.
   - **Bounded CPU, memory, file size and wall clock.** `setrlimit` caps address
     space and CPU seconds inside the child; `subprocess` bounds wall clock from
     outside, because a process blocked in a syscall burns no CPU and would sit
@@ -70,10 +80,37 @@ DEFAULT_MAX_NEW_TOKENS = 384
 # Injected ahead of every candidate program. Kept as source rather than a
 # module import so the child needs nothing on its path but the standard library.
 _SANDBOX_PREAMBLE = '''\
-import builtins, socket
+import builtins, os, socket
 
 class _NetworkBlocked(RuntimeError):
     pass
+
+class _ProcessBlocked(RuntimeError):
+    pass
+
+def _blocked_process(*args, **kwargs):
+    raise _ProcessBlocked(
+        "process creation is disabled in the Daedalus code sandbox")
+
+# Patching `socket` only stops code that asks Python for the network. A
+# candidate that runs `curl` reaches it with every socket block still in place,
+# so the ability to start a process is removed outright. Importing `subprocess`
+# here means a later `import subprocess` in the candidate gets this patched
+# module out of `sys.modules` rather than a fresh one.
+import subprocess as _subprocess
+for _name in ("run", "call", "check_call", "check_output", "Popen",
+              "getoutput", "getstatusoutput"):
+    if hasattr(_subprocess, _name):
+        setattr(_subprocess, _name, _blocked_process)
+
+# `os.fork` and `os.posix_spawn` are included deliberately: without them
+# `multiprocessing` and `pty.spawn` are still routes to a new process.
+for _name in ("system", "popen", "fork", "forkpty", "posix_spawn",
+              "posix_spawnp", "execv", "execve", "execl", "execle", "execlp",
+              "execlpe", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp",
+              "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"):
+    if hasattr(os, _name):
+        setattr(os, _name, _blocked_process)
 
 def _blocked(*args, **kwargs):
     raise _NetworkBlocked(
@@ -170,8 +207,49 @@ def check_syntax(code: str):
 
 # ----------------------------------------------------------------- sandbox ---
 
-def _limits(memory_mb: int, cpu_seconds: int) -> Callable[[], None]:
+# The account candidates run as. `nobody` owns nothing on this box, so the
+# checkpoints, the mode-0600 credential files under the config directory and the
+# repository itself all become unreadable or unwritable by file permissions
+# rather than by a Python-level block a candidate can step around.
+_SANDBOX_USER = "nobody"
+_SANDBOX_FALLBACK_IDS = (65534, 65534)
+
+
+def unprivileged_ids():
+    """(uid, gid) to run candidates as, or None if this process is not root.
+
+    Returning None is the correct answer for a developer machine: the child
+    already has no more privilege than the parent, and there is nothing to drop.
+    """
+
+    if os.geteuid() != 0:
+        return None
+    try:
+        import pwd
+
+        entry = pwd.getpwnam(_SANDBOX_USER)
+        return entry.pw_uid, entry.pw_gid
+    except (ImportError, KeyError):
+        return _SANDBOX_FALLBACK_IDS
+
+
+def _child_setup(memory_mb: int, cpu_seconds: int,
+                 ids: Optional[tuple]) -> Callable[[], None]:
     def apply() -> None:
+        if ids is not None:
+            uid, gid = ids
+            # Supplementary groups first: they survive setuid, and root's would
+            # otherwise follow the child into the sandbox.
+            os.setgroups([])
+            os.setgid(gid)
+            os.setuid(uid)
+            # Verified, not assumed. A drop that silently did not happen is the
+            # one failure mode that leaves the sandbox looking exactly like a
+            # working one while a candidate runs as root.
+            if os.getuid() != uid or os.geteuid() != uid:
+                raise RuntimeError(
+                    f"privilege drop to uid {uid} did not take effect "
+                    f"(uid={os.getuid()}, euid={os.geteuid()})")
         limit = memory_mb * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
         resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
@@ -206,6 +284,11 @@ _SIGNAL_CATEGORY = {24: "timeout",        # SIGXCPU
 def _categorize(stderr: str, returncode: int = 1) -> str:
     if returncode < 0 and -returncode in _SIGNAL_CATEGORY:
         return _SIGNAL_CATEGORY[-returncode]
+    # Checked before the network category: a candidate shelling out to a network
+    # client is refused for starting a process, and calling that "network
+    # blocked" would hide which containment actually stopped it.
+    if "_ProcessBlocked" in stderr or "process creation is disabled" in stderr:
+        return "process_blocked"
     if "_NetworkBlocked" in stderr or "network access is disabled" in stderr:
         return "network_blocked"
     if "MemoryError" in stderr or "Cannot allocate memory" in stderr:
@@ -234,6 +317,14 @@ def run_in_sandbox(solution: str, test_code: str, *,
     workdir = tempfile.mkdtemp(prefix="daedalus-code-eval-")
     program = Path(workdir) / "candidate.py"
     program.write_text(f"{_SANDBOX_PREAMBLE}\n{solution}\n\n{test_code}\n")
+    ids = unprivileged_ids()
+    if ids is not None:
+        # `mkdtemp` makes a 0700 root-owned directory, which the dropped child
+        # could neither enter nor write its own scratch files in. Hand it over
+        # rather than widening the mode: it stays private to this item.
+        os.chown(workdir, *ids)
+        os.chown(program, *ids)
+        program.chmod(0o400)
     # A minimal environment: no proxies to reach through, no PYTHON* overrides,
     # and a TMPDIR inside the item's own directory.
     environment = {"PATH": "/usr/bin:/bin", "TMPDIR": workdir,
@@ -248,9 +339,12 @@ def run_in_sandbox(solution: str, test_code: str, *,
             [sys.executable, "-I", str(program)],
             cwd=workdir, env=environment, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, start_new_session=True,
-            preexec_fn=_limits(memory_mb, _cpu_seconds_for(timeout_s)),
+            preexec_fn=_child_setup(memory_mb, _cpu_seconds_for(timeout_s), ids),
         )
-    except OSError as error:                    # sandbox could not be established
+    except (OSError, subprocess.SubprocessError) as error:
+        # The sandbox could not be established -- including a privilege drop
+        # that did not take. Refusing to run is the only safe answer: the
+        # alternative is scoring a candidate that ran as root.
         shutil.rmtree(workdir, ignore_errors=True)
         raise SandboxError(f"could not start the code sandbox: {error}") from error
 

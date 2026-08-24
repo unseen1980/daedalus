@@ -13,6 +13,7 @@ learning to emit markdown fences, and only the category counts separate them.
 """
 
 import json
+import os
 import sys
 
 import pytest
@@ -169,6 +170,119 @@ def test_sandbox_blocks_urllib_as_well_as_raw_sockets():
 
     assert verdict["status"] == "failed"
     assert "network" in verdict["detail"].lower()
+
+
+# ------------------------------------------------- containment beyond python ---
+#
+# The gate claims executed code reaches neither the network nor files outside
+# its sandbox. Patching `socket` only stops code that asks Python politely: a
+# child running as root can shell out to `curl`, read the mode-0600 credential
+# files, and write anywhere. These four pin the containment that actually holds
+# that claim up. `unshare -n` is unavailable in this container, so none of them
+# may be built on a network namespace.
+
+requires_root = pytest.mark.skipif(
+    os.geteuid() != 0,
+    reason="privilege dropping is only observable when the parent starts as root")
+
+
+@pytest.mark.slow
+@requires_root
+def test_sandbox_drops_root_before_running_a_candidate():
+    from scripts.code_eval import run_in_sandbox
+
+    solution = ("import os\n"
+                "def add(a, b):\n"
+                "    assert os.getuid() != 0, f'still root: {os.getuid()}'\n"
+                "    return a + b\n")
+
+    verdict = run_in_sandbox(solution, "assert add(1, 2) == 3\n", timeout_s=10.0)
+
+    assert verdict["status"] == "passed", verdict["detail"]
+
+
+@pytest.mark.slow
+def test_sandbox_blocks_shelling_out_to_a_network_client():
+    """`curl` never touches the patched `socket` module.
+
+    A candidate that runs a network client as a subprocess reaches the internet
+    with every Python-level block still in place, which is the gap that made the
+    socket patch insufficient evidence for this gate.
+    """
+    from scripts.code_eval import run_in_sandbox
+
+    solution = ("import subprocess\n"
+                "def add(a, b):\n"
+                "    subprocess.run(['curl', '-s', 'https://example.com'],\n"
+                "                   capture_output=True)\n"
+                "    return a + b\n")
+
+    verdict = run_in_sandbox(solution, "assert add(1, 2) == 3\n", timeout_s=15.0)
+
+    assert verdict["status"] == "failed"
+    assert verdict["category"] == "process_blocked", verdict["detail"]
+
+
+@pytest.mark.slow
+def test_sandbox_blocks_os_system_and_exec():
+    from scripts.code_eval import run_in_sandbox
+
+    solution = ("import os\n"
+                "def add(a, b):\n"
+                "    os.system('curl -s https://example.com')\n"
+                "    return a + b\n")
+
+    verdict = run_in_sandbox(solution, "assert add(1, 2) == 3\n", timeout_s=15.0)
+
+    assert verdict["status"] == "failed"
+    assert verdict["category"] == "process_blocked", verdict["detail"]
+
+
+@pytest.mark.slow
+@requires_root
+def test_sandbox_cannot_read_a_root_owned_secret_outside_it(tmp_path):
+    """Standing in for `/root/.config/daedalus/runtime.env`.
+
+    The real credential files are mode 0600 and root-owned; a candidate running
+    as root reads them without tripping a single Python-level block.
+    """
+    from scripts.code_eval import run_in_sandbox
+
+    secret_dir = tmp_path / "config"
+    secret_dir.mkdir()
+    secret = secret_dir / "runtime.env"
+    secret.write_text("HF_TOKEN=not-a-real-token\n")
+    secret.chmod(0o600)
+    secret_dir.chmod(0o700)
+
+    solution = ("def add(a, b):\n"
+                f"    open({str(secret)!r}).read()\n"
+                "    return a + b\n")
+
+    verdict = run_in_sandbox(solution, "assert add(1, 2) == 3\n", timeout_s=10.0)
+
+    assert verdict["status"] == "failed"
+    assert "PermissionError" in verdict["detail"], verdict["detail"]
+
+
+@pytest.mark.slow
+@requires_root
+def test_sandbox_cannot_write_outside_its_working_directory(tmp_path):
+    from scripts.code_eval import run_in_sandbox
+
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    protected.chmod(0o700)
+
+    solution = ("def add(a, b):\n"
+                f"    open({str(protected / 'planted.txt')!r}, 'w').write('x')\n"
+                "    return a + b\n")
+
+    verdict = run_in_sandbox(solution, "assert add(1, 2) == 3\n", timeout_s=10.0)
+
+    assert verdict["status"] == "failed"
+    assert "PermissionError" in verdict["detail"], verdict["detail"]
+    assert not (protected / "planted.txt").exists()
 
 
 @pytest.mark.slow
