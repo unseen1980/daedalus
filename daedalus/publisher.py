@@ -33,6 +33,50 @@ from typing import Iterable, List, Optional, Tuple
 # `.env` hours ago still agrees with what the code does.
 DEFAULT_RELEASE_REPO = "Unseen1980/daedalus-150m"
 
+# Repositories holding artifacts that are *already released* or that a released
+# model depends on. Uploading an experiment into either is unrecoverable: the
+# Hub keeps superseded blobs but the repo's head is what anyone downloading gets,
+# and a research probe wearing the release's name is worse than no probe at all.
+#
+# This is not a hypothetical. `publish_model`'s `repo_id` **defaults** to
+# DEFAULT_RELEASE_REPO, so publishing a Phase 3 recovery arm correctly -- with
+# private=True, a good card, and full provenance -- and simply forgetting to
+# pass `--repo-id` would overwrite the released model. The research program's
+# plan requires refusing a target that resolves to a released-model path, and
+# the refusal belongs here rather than in each caller, because the dangerous
+# case is precisely the caller that did not think about it.
+PROTECTED_REPOS = (
+    DEFAULT_RELEASE_REPO,             # the published 150M model
+    "Unseen1980/daedalus-checkpoints",  # the released run's resume artifacts
+)
+
+
+class ProtectedRepoError(ValueError):
+    """Raised when a publish would land on a released-model repository."""
+
+
+def _normalize_repo(repo_id: str) -> str:
+    """Hub repo ids compare case-insensitively and ignore surrounding space."""
+    return (repo_id or "").strip().strip("/").lower()
+
+
+def assert_not_released(repo_id: str,
+                        protected: Iterable[str] = PROTECTED_REPOS) -> None:
+    """Refuse a target that is a released-model repository.
+
+    Callers that genuinely mean to publish the release pass
+    `allow_released=True`, which is a deliberate, greppable act rather than the
+    default behaviour of an argument nobody supplied.
+    """
+    target = _normalize_repo(repo_id)
+    for candidate in protected:
+        if target == _normalize_repo(candidate):
+            raise ProtectedRepoError(
+                f"refusing to publish into {repo_id!r}: it is a released-model "
+                f"repository. Experiment artifacts belong in a separate private "
+                f"repo. Pass allow_released=True (CLI: --allow-released) only "
+                f"if you really are republishing the release.")
+
 # What a publishable model directory must contain. The card is on this list on
 # purpose: an artifact with no provenance, no stated success bar and no way to
 # tell a 13B-token run from a 40B one is exactly what the model-card work
@@ -85,6 +129,8 @@ def find_ggufs(*dirs: str) -> List[str]:
 def publish_model(model_dir: str, repo_id: str = DEFAULT_RELEASE_REPO, *,
                   gguf_paths: Iterable[str] = (), token: Optional[str] = None,
                   private: bool = True, commit_message: Optional[str] = None,
+                  allow_released: bool = False,
+                  extra_files: Iterable[Tuple[str, str]] = (),
                   api=None, log=print) -> dict:
     """Upload `model_dir` plus any GGUFs to `repo_id` as a Hub *model* repo.
 
@@ -92,7 +138,20 @@ def publish_model(model_dir: str, repo_id: str = DEFAULT_RELEASE_REPO, *,
     checkpoint uploader, which must never raise because it runs inside a
     training loop. Here a failure is the last thing standing between a finished
     model and nobody being able to use it, so it should be loud.
+
+    Refuses a released-model `repo_id` unless `allow_released` is set; see
+    `assert_not_released`. The check runs *before* the publishability check so
+    the wrong-target error is the one reported, rather than a missing-file
+    complaint about a directory that was never going there anyway.
+
+    `extra_files` is a sequence of `(local_path, path_in_repo)` for scorecards
+    and verdicts that are not part of the HF model directory. Provenance for a
+    research artifact is not optional decoration -- a recovery probe whose
+    gate verdict lives only on a box that gets recycled is a set of weights
+    nobody can interpret.
     """
+    if not allow_released:
+        assert_not_released(repo_id)
     problems = check_publishable(model_dir)
     if problems:
         raise ValueError(f"refusing to publish {model_dir}: "
@@ -131,8 +190,20 @@ def publish_model(model_dir: str, repo_id: str = DEFAULT_RELEASE_REPO, *,
         gguf_done.append((name, size))
         log(f"publisher: uploaded gguf/{name} ({size / 1e6:.1f} MB)")
 
+    extra_done: List[str] = []
+    for local_path, path_in_repo in extra_files:
+        if not os.path.exists(local_path):
+            log(f"publisher: skipping {local_path} (does not exist)")
+            continue
+        api.upload_file(path_or_fileobj=local_path, path_in_repo=path_in_repo,
+                        repo_id=repo_id, repo_type="model",
+                        commit_message=f"{message}: {path_in_repo}")
+        extra_done.append(path_in_repo)
+        log(f"publisher: uploaded {path_in_repo}")
+
     return {"repo_id": repo_id, "private": private, "files": uploaded,
             "ggufs": [{"name": n, "size": s} for n, s in gguf_done],
+            "extra_files": extra_done,
             "url": f"https://huggingface.co/{repo_id}"}
 
 
@@ -151,7 +222,22 @@ def _cli(argv=None):
     p.add_argument("--check-only", action="store_true",
                    help="report whether the directory is publishable, upload "
                         "nothing")
+    p.add_argument("--allow-released", action="store_true",
+                   help="permit a released-model repo id. Off by default so an "
+                        "experiment cannot land on the release by inheriting "
+                        "--repo-id's default.")
+    p.add_argument("--extra-file", action="append", default=[],
+                   metavar="LOCAL:IN_REPO",
+                   help="additional file to upload, e.g. a gate verdict or "
+                        "scorecard; repeatable")
     a = p.parse_args(argv)
+
+    extra_files = []
+    for spec in a.extra_file:
+        local, _, in_repo = spec.partition(":")
+        if not local or not in_repo:
+            raise SystemExit(f"--extra-file expects LOCAL:IN_REPO, got {spec!r}")
+        extra_files.append((local, in_repo))
 
     problems = check_publishable(a.model_dir)
     if a.check_only:
@@ -161,7 +247,9 @@ def _cli(argv=None):
 
     result = publish_model(a.model_dir, a.repo_id,
                            gguf_paths=find_ggufs(*a.gguf_dir),
-                           private=not a.public)
+                           private=not a.public,
+                           allow_released=a.allow_released,
+                           extra_files=extra_files)
     print(json.dumps(result, indent=2))
     return 0
 
