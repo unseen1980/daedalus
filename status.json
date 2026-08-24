@@ -4,12 +4,12 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-24T13:01:29.116512Z",
+  "heartbeat_at": "2026-08-24T13:06:27.165205Z",
   "metrics": {},
   "phase": "phase2-evaluation",
   "schema": 1,
   "source_branch": "vast/daedalus-improvements-20260824",
-  "source_sha": "9ef694888f87",
+  "source_sha": "64004688b3e4",
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
   "updated_at": "2026-08-24T13:01:17.448070Z"
