@@ -47,6 +47,44 @@ require_gh() {
     command -v gh >/dev/null 2>&1 || { echo "gh not installed" >&2; exit 5; }
 }
 
+released_root=${DAEDALUS_RELEASED_ROOT:-/root/daedalus}
+
+# The released artifacts are the immutable baseline every Phase 3-8 gate is
+# measured against. They are *inputs* to evaluation -- pointing --gguf or
+# --checkpoint at them is the normal case -- so a blanket ban on the path would
+# be wrong. What must never happen is an evaluation writing its results back
+# into that tree, so only the output-carrying flags are checked.
+refuse_released_output() {
+    local previous="" argument value
+    for argument in "$@"; do
+        value=""
+        case "${argument}" in
+            --out=*|--out-dir=*|--per-item=*|--outfile=*)
+                value=${argument#*=}
+                ;;
+        esac
+        case "${previous}" in
+            --out|--out-dir|--per-item|--outfile)
+                value=${argument}
+                ;;
+        esac
+        if [[ -n ${value} && ( ${value} == "${released_root}" || ${value} == "${released_root}"/* ) ]]; then
+            echo "refusing to write into the released artifact tree ${released_root}" >&2
+            exit 6
+        fi
+        previous=${argument}
+    done
+}
+
+run_evaluation() {
+    local script=$1
+    shift
+    refuse_released_output "$@"
+    source "${venv_dir}/bin/activate"
+    export PYTHONPATH="${repo}${PYTHONPATH:+:${PYTHONPATH}}"
+    exec python "${script}" "$@"
+}
+
 require_log_path() {
     local path=$1
     case "${path}" in
@@ -93,6 +131,21 @@ case "${command_name}" in
             --state "${state_path}" \
             --branch "${progress_branch}" \
             --once
+        ;;
+    eval-retrieval)
+        run_evaluation scripts/retrieval_eval.py "$@"
+        ;;
+    eval-quant)
+        run_evaluation scripts/gguf_eval.py "$@"
+        ;;
+    eval-code)
+        run_evaluation scripts/code_eval.py "$@"
+        ;;
+    eval-bpb)
+        run_evaluation scripts/bpb_eval.py "$@"
+        ;;
+    eval-tasks)
+        run_evaluation eval.py "$@"
         ;;
     hash)
         [[ $# -gt 0 ]] || { echo "paths required" >&2; exit 2; }
