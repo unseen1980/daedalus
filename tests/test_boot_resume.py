@@ -104,3 +104,54 @@ def test_boot_resume_limit_prevents_restart(tmp_path):
 
     assert result == {"status": "skipped", "reason": "boot_resume_limit"}
     assert calls == []
+
+
+def test_multiple_pending_runs_are_blocked_without_launching(tmp_path):
+    from scripts import boot_resume
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    for run_dir in (first, second):
+        run_dir.mkdir()
+        checkpoint = run_dir / "checkpoint.pt"
+        checkpoint.write_text("checkpoint")
+        (run_dir / "inflight.json").write_text(json.dumps({
+            "schema": 1,
+            "run_name": run_dir.name,
+            "run_dir": str(run_dir),
+            "cmd": ["python", "train.py", "--run-name", run_dir.name],
+            "ckpt_path": str(checkpoint),
+            "completed": False,
+        }))
+    calls = []
+
+    result = boot_resume.resume_pending(
+        str(tmp_path),
+        resumer=lambda run_dir: calls.append(run_dir),
+    )
+
+    assert result == {
+        "status": "blocked",
+        "reason": "multiple_pending_runs",
+        "count": 2,
+    }
+    assert calls == []
+
+
+def test_main_dry_run_reports_candidate_without_mutating(tmp_path, capsys):
+    from scripts import boot_resume
+
+    run_dir, _ = _write_marker(tmp_path)
+
+    result = boot_resume.main([
+        "--runs-root", str(tmp_path),
+        "--dry-run",
+    ])
+
+    output = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert output == {
+        "status": "dry_run",
+        "candidate": str(run_dir),
+    }
+    assert json.loads((run_dir / "inflight.json").read_text())["boot_resumes"] == 0

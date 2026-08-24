@@ -1,9 +1,13 @@
 """Resume an approved in-flight training run after a box reboot."""
 
+import argparse
+import json
 import os
+from pathlib import Path
 from typing import Callable, Optional
 
 from daedalus.supervise import (
+    INFLIGHT,
     INFLIGHT_SCHEMA,
     _read_halt,
     note_boot_resume,
@@ -15,6 +19,41 @@ from daedalus.supervise import (
 
 
 MAX_BOOT_RESUMES = 5
+
+
+def _pending_run_dirs(runs_root: str) -> list[str]:
+    pending = []
+    for path in sorted(Path(runs_root).rglob(INFLIGHT)):
+        run_dir = str(path.parent)
+        marker = read_inflight(run_dir)
+        if marker is None or marker.get("schema") != INFLIGHT_SCHEMA:
+            continue
+        if marker.get("completed") is True:
+            continue
+        command = marker.get("cmd")
+        checkpoint = marker.get("ckpt_path")
+        if not isinstance(command, list) or not command:
+            continue
+        if not isinstance(checkpoint, str) or not os.path.isfile(checkpoint):
+            continue
+        pending.append(run_dir)
+    return pending
+
+
+def resume_pending(runs_root: str, *, resumer: Callable = None) -> dict:
+    """Resume the sole pending run and refuse to guess among several."""
+    pending = _pending_run_dirs(runs_root)
+    if not pending:
+        return {"status": "skipped", "reason": "no_pending_runs"}
+    if len(pending) > 1:
+        return {
+            "status": "blocked",
+            "reason": "multiple_pending_runs",
+            "count": len(pending),
+        }
+    action = resumer or resume_run
+    result = action(pending[0])
+    return result if isinstance(result, dict) else {"status": "completed"}
 
 
 def resume_run(
@@ -64,3 +103,34 @@ def resume_run(
         log=log,
     )
     return {"status": "completed", "boot_resume": boot_number, "report": report}
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--runs-root", required=True)
+    parser.add_argument("--max-boot-resumes", type=int, default=MAX_BOOT_RESUMES)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+
+    pending = _pending_run_dirs(args.runs_root)
+    if not pending:
+        result = {"status": "skipped", "reason": "no_pending_runs"}
+    elif len(pending) > 1:
+        result = {
+            "status": "blocked",
+            "reason": "multiple_pending_runs",
+            "count": len(pending),
+        }
+    elif args.dry_run:
+        result = {"status": "dry_run", "candidate": pending[0]}
+    else:
+        result = resume_run(
+            pending[0],
+            max_boot_resumes=args.max_boot_resumes,
+        )
+    print(json.dumps(result, sort_keys=True), flush=True)
+    return 2 if result["status"] == "blocked" else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
