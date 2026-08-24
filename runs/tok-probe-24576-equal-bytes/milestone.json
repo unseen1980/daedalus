@@ -1,0 +1,14 @@
+{
+  "revision": "tok-probe-24576-equal-bytes-stable-end-step335",
+  "step": 335,
+  "tokens_seen": 43909120,
+  "total_steps": 1679,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.02,
+  "adam_lr": 0.0003,
+  "config": "tok-probe-24576",
+  "repo": null,
+  "path_in_repo": "milestone/tok-probe-24576-equal-bytes/checkpoint.pt",
+  "created_at": 1787606863.6464894
+}
