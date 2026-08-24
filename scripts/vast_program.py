@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -280,6 +281,91 @@ class VastProgramController:
         raise PhaseFailed(phase, returncodes)
 
 
+def detached_phase_argv(
+    *,
+    state,
+    phase: str,
+    command: Sequence[str],
+    lease=None,
+    base_sha: str = "",
+    estimated_hours: float = 0.0,
+    max_attempts: int = 1,
+    backoff_sec: float = 0.0,
+) -> list[str]:
+    """Rebuild this invocation for the detached controller, without ``--detach``.
+
+    Rebuilt from the parsed values rather than filtered out of ``sys.argv`` so a
+    phase command that happens to contain ``--detach`` cannot lose an argument
+    or, worse, make the child detach again.
+    """
+
+    argv = [sys.executable, str(Path(__file__).resolve()), "--state", str(state)]
+    if lease:
+        argv += ["--lease", str(lease)]
+    if base_sha:
+        argv += ["--base-sha", str(base_sha)]
+    argv += [
+        "run-phase",
+        "--phase", str(phase),
+        "--estimated-hours", str(float(estimated_hours)),
+        "--max-attempts", str(int(max_attempts)),
+        "--backoff-sec", str(float(backoff_sec)),
+        "--",
+        *[str(part) for part in command],
+    ]
+    return argv
+
+
+def detach_phase(
+    *,
+    state,
+    phase: str,
+    command: Sequence[str],
+    log_path,
+    lease=None,
+    base_sha: str = "",
+    estimated_hours: float = 0.0,
+    max_attempts: int = 1,
+    backoff_sec: float = 0.0,
+    spawn: Callable[..., subprocess.Popen] = subprocess.Popen,
+) -> dict:
+    """Start the phase controller in its own session and return immediately.
+
+    A phase must outlive the engineering session that starts it. Each session
+    runs in its own process group so the keeper can reap the whole tree when it
+    cuts one short, and anything the session launches inherits that group -- so
+    a phase started in-session dies whenever the session ends, on a normal exit
+    as readily as on a timeout, taking the trainer and its GPU work with it.
+    That is how the phase 4 sweep lost its second arm at step 460 of 1636 and
+    left the box idle. Detaching into a fresh session removes the phase from the
+    session's lifetime: the turn ends, the keeper starts the next one, and the
+    sweep keeps running. Ownership is unchanged -- the detached controller takes
+    the same single-owner lease, so this cannot start a second writer.
+    """
+
+    argv = detached_phase_argv(
+        state=state,
+        phase=phase,
+        command=command,
+        lease=lease,
+        base_sha=base_sha,
+        estimated_hours=estimated_hours,
+        max_attempts=max_attempts,
+        backoff_sec=backoff_sec,
+    )
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab") as log:
+        process = spawn(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    return {"pid": process.pid, "log": str(log_path), "argv": argv}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", default="runs/vast-program/state.json")
@@ -304,6 +390,12 @@ def main(argv=None) -> int:
     run.add_argument("--estimated-hours", type=float, default=0.0)
     run.add_argument("--max-attempts", type=int, default=1)
     run.add_argument("--backoff-sec", type=float, default=0.0)
+    run.add_argument(
+        "--detach",
+        action="store_true",
+        help="own the phase from a new session so it outlives the caller",
+    )
+    run.add_argument("--log", default=None, help="detached phase log (default runs/vast-program/logs/<phase>.log)")
     run.add_argument("phase_command", nargs=argparse.REMAINDER)
 
     args = parser.parse_args(argv)
@@ -339,15 +431,34 @@ def main(argv=None) -> int:
             controller.release_lease()
         return 0
 
+    command = args.phase_command
+    if command[:1] == ["--"]:
+        command = command[1:]
+    if not command:
+        raise SystemExit("run-phase requires a command after --")
+
+    if args.detach:
+        # State and lease are left to the detached controller so the caller
+        # never holds ownership it is about to walk away from.
+        log_path = args.log or Path(args.state).with_name("logs") / f"{args.phase}.log"
+        started = detach_phase(
+            state=args.state,
+            phase=args.phase,
+            command=command,
+            log_path=log_path,
+            lease=args.lease,
+            base_sha=args.base_sha,
+            estimated_hours=args.estimated_hours,
+            max_attempts=args.max_attempts,
+            backoff_sec=args.backoff_sec,
+        )
+        print(f"detached phase {args.phase} pid {started['pid']} log {started['log']}")
+        return 0
+
     if not Path(args.state).exists():
         controller.initialize(base_sha=args.base_sha)
     controller.acquire_lease()
     try:
-        command = args.phase_command
-        if command[:1] == ["--"]:
-            command = command[1:]
-        if not command:
-            raise SystemExit("run-phase requires a command after --")
         controller.run_phase(
             args.phase,
             command,

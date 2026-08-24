@@ -3,6 +3,7 @@
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -178,3 +179,102 @@ def test_cli_transition_preserves_base_sha_and_started_at(tmp_path):
     assert updated["phase"] == "phase2-evaluation"
     assert updated["status"] == "running"
     assert updated["details"] == {"reason": "operator-migration"}
+
+
+def test_detached_phase_argv_round_trips_every_option(tmp_path):
+    """The detached controller must be handed the same phase, verbatim."""
+
+    from scripts.vast_program import detached_phase_argv
+
+    argv = detached_phase_argv(
+        state=tmp_path / "state.json",
+        lease=tmp_path / "controller.lock",
+        base_sha="abc123",
+        phase="phase4-probe-sweep",
+        estimated_hours=6.0,
+        max_attempts=2,
+        backoff_sec=30.0,
+        command=["python", "scripts/tokenizer_lab.py", "sweep", "--device", "cuda"],
+    )
+
+    # The child must not re-detach, or every phase would fork forever.
+    assert "--detach" not in argv
+    assert argv[1].endswith("vast_program.py")
+    assert "--state" in argv and str(tmp_path / "state.json") in argv
+    assert argv[argv.index("--phase") + 1] == "phase4-probe-sweep"
+    assert argv[argv.index("--estimated-hours") + 1] == "6.0"
+    assert argv[argv.index("--max-attempts") + 1] == "2"
+    # `--` keeps a phase command's own flags out of the controller's parser.
+    assert argv[argv.index("--") + 1:] == [
+        "python", "scripts/tokenizer_lab.py", "sweep", "--device", "cuda",
+    ]
+
+
+def test_detached_phase_survives_a_group_kill_of_its_launching_session(tmp_path):
+    """The regression that cost phase 4 its second arm.
+
+    An engineering session runs in its own process group so the keeper can reap
+    the whole tree on timeout. A phase launched in-session inherits that group,
+    so ending the session killed the running trainer. The detached phase must
+    outlive exactly that kill.
+    """
+
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    repo = Path(__file__).resolve().parents[1]
+    marker = tmp_path / "phase-finished"
+    pidfile = tmp_path / "detached.pid"
+
+    # The phase itself: slow enough that the kill lands while it is running.
+    phase_script = tmp_path / "phase.py"
+    phase_script.write_text(
+        "import pathlib, time\n"
+        "time.sleep(3)\n"
+        f"pathlib.Path({str(marker)!r}).write_text('ok')\n"
+    )
+
+    # Stands in for the engineering session: detaches a phase, then blocks.
+    session = tmp_path / "session.py"
+    session.write_text(
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(repo)!r})\n"
+        "from scripts.vast_program import detach_phase\n"
+        "started = detach_phase(\n"
+        f"    state={str(tmp_path / 'state.json')!r},\n"
+        "    phase='phase-detach-drill',\n"
+        f"    command=[sys.executable, {str(phase_script)!r}],\n"
+        f"    log_path={str(tmp_path / 'phase.log')!r},\n"
+        ")\n"
+        f"open({str(pidfile)!r}, 'w').write(str(started['pid']))\n"
+        "time.sleep(600)\n"
+    )
+
+    launched = subprocess.Popen(
+        [sys.executable, str(session)], start_new_session=True, cwd=str(repo)
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while not pidfile.exists() and time.monotonic() < deadline:
+            assert launched.poll() is None, "session died before detaching"
+            time.sleep(0.1)
+        assert pidfile.exists(), "phase never detached"
+
+        detached_pid = int(pidfile.read_text())
+        session_group = os.getpgid(launched.pid)
+        assert os.getpgid(detached_pid) != session_group, "phase shares the session group"
+
+        # Exactly what the keeper does to a session it cuts short.
+        os.killpg(session_group, signal.SIGKILL)
+        launched.wait(timeout=30)
+        assert not marker.exists(), "phase finished before the kill proved anything"
+
+        deadline = time.monotonic() + 60
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert marker.read_text() == "ok", "the detached phase was killed with its session"
+    finally:
+        if launched.poll() is None:
+            launched.kill()
