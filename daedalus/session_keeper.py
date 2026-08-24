@@ -399,6 +399,9 @@ class ClaudeSessionLauncher:
         effort: str = "xhigh",
         permission_mode: str = "dontAsk",
         timeout_sec: float = 3600.0,
+        idle_timeout_sec: Optional[float] = None,
+        progress_probe: Optional[Callable[[], str]] = None,
+        poll_interval_sec: float = 60.0,
         runner: Optional[Callable[..., subprocess.CompletedProcess]] = None,
     ):
         self.repo = Path(repo)
@@ -412,6 +415,9 @@ class ClaudeSessionLauncher:
         self.effort = effort
         self.permission_mode = permission_mode
         self.timeout_sec = timeout_sec
+        self.idle_timeout_sec = idle_timeout_sec
+        self.progress_probe = progress_probe
+        self.poll_interval_sec = poll_interval_sec
         self.runner = runner or run_process_group
 
     def resolve_prompt_path(self, request: LaunchRequest) -> Path:
@@ -471,6 +477,13 @@ class ClaudeSessionLauncher:
 
         argv = list(self.build_argv(request))
         try:
+            options = {}
+            if self.idle_timeout_sec and self.progress_probe is not None:
+                options = {
+                    "idle_timeout": self.idle_timeout_sec,
+                    "progress_probe": self.progress_probe,
+                    "poll_interval": self.poll_interval_sec,
+                }
             completed = self.runner(
                 argv,
                 cwd=str(self.repo),
@@ -478,6 +491,7 @@ class ClaudeSessionLauncher:
                 text=True,
                 timeout=self.timeout_sec,
                 check=False,
+                **options,
             )
         except subprocess.TimeoutExpired:
             return LaunchOutcome(
@@ -492,6 +506,13 @@ class ClaudeSessionLauncher:
                 tail=f"could not launch Claude: {error}",
             )
 
+        if completed.returncode == IDLE_EXIT_CODE:
+            return LaunchOutcome(
+                exit_code=IDLE_EXIT_CODE,
+                session_id=_session_id_from_output(completed.stdout)
+                or request.resume_session_id,
+                tail=f"no recorded progress for {self.idle_timeout_sec:.0f}s",
+            )
         session_id = _session_id_from_output(completed.stdout) or request.resume_session_id
         # A successful turn's stdout is the structured result, not diagnostics.
         diagnostics = (completed.stderr or "").strip()
@@ -505,6 +526,10 @@ class ClaudeSessionLauncher:
         )
 
 
+#: Exit code for a turn cut short because it stopped making progress.
+IDLE_EXIT_CODE = 125
+
+
 def run_process_group(
     argv,
     *,
@@ -513,12 +538,22 @@ def run_process_group(
     text: bool = True,
     capture_output: bool = True,
     check: bool = False,
+    idle_timeout=None,
+    progress_probe: Optional[Callable[[], str]] = None,
+    poll_interval: float = 60.0,
 ) -> subprocess.CompletedProcess:
     """Run ``argv`` in its own process group so a timeout kills the whole tree.
 
     A Claude turn launches the approved wrapper, which launches llama.cpp on the
     GPU. Killing only the direct child would leave that GPU process holding the
     card while the next turn tries to score against it.
+
+    ``timeout`` bounds a turn's *lifetime*, which is a blunt instrument: a phase
+    3 turn legitimately runs for hours, so any lifetime generous enough to let it
+    finish is also generous enough to let a hung turn waste the same hours. When
+    ``idle_timeout`` and ``progress_probe`` are supplied the turn is additionally
+    bounded on *silence* -- it is cut short once the probe reports no change for
+    that long, whatever its lifetime, and a working turn is never cut at all.
     """
 
     process = subprocess.Popen(
@@ -532,20 +567,86 @@ def run_process_group(
         text=text,
         start_new_session=True,
     )
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _kill_process_group(process)
-        stdout, stderr = process.communicate()
-        raise subprocess.TimeoutExpired(
-            list(argv), timeout, output=stdout, stderr=stderr
+    if idle_timeout is None or progress_probe is None:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(process)
+            stdout, stderr = process.communicate()
+            raise subprocess.TimeoutExpired(
+                list(argv), timeout, output=stdout, stderr=stderr
+            )
+    else:
+        stdout, stderr, idled = _wait_while_progressing(
+            process,
+            argv=argv,
+            timeout=timeout,
+            idle_timeout=idle_timeout,
+            progress_probe=progress_probe,
+            poll_interval=poll_interval,
         )
+        if idled:
+            return subprocess.CompletedProcess(
+                list(argv), IDLE_EXIT_CODE, stdout, stderr
+            )
     completed = subprocess.CompletedProcess(
         list(argv), process.returncode, stdout, stderr
     )
     if check:
         completed.check_returncode()
     return completed
+
+
+def _wait_while_progressing(
+    process: subprocess.Popen,
+    *,
+    argv,
+    timeout,
+    idle_timeout: float,
+    progress_probe: Callable[[], str],
+    poll_interval: float,
+):
+    """Wait for ``process``, cutting it short once it stops changing anything.
+
+    Returns ``(stdout, stderr, idled)``. A lifetime ``timeout`` still applies and
+    still raises, so the two bounds compose rather than replace one another.
+    """
+
+    started = time.monotonic()
+    last_change = started
+    try:
+        fingerprint = str(progress_probe())
+    except Exception:  # a probe failure must not cut a working turn short
+        fingerprint = ""
+
+    while True:
+        remaining_poll = poll_interval
+        if timeout is not None:
+            left = timeout - (time.monotonic() - started)
+            if left <= 0:
+                _kill_process_group(process)
+                stdout, stderr = process.communicate()
+                raise subprocess.TimeoutExpired(
+                    list(argv), timeout, output=stdout, stderr=stderr
+                )
+            remaining_poll = min(remaining_poll, left)
+        try:
+            stdout, stderr = process.communicate(timeout=remaining_poll)
+            return stdout, stderr, False
+        except subprocess.TimeoutExpired:
+            pass
+
+        try:
+            current = str(progress_probe())
+        except Exception:
+            current = fingerprint
+        now = time.monotonic()
+        if current != fingerprint:
+            fingerprint, last_change = current, now
+        elif now - last_change >= idle_timeout:
+            _kill_process_group(process)
+            stdout, stderr = process.communicate()
+            return stdout, stderr, True
 
 
 def _kill_process_group(process: subprocess.Popen) -> None:
@@ -851,6 +952,36 @@ class SessionKeeper:
                 "attempt": action.attempt,
             }
         )
+
+
+def filesystem_activity_probe(root, ignore=(".git", "__pycache__")) -> Callable[[], str]:
+    """Newest modification time anywhere under ``root``.
+
+    Deliberately more permissive than :func:`git_progress_probe`. That one
+    decides whether a finished turn *achieved* anything and must stay strict.
+    This one decides whether a running turn is still alive, and during an hour of
+    training the only thing changing is an appended metrics file that no commit
+    or working-tree status reflects. Judging liveness by the strict probe would
+    cut the healthiest turns short.
+    """
+
+    base = Path(root)
+    skip = set(ignore)
+
+    def probe() -> str:
+        newest = 0.0
+        for directory, subdirectories, files in os.walk(base):
+            subdirectories[:] = [d for d in subdirectories if d not in skip]
+            for name in files:
+                try:
+                    stamp = os.stat(os.path.join(directory, name)).st_mtime
+                except OSError:
+                    continue
+                if stamp > newest:
+                    newest = stamp
+        return f"{newest:.0f}"
+
+    return probe
 
 
 def git_progress_probe(repo) -> Callable[[], str]:

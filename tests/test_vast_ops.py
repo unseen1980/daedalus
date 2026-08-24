@@ -277,3 +277,12 @@ def test_phase_four_prompt_compares_bpb_not_token_perplexity():
     assert "24,576" in prompt and "32,768" in prompt and "40,960" in prompt
     assert "do not adjust it after seeing the numbers" in prompt
     assert "/usr/local/bin/daedalus-approved" in prompt
+
+
+def test_session_keeper_bounds_a_turn_on_silence_as_well_as_lifetime():
+    wrapper = (ROOT / "ops/vast/daedalus_session_keeper.sh").read_text()
+    cli = (ROOT / "scripts/session_keeper.py").read_text()
+
+    assert "--idle-timeout-sec" in wrapper
+    # Liveness is filesystem activity: an hour of training changes no git state.
+    assert "filesystem_activity_probe" in cli

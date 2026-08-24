@@ -42,4 +42,5 @@ exec python -u scripts/session_keeper.py \
   --effort xhigh \
   --permission-mode dontAsk \
   --session-timeout-sec "${DAEDALUS_SESSION_TIMEOUT_SEC:-28800}" \
+  --idle-timeout-sec "${DAEDALUS_IDLE_TIMEOUT_SEC:-5400}" \
   --poll-interval-sec "${DAEDALUS_KEEPER_POLL_SEC:-60}"

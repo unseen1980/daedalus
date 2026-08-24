@@ -18,6 +18,7 @@ from daedalus.session_keeper import (
     KeeperPolicy,
     PlanGuard,
     SessionKeeper,
+    filesystem_activity_probe,
     git_progress_probe,
     supervised_job_probe,
 )
@@ -62,6 +63,9 @@ def build_keeper(args) -> SessionKeeper:
         effort=args.effort,
         permission_mode=args.permission_mode,
         timeout_sec=args.session_timeout_sec,
+        idle_timeout_sec=args.idle_timeout_sec,
+        progress_probe=filesystem_activity_probe(repo),
+        poll_interval_sec=args.idle_poll_sec,
     )
     return SessionKeeper(
         store=ProgramStateStore(args.state),
@@ -92,6 +96,8 @@ def main(argv=None) -> int:
     parser.add_argument("--effort", default="xhigh")
     parser.add_argument("--permission-mode", default="dontAsk")
     parser.add_argument("--session-timeout-sec", type=float, default=3600.0)
+    parser.add_argument("--idle-timeout-sec", type=float, default=5400.0)
+    parser.add_argument("--idle-poll-sec", type=float, default=120.0)
     parser.add_argument("--poll-interval-sec", type=float, default=60.0)
     parser.add_argument("--max-resume-attempts", type=int, default=3)
     parser.add_argument("--max-generations", type=int, default=2)

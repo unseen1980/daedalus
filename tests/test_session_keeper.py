@@ -1076,3 +1076,107 @@ class TestNestedSupervisedRuns:
         )
 
         assert supervised_job_probe(tmp_path)() is False
+
+
+class TestIdleBoundedTurn:
+    """A turn is bounded on silence, not only on lifetime."""
+
+    def _script(self, tmp_path: Path, body: str) -> Path:
+        script = tmp_path / "fake-claude"
+        script.write_text(f"#!/bin/bash\n{body}\n")
+        script.chmod(0o755)
+        return script
+
+    def test_a_silent_turn_is_cut_short_long_before_its_lifetime(self, tmp_path):
+        from daedalus.session_keeper import IDLE_EXIT_CODE, run_process_group
+
+        script = self._script(tmp_path, "sleep 120")
+        started = time.monotonic()
+
+        completed = run_process_group(
+            [str(script)],
+            cwd=str(tmp_path),
+            timeout=120.0,
+            idle_timeout=1.0,
+            progress_probe=lambda: "unchanged",
+            poll_interval=0.2,
+        )
+
+        assert completed.returncode == IDLE_EXIT_CODE
+        assert time.monotonic() - started < 15
+
+    def test_a_progressing_turn_runs_to_completion(self, tmp_path):
+        from daedalus.session_keeper import run_process_group
+
+        script = self._script(tmp_path, "sleep 2; echo done")
+        ticks = iter(range(1000))
+
+        completed = run_process_group(
+            [str(script)],
+            cwd=str(tmp_path),
+            timeout=60.0,
+            idle_timeout=1.0,
+            progress_probe=lambda: str(next(ticks)),
+            poll_interval=0.2,
+        )
+
+        assert completed.returncode == 0
+        assert "done" in completed.stdout
+
+    def test_the_lifetime_bound_still_applies(self, tmp_path):
+        from daedalus.session_keeper import run_process_group
+
+        script = self._script(tmp_path, "sleep 120")
+        ticks = iter(range(1000))
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_process_group(
+                [str(script)],
+                cwd=str(tmp_path),
+                timeout=1.5,
+                idle_timeout=60.0,
+                progress_probe=lambda: str(next(ticks)),
+                poll_interval=0.2,
+            )
+
+    def test_a_probe_that_raises_never_cuts_a_working_turn(self, tmp_path):
+        from daedalus.session_keeper import run_process_group
+
+        def broken():
+            raise RuntimeError("git missing")
+
+        script = self._script(tmp_path, "sleep 1; echo ok")
+
+        completed = run_process_group(
+            [str(script)],
+            cwd=str(tmp_path),
+            timeout=30.0,
+            idle_timeout=10.0,
+            progress_probe=broken,
+            poll_interval=0.2,
+        )
+
+        assert completed.returncode == 0
+
+    def test_an_idle_cut_is_reported_as_a_failure_with_its_reason(self, tmp_path):
+        from daedalus.session_keeper import IDLE_EXIT_CODE
+
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("work")
+
+        def runner(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, IDLE_EXIT_CODE, "", "")
+
+        launcher = ClaudeSessionLauncher(
+            repo=tmp_path,
+            prompt_path=prompt,
+            timeout_sec=100.0,
+            idle_timeout_sec=30.0,
+            progress_probe=lambda: "x",
+            runner=runner,
+        )
+
+        outcome = launcher.launch(LaunchRequest(phase="p", generation=1, attempt=1))
+
+        assert outcome.exit_code == IDLE_EXIT_CODE
+        assert "no recorded progress" in outcome.tail
