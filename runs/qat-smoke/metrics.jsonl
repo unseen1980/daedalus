@@ -1,0 +1,1 @@
+{"step": 0, "tokens": 0, "loss": NaN, "val_bpb": null, "lr": 0.0005, "tok_per_sec": 0.0, "elapsed_h": 0.00048137916458977593, "cost_usd": 0.0002161393341090944, "grad_norm": null, "peak_mem_GB": 0.0, "qat_active": 1, "skipped_updates": 1, "qat_rel_rmse": NaN, "qat_tensors": 103.0}
