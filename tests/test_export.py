@@ -220,6 +220,57 @@ def test_export_hf_model_roundtrip_matches_original_logits(tmp_path):
     assert torch.allclose(our_logits.float(), hf_logits.float(), atol=1e-4)
 
 
+def test_export_carries_a_qat_runs_master_weights_through_unchanged(tmp_path):
+    """The composition Phase 3 depends on, through the real export function.
+
+    `test_qat.py` proves `q4_0_qdq` is `llama-quantize`'s grid, and that fp16
+    storage does not move an already-on-grid weight. Neither says what
+    `export_hf_model` does with a checkpoint written *while QAT was active* --
+    and that is where the weights could be swapped for something else, because
+    under `parametrize` the module's `weight` attribute is the quantized view
+    and only `parametrizations.weight.original` is the trainable master.
+
+    Exporting the quantized view would not look wrong: it is on the grid, it
+    loads, and it converts. It would simply have thrown away the full-precision
+    master that the next recovery stage is supposed to continue from, and
+    silently re-quantized an already-quantized tensor.
+    """
+    from daedalus import qat
+    from daedalus.muon import build_optimizers
+    from train import save_checkpoint
+
+    cfg = PRESETS["tiny"]
+    torch.manual_seed(0)
+    model = Daedalus(cfg)
+    muon, adamw, _ = build_optimizers(model)
+
+    qat.enable_qat(model)
+    masters = {name: qat.master_weight(mod).detach().clone()
+               for name, mod, _ in qat.plan_qat(model)}
+    quantized_view = {name: dict(model.named_modules())[name].weight.detach().clone()
+                      for name in masters}
+    # The premise: the two really are different tensors here.
+    assert any(not torch.equal(masters[n], quantized_view[n]) for n in masters)
+
+    ckpt_path = save_checkpoint(str(tmp_path / "qat.pt"), model, muon, adamw,
+                                step=7, tokens_seen=1024, cfg=cfg)
+    out_dir = str(tmp_path / "hf")
+    export_hf_model(ckpt_path, "tiny", out_dir, dtype=torch.float32)
+
+    from safetensors.torch import load_file
+    exported = load_file(os.path.join(out_dir, "model.safetensors"))
+    hf_names = {"embed_tokens": "model.embed_tokens.weight"}
+
+    checked = 0
+    for name, master in masters.items():
+        hf_name = hf_names.get(name, f"model.{name}.weight")
+        if hf_name not in exported:
+            continue
+        assert torch.equal(exported[hf_name].float(), master.float()), hf_name
+        checked += 1
+    assert checked, "no QAT tensor was matched to an exported one"
+
+
 def test_export_hf_model_untied_head(tmp_path):
     """Same equivalence check, but for an untied-embeddings config -- a
     separate code path in to_hf_state_dict (no synthetic lm_head copy)."""
