@@ -1,10 +1,10 @@
 {
   "gpu": {
     "memory_total_mb": 24564,
-    "memory_used_mb": 398,
+    "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-24T11:25:52.287729Z",
+  "heartbeat_at": "2026-08-24T11:30:53.552705Z",
   "metrics": {},
   "phase": "bootstrap",
   "schema": 1,
