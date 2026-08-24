@@ -1,9 +1,9 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-24T11:45:57.876981Z`
+- Heartbeat: `2026-08-24T11:46:46.996661Z`
 - Phase: `phase2-evaluation`
 - Status: `running`
-- Source: `vast/daedalus-improvements-20260824` at `2c9a65d2ca5b`
+- Source: `vast/daedalus-improvements-20260824` at `de43359fc1be`
 
 ## Latest Metrics
 
