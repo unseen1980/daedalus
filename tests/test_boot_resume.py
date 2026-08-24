@@ -1,6 +1,12 @@
 """Tests for restarting an approved in-flight run after a box reboot."""
 
 import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _write_marker(tmp_path, **overrides):
@@ -155,3 +161,23 @@ def test_main_dry_run_reports_candidate_without_mutating(tmp_path, capsys):
         "candidate": str(run_dir),
     }
     assert json.loads((run_dir / "inflight.json").read_text())["boot_resumes"] == 0
+
+
+def test_script_executes_from_repo_root(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/boot_resume.py",
+            "--runs-root", str(tmp_path),
+            "--dry-run",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "status": "skipped",
+        "reason": "no_pending_runs",
+    }
