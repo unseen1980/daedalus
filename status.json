@@ -1,15 +1,15 @@
 {
   "gpu": {
     "memory_total_mb": 24564,
-    "memory_used_mb": 9,
-    "utilization_pct": 0
+    "memory_used_mb": 2432,
+    "utilization_pct": 65
   },
-  "heartbeat_at": "2026-08-24T13:51:44.452618Z",
+  "heartbeat_at": "2026-08-24T13:56:45.831126Z",
   "metrics": {},
   "phase": "phase2-evaluation",
   "schema": 1,
   "source_branch": "vast/daedalus-improvements-20260824",
-  "source_sha": "8e442152218d",
+  "source_sha": "3674cbe318ab",
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
   "updated_at": "2026-08-24T13:41:31.049369Z"
