@@ -1,0 +1,16 @@
+{
+  "gpu": {
+    "memory_total_mb": 24564,
+    "memory_used_mb": 9,
+    "utilization_pct": 0
+  },
+  "heartbeat_at": "2026-08-24T10:44:36.075557Z",
+  "metrics": {},
+  "phase": "bootstrap",
+  "schema": 1,
+  "source_branch": "vast/daedalus-improvements-20260824",
+  "source_sha": "451717a4e457",
+  "started_at": "2026-08-24T10:44:35.993665Z",
+  "status": "running",
+  "updated_at": "2026-08-24T10:44:36.013231Z"
+}
