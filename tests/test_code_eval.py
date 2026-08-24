@@ -338,21 +338,36 @@ def test_sandbox_does_not_inherit_the_parent_working_directory(tmp_path):
 # ------------------------------------------------------------------ scoring ---
 
 def _fake_problems():
+    """Problems in EvalPlus's *real* shape, not a convenient one.
+
+    The previous version of this fixture invented `test` as a bare assertion and
+    a `plus_test` key that EvalPlus does not ship. Every test built on it agreed
+    with the code, and none of them touched the schema -- which is how
+    `problem.get("test", "")` shipped with a default that turned an empty
+    program into a pass. The fields here are the ones the real loader returns:
+    `test` defines `check(candidate)` and does not call it, and the extended
+    suite is *inputs* whose expectations come from `canonical_solution`.
+    """
     return {
         "HumanEval/0": {
             "task_id": "HumanEval/0",
             "prompt": "def add(a, b):\n",
             "entry_point": "add",
-            "base_input": None,
-            "test": "assert add(1, 2) == 3\n",
-            "plus_test": "assert add(-1, 1) == 0\n",
+            "canonical_solution": "    return a + b\n",
+            "test": "def check(candidate):\n    assert candidate(1, 2) == 3\n",
+            "base_input": [[1, 2]],
+            "plus_input": [[-1, 1], [0, 0]],
+            "atol": 0,
         },
         "HumanEval/1": {
             "task_id": "HumanEval/1",
             "prompt": "def mul(a, b):\n",
             "entry_point": "mul",
-            "test": "assert mul(2, 3) == 6\n",
-            "plus_test": "assert mul(0, 5) == 0\n",
+            "canonical_solution": "    return a * b\n",
+            "test": "def check(candidate):\n    assert candidate(2, 3) == 6\n",
+            "base_input": [[2, 3]],
+            "plus_input": [[0, 5]],
+            "atol": 0,
         },
     }
 
@@ -518,3 +533,76 @@ def test_evalplus_is_importable_for_the_real_run():
     import evalplus
 
     assert evalplus is not None
+
+
+@pytest.mark.slow
+def test_the_real_evalplus_problems_carry_an_executable_test():
+    """The schema check that was missing, and cost a meaningless pass@1.
+
+    `evaluate_problems` read `problem["test"]`, a key EvalPlus does not ship.
+    The default was an empty string, so every syntactically valid generation ran
+    a program with no assertions in it, exited zero, and scored as a pass -- the
+    released 150M base model measured pass@1 = 1.0 on HumanEval+ while emitting
+    function bodies that were nothing but a repeated docstring.
+
+    Every other test in this file builds its own problems, so all of them agreed
+    with the code and none of them touched the real schema.
+    """
+    pytest.importorskip("evalplus", reason="evalplus absent")
+    from scripts.code_eval import load_problems, test_program_for
+
+    problems = load_problems("humaneval-plus", limit=3)
+
+    for task_id, problem in problems.items():
+        base = test_program_for(problem, "base")
+        assert base.strip(), (
+            f"{task_id} produced no base test program; problem keys were "
+            f"{sorted(problem)}")
+        # The exact defect: EvalPlus's `test` only *defines* check(candidate).
+        assert f"check({problem['entry_point']})" in base
+
+
+@pytest.mark.slow
+def test_the_reference_solution_passes_the_suites_it_defines():
+    """The oracle check. Nothing else here proves the suites can be passed.
+
+    A harness can fail two ways: score a wrong answer as right (the empty-test
+    bug) or score a right answer as wrong. Running EvalPlus's own canonical
+    solution through the real sandbox catches both -- it must pass base *and*
+    plus, and if it does not, no candidate's score means anything.
+    """
+    pytest.importorskip("evalplus", reason="evalplus absent")
+    from scripts.code_eval import load_problems, run_in_sandbox, test_program_for
+
+    problems = load_problems("humaneval-plus", limit=5)
+
+    for task_id, problem in problems.items():
+        reference = f"{problem['prompt']}{problem['canonical_solution']}"
+        for suite in ("base", "plus"):
+            verdict = run_in_sandbox(reference, test_program_for(problem, suite),
+                                     timeout_s=30.0)
+            assert verdict["status"] == "passed", (
+                f"{task_id} {suite}: the reference solution failed its own "
+                f"suite -- {verdict['category']}: {verdict['detail'][:400]}")
+
+
+@pytest.mark.slow
+def test_an_empty_bodied_solution_fails_the_real_base_suite():
+    """The generation that used to score pass@1 = 1.0 must now score zero.
+
+    The released 150M base model emitted a repeated signature and docstring with
+    no body. That parsed, so it ran, and with no assertions in the program it
+    exited zero and counted as a pass on every problem.
+    """
+    pytest.importorskip("evalplus", reason="evalplus absent")
+    from scripts.code_eval import load_problems, run_in_sandbox, test_program_for
+
+    problems = load_problems("humaneval-plus", limit=1)
+    task_id, problem = next(iter(problems.items()))
+    body_less = problem["prompt"]
+
+    verdict = run_in_sandbox(body_less, test_program_for(problem, "base"),
+                             timeout_s=30.0)
+
+    assert verdict["status"] == "failed", (
+        f"{task_id}: a solution with no function body passed the base suite")

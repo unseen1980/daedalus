@@ -373,6 +373,99 @@ def run_in_sandbox(solution: str, test_code: str, *,
 
 # ---------------------------------------------------------------- evaluation ---
 
+# The extended suite, as a differential test against the reference solution.
+# EvalPlus stores extra *inputs* and derives the expectations by running the
+# canonical solution, so the reference is executed here rather than a table of
+# expected outputs being trusted. `deepcopy` on every call is not paranoia: a
+# candidate that mutates its argument would otherwise hand the reference
+# different input and be scored against it.
+_PLUS_TEMPLATE = '''
+import copy as _copy, math as _math
+
+_reference_source = {reference}
+_reference_namespace = {{}}
+exec(_reference_source, _reference_namespace)
+_reference = _reference_namespace[{entry_point!r}]
+
+
+def _equivalent(left, right, atol):
+    if isinstance(left, float) or isinstance(right, float):
+        if not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
+            return False
+        if _math.isnan(left) and _math.isnan(right):
+            return True
+        return _math.isclose(left, right, rel_tol=1e-09,
+                             abs_tol=atol if atol else 1e-09)
+    if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+        return (len(left) == len(right)
+                and all(_equivalent(a, b, atol) for a, b in zip(left, right)))
+    if isinstance(left, dict) and isinstance(right, dict):
+        return (set(left) == set(right)
+                and all(_equivalent(left[k], right[k], atol) for k in left))
+    return type(left) is type(right) and left == right
+
+
+def _run_plus_suite():
+    for _arguments in {inputs}:
+        _expected = _reference(*_copy.deepcopy(_arguments))
+        _actual = {entry_point}(*_copy.deepcopy(_arguments))
+        assert _equivalent(_actual, _expected, {atol}), (
+            "plus input {{!r}} gave {{!r}}, reference gives {{!r}}".format(
+                _arguments, _actual, _expected))
+
+
+_run_plus_suite()
+'''
+
+
+def test_program_for(problem: dict, suite: str) -> str:
+    """The assertions to run after a candidate solution, for `base` or `plus`.
+
+    This function exists because reading a test out of the problem dict with a
+    default was catastrophic: EvalPlus ships no `test` key, the default was an
+    empty string, and a program with no assertions in it exits zero and scores
+    as a pass. Every generation that merely parsed measured pass@1 = 1.0.
+
+    So there is no default. A problem that cannot produce assertions raises.
+    """
+
+    entry_point = problem.get("entry_point")
+    if not entry_point:
+        raise ValueError(f"problem has no entry_point; keys are {sorted(problem)}")
+
+    if suite == "base":
+        # EvalPlus ships HumanEval's original `test` -- but it only *defines*
+        # `check(candidate)`. Appending it and stopping leaves a program with no
+        # assertions in it, which exits zero. Calling it is the whole fix.
+        test = (problem.get("test") or "").strip()
+        if not test:
+            raise ValueError(
+                f"problem {problem.get('task_id')!r} carries no base test; "
+                f"keys are {sorted(problem)}")
+        if "def check" not in test:
+            raise ValueError(
+                f"problem {problem.get('task_id')!r} base test defines no "
+                "check(); this is not the schema this harness knows")
+        return f"{test}\n\ncheck({entry_point})\n"
+
+    if suite != "plus":
+        raise ValueError(f"unknown suite {suite!r}; expected 'base' or 'plus'")
+
+    # The extended suite is inputs only -- EvalPlus derives expectations by
+    # running the reference. So do the same, in-process, and compare.
+    inputs = problem.get("plus_input")
+    canonical = problem.get("canonical_solution")
+    prompt = problem.get("prompt")
+    if not inputs or canonical is None or prompt is None:
+        raise ValueError(
+            f"problem {problem.get('task_id')!r} has no plus inputs or no "
+            f"reference to derive expectations from; keys are {sorted(problem)}")
+    reference = f"{prompt}{canonical}"
+    return _PLUS_TEMPLATE.format(
+        reference=repr(reference), entry_point=entry_point,
+        inputs=repr(list(inputs)), atol=repr(float(problem.get("atol") or 0.0)))
+
+
 def evaluate_problems(problems: Dict[str, dict], backend, *,
                       timeout_s: float = DEFAULT_TIMEOUT_S,
                       memory_mb: int = DEFAULT_MEMORY_MB) -> List[dict]:
@@ -385,15 +478,17 @@ def evaluate_problems(problems: Dict[str, dict], backend, *,
         solution = extract_code(prompt, completion)
         syntax_valid, syntax_message = check_syntax(solution)
 
-        base = run_in_sandbox(solution, problem.get("test", ""),
+        # No `.get(..., "")` here, ever. A missing suite must stop the run, not
+        # become an empty program that exits zero and scores as a pass.
+        base = run_in_sandbox(solution, test_program_for(problem, "base"),
                               timeout_s=timeout_s, memory_mb=memory_mb)
         base_passed = int(base["status"] == "passed")
         plus_passed = 0
         plus = None
-        if base_passed and problem.get("plus_test"):
+        if base_passed:
             # EvalPlus's rule: the extended suite only counts on top of a
             # passing base suite, so `plus` can never exceed `base`.
-            plus = run_in_sandbox(solution, problem["plus_test"],
+            plus = run_in_sandbox(solution, test_program_for(problem, "plus"),
                                   timeout_s=timeout_s, memory_mb=memory_mb)
             plus_passed = int(plus["status"] == "passed")
 
