@@ -34,10 +34,21 @@ more than 1 point absolute at any depth" is 0.01 on the 0-1 exact-match scale,
 but the baseline was measured at 10 items per depth, where one item is 0.10.
 As written the gate therefore admits only *exact equality* -- it is not a
 1-point tolerance, it is a zero-tolerance gate wearing one. `RETRIEVAL_PER_DEPTH`
-raises the item count so a point is a measurable quantity, and the baseline is
-re-measured at the same count. Doing this before any probe runs is the whole
-point; doing it afterwards would be exactly the threshold-tuning the phase
-forbids.
+raises the item count to 100, the smallest count at which one item is one
+point, and the baseline is re-measured at the same count. Doing this before any
+probe runs is the whole point; doing it afterwards would be exactly the
+threshold-tuning the phase forbids.
+
+That makes the gate *arithmetically expressible*. It does not make a 1-point
+difference *statistically resolvable*, and the distinction should not be
+glossed: at 100 items and an exact-match rate near 0.85, binomial sampling
+noise alone is about 3.6 points, so a 1-point move is well inside it.
+Resolving one point would need thousands of items per depth, which this phase
+has no budget for. So what the retrieval gate can honestly do here is catch a
+*large* regression -- a model that stopped retrieving -- and what it cannot do
+is certify that retrieval is unchanged to within a point. Verdicts report the
+observed drop next to that limit rather than implying a precision the
+measurement does not have.
 """
 
 from __future__ import annotations
@@ -568,6 +579,13 @@ def build_preregistration(baseline: Baseline, *, init_from: str,
                 "1-point gate could only ever be satisfied by exact equality. "
                 "The baseline is re-measured at this count so the comparison "
                 "is like for like."),
+            "resolution_caveat": (
+                "100 items makes a 1-point gate expressible, not resolvable. "
+                "At an exact-match rate near 0.85 binomial noise alone is "
+                "~3.6 points, so this gate can catch a model that stopped "
+                "retrieving and cannot certify retrieval is unchanged to "
+                "within a point. Resolving one point would need thousands of "
+                "items per depth, which this phase has no budget for."),
         },
     }
 
