@@ -101,7 +101,6 @@ _VALUE_WORDS = (
     "yeoman", "zenith", "abbey", "burrow", "cavern", "delve", "estuary", "furrow",
     "gorge", "hamlet", "inlet", "junction", "knoll", "lagoon", "moor", "narrows",
 )
-_WORDS = _KEY_WORDS
 
 
 @dataclass
@@ -296,7 +295,7 @@ def make_copy_control_items(tokenizer, *, per_item: int = 8,
     rng = random.Random(seed ^ 0x0C09)
     items: List[RetrievalItem] = []
     for index in range(per_item):
-        phrase = " ".join(rng.sample(_WORDS, 3))
+        phrase = " ".join(rng.sample(_KEY_WORDS, 3))
         prompt = f"{_COPY_HEADER}{phrase}{_COPY_QUESTION}"
         items.append(RetrievalItem(
             id=f"copy-control-{index}",
