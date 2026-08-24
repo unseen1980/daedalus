@@ -1,11 +1,13 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-24T20:43:28.363965Z`
-- Phase: `phase4-token-name-check`
-- Status: `passed`
-- Source: `vast/daedalus-improvements-20260824` at `16c1fda66d02`
-- Elapsed: `9.98h` of `144.0h`
-- Finalization window opens in: `126.02h`
+> **Action required.** see the phase timeline
+
+- Heartbeat: `2026-08-24T20:48:31.097388Z`
+- Phase: `phase4-sample`
+- Status: `halted`
+- Source: `vast/daedalus-improvements-20260824` at `a13ca58f6b5c`
+- Elapsed: `10.07h` of `144.0h`
+- Finalization window opens in: `125.93h`
 - Deadline stage: `active`
 
 ## Latest Metrics
