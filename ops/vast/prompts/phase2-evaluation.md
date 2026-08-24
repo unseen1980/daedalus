@@ -34,3 +34,34 @@ controller to `phase3-qat-recovery`.
 Run the focused checks before every commit. All shell, test, Git, PR, hash,
 phase, and log actions must go through `/usr/local/bin/daedalus-approved`. Push
 every tested commit to the active source branch immediately.
+
+## Open gate finding: the code sandbox does not yet hold
+
+`scripts/code_eval.py` blocks Python-level network calls, but the gate claim is
+that executed code reaches neither the network nor files outside its sandbox,
+and today it can do both:
+
+- The child runs as root with `PATH=/usr/bin:/bin`, so `subprocess.run(["curl",
+  ...])` or `os.system` reaches the network without touching the patched
+  `socket` module, and any absolute path works even with `PATH` emptied.
+- Running as root, the child can read `/root/daedalus` checkpoints and the
+  mode-0600 credential files under `/root/.config/daedalus`, and can write
+  anywhere in the repository.
+
+`unshare -n` is unavailable here: this container lacks the capability and the
+call fails with `unshare failed: Operation not permitted`. Do not build the fix
+on network namespaces.
+
+Close it by dropping the child to an unprivileged uid and gid in the existing
+`preexec_fn` (the parent is root, so `os.setgid` then `os.setuid` works),
+chowning the per-item working directory to that uid so the candidate can still
+write its own scratch files, and refusing to run at all if the drop did not take
+effect. Harden the preamble alongside it so `subprocess`, `os.system`, and the
+`os.exec*` family raise the same blocked-access error as the socket calls, and
+categorise that refusal distinctly from a network block.
+
+Add executable regression tests that fail on the current behaviour: a candidate
+that shells out to a network client is refused, a candidate that reads a
+root-owned mode-0600 file outside the sandbox is refused, and a candidate that
+writes outside its working directory is refused. A test that only asserts the
+socket patch is not evidence for this gate.
