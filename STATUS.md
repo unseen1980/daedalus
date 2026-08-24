@@ -1,13 +1,11 @@
 # Daedalus Vast Program Status
 
-> **Action required.** see the phase timeline
-
-- Heartbeat: `2026-08-24T20:48:31.097388Z`
-- Phase: `phase4-sample`
-- Status: `halted`
-- Source: `vast/daedalus-improvements-20260824` at `a13ca58f6b5c`
-- Elapsed: `10.07h` of `144.0h`
-- Finalization window opens in: `125.93h`
+- Heartbeat: `2026-08-24T20:53:32.846570Z`
+- Phase: `phase4-incumbent-bytes`
+- Status: `passed`
+- Source: `vast/daedalus-improvements-20260824` at `05c265fe9f43`
+- Elapsed: `10.15h` of `144.0h`
+- Finalization window opens in: `125.85h`
 - Deadline stage: `active`
 
 ## Latest Metrics
