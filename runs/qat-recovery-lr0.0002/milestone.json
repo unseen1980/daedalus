@@ -1,0 +1,14 @@
+{
+  "revision": "qat-recovery-lr0.0002-stable-end-step38",
+  "step": 38,
+  "tokens_seen": 19922944,
+  "total_steps": 191,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.0002,
+  "adam_lr": 3e-06,
+  "config": "daedalus-150m",
+  "repo": null,
+  "path_in_repo": "milestone/qat-recovery-lr0.0002/checkpoint.pt",
+  "created_at": 1787586390.7938087
+}
