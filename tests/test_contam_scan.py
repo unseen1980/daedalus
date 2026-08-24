@@ -240,7 +240,11 @@ def test_scan_source_finds_a_planted_document_and_leaves_clean_ones_alone(tmp_pa
 
     idx = {"filtered": set(), "split_gap": set(),
            "limit_gap": ngram_set(" ".join(marker[:20]), 13)}
-    res = CS.scan_source(str(d), _FakeTokenizer(vocab), idx, window=4096, k=1)
+    # min_available_gb=0: these tests exercise the scan's bookkeeping, not the
+    # host memory gate (which has its own test below). Without it they silently
+    # scan zero windows on any machine with under 6 GB free and fail.
+    res = CS.scan_source(str(d), _FakeTokenizer(vocab), idx, window=4096, k=1,
+                         min_available_gb=0)
     # The first document has no eos in front of it, so it is a head fragment
     # and is excluded -- the same rule that protects against classifying a
     # document the window only partly contains.
@@ -264,7 +268,8 @@ def test_scan_source_reads_across_several_shards(tmp_path):
 
     idx = {"filtered": set(), "split_gap": set(),
            "limit_gap": ngram_set(" ".join(marker[:20]), 13)}
-    res = CS.scan_source(str(d), _FakeTokenizer(vocab), idx, window=64, k=200)
+    res = CS.scan_source(str(d), _FakeTokenizer(vocab), idx, window=64, k=200,
+                         min_available_gb=0)
     assert res["docs_limit_gap"] == 1, "the planted late document was never read"
 
 
@@ -273,7 +278,7 @@ def test_scan_source_counts_excluded_edge_tokens(tmp_path):
     vocab = {w: i + 1 for i, w in enumerate(words)}
     d = _write_source(tmp_path, [words[:20] for _ in range(20)], vocab)
     res = CS.scan_source(str(d), _FakeTokenizer(vocab), {"filtered": set()},
-                         window=64, k=3)
+                         window=64, k=3, min_available_gb=0)
     assert res["tokens_excluded"] > 0
     assert res["tokens_excluded"] < res["tokens_scanned"]
     assert res["doc_tokens"] + res["tokens_excluded"] <= res["tokens_scanned"]
