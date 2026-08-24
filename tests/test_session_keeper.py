@@ -1,0 +1,562 @@
+"""Bounded relaunch behaviour for unattended Claude engineering sessions."""
+
+import json
+import subprocess
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from daedalus.program_state import ProgramDeadline, ProgramStateStore
+from daedalus.session_keeper import (
+    ClaudeSessionLauncher,
+    KeeperAction,
+    KeeperPolicy,
+    KeeperState,
+    LaunchOutcome,
+    LaunchRequest,
+    SessionKeeper,
+    decide,
+    remaining_backoff,
+)
+
+
+START = datetime(2026, 8, 24, 10, 0, tzinfo=timezone.utc)
+POLICY = KeeperPolicy()
+DEADLINE = ProgramDeadline(started_at=START)
+
+
+def program_state(**overrides) -> dict:
+    state = {
+        "schema": 1,
+        "started_at": START.isoformat().replace("+00:00", "Z"),
+        "updated_at": START.isoformat().replace("+00:00", "Z"),
+        "base_sha": "abc123",
+        "hard_hours": 144.0,
+        "reserve_hours": 8.0,
+        "phase": "phase2-evaluation",
+        "status": "running",
+        "details": {},
+    }
+    state.update(overrides)
+    return state
+
+
+def decision(keeper_state: KeeperState, *, now=None, **state_overrides) -> KeeperAction:
+    return decide(
+        program_state=program_state(**state_overrides),
+        keeper_state=keeper_state,
+        now=now or START + timedelta(hours=1),
+        deadline=DEADLINE,
+        policy=POLICY,
+    )
+
+
+class TestDecide:
+    def test_starts_a_fresh_session_for_a_new_phase(self):
+        action = decision(KeeperState())
+
+        assert action.kind == "launch"
+        assert action.resume_session_id is None
+        assert (action.generation, action.attempt) == (1, 1)
+
+    def test_resets_to_a_fresh_session_when_the_phase_changes(self):
+        state = KeeperState(
+            phase="phase1-control-plane",
+            session_id="old-session",
+            generation=2,
+            attempt=3,
+            consecutive_failures=3,
+        )
+
+        action = decision(state)
+
+        assert action.kind == "launch"
+        assert action.reason == "new phase"
+        assert action.resume_session_id is None
+        assert (action.generation, action.attempt) == (1, 1)
+
+    def test_resumes_the_same_session_for_a_repair_continuation(self):
+        state = KeeperState(
+            phase="phase2-evaluation",
+            session_id="s-1",
+            attempt=1,
+            consecutive_failures=1,
+            last_exit_at=(START - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+        )
+
+        action = decision(state)
+
+        assert action.kind == "launch"
+        assert action.resume_session_id == "s-1"
+        assert action.attempt == 2
+
+    def test_escalates_to_an_independent_session_after_spent_continuations(self):
+        state = KeeperState(
+            phase="phase2-evaluation",
+            session_id="s-1",
+            attempt=POLICY.max_resume_attempts,
+            consecutive_failures=POLICY.max_resume_attempts,
+            last_exit_at=(START - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+        )
+
+        action = decision(state)
+
+        assert action.kind == "launch"
+        assert action.reason == "independent review session"
+        assert action.resume_session_id is None
+        assert (action.generation, action.attempt) == (2, 1)
+
+    def test_blocks_after_every_independent_session_fails(self):
+        state = KeeperState(
+            phase="phase2-evaluation",
+            session_id="s-2",
+            generation=POLICY.max_generations,
+            attempt=POLICY.max_resume_attempts,
+            consecutive_failures=POLICY.max_resume_attempts,
+            last_exit_at=(START - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+        )
+
+        action = decision(state)
+
+        assert action.kind == "block"
+        assert "repair continuations failed" in action.reason
+
+    def test_a_recorded_blocker_is_never_relaunched_through(self):
+        state = KeeperState(phase="phase2-evaluation", blocked_reason="hard blocker")
+
+        action = decision(state)
+
+        assert action == KeeperAction(
+            kind="block", reason="hard blocker", generation=1, attempt=0
+        )
+
+    @pytest.mark.parametrize("status", ["complete", "halted", "blocked", "failed"])
+    def test_terminal_program_status_stops_supervision(self, status):
+        action = decision(KeeperState(), status=status)
+
+        assert action.kind == "stop"
+        assert status in action.reason
+
+    def test_no_engineering_session_starts_inside_the_finalization_window(self):
+        now = START + timedelta(hours=137)
+
+        action = decision(KeeperState(), now=now)
+
+        assert action.kind == "stop"
+        assert action.reason == "deadline stage finalizing"
+
+    def test_no_engineering_session_starts_after_the_hard_deadline(self):
+        now = START + timedelta(hours=145)
+
+        action = decision(KeeperState(), now=now)
+
+        assert action.kind == "stop"
+        assert action.reason == "deadline stage expired"
+
+    def test_waits_while_no_phase_is_active(self):
+        action = decision(KeeperState(), phase="not_started")
+
+        assert action.kind == "wait"
+        assert action.wait_seconds == POLICY.backoff_base_sec
+
+    def test_waits_out_the_exponential_backoff_before_relaunching(self):
+        exited = START + timedelta(hours=1)
+        state = KeeperState(
+            phase="phase2-evaluation",
+            session_id="s-1",
+            attempt=1,
+            consecutive_failures=2,
+            last_exit_at=exited.isoformat().replace("+00:00", "Z"),
+        )
+
+        action = decision(state, now=exited + timedelta(seconds=10))
+
+        assert action.kind == "wait"
+        assert action.wait_seconds == pytest.approx(POLICY.backoff_for(2) - 10)
+
+
+class TestBackoff:
+    def test_backoff_grows_exponentially_and_stays_finite(self):
+        policy = KeeperPolicy(backoff_base_sec=30.0, backoff_cap_sec=600.0)
+
+        assert policy.backoff_for(0) == 0.0
+        assert policy.backoff_for(1) == 30.0
+        assert policy.backoff_for(2) == 60.0
+        assert policy.backoff_for(3) == 120.0
+        assert policy.backoff_for(20) == 600.0
+
+    def test_a_first_attempt_owes_no_backoff(self):
+        assert remaining_backoff(KeeperState(), START, POLICY) == 0.0
+
+
+class TestKeeperState:
+    def test_round_trips_through_a_dictionary(self):
+        state = KeeperState(phase="phase2-evaluation", session_id="s-1", launches=4)
+
+        assert KeeperState.from_dict(state.to_dict()) == state
+
+    def test_ignores_unknown_persisted_fields(self):
+        payload = KeeperState(phase="p").to_dict()
+        payload["field_from_a_future_schema"] = True
+
+        assert KeeperState.from_dict(payload).phase == "p"
+
+
+class TestLauncherArgv:
+    def _launcher(self, tmp_path: Path, **kwargs) -> ClaudeSessionLauncher:
+        prompt = tmp_path / "phase2.md"
+        prompt.write_text("do the phase 2 slice")
+        return ClaudeSessionLauncher(repo=tmp_path, prompt_path=prompt, **kwargs)
+
+    def test_runs_non_interactively_on_opus_at_xhigh_effort(self, tmp_path):
+        argv = list(
+            self._launcher(tmp_path).build_argv(
+                LaunchRequest(phase="phase2-evaluation", generation=1, attempt=1)
+            )
+        )
+
+        assert argv[:2] == ["claude", "-p"]
+        assert argv[1 + argv.index("-p")] == "do the phase 2 slice"
+        assert argv[argv.index("--model") + 1] == "opus"
+        assert argv[argv.index("--effort") + 1] == "xhigh"
+        assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+        assert "--resume" not in argv
+
+    def test_a_continuation_resumes_the_recorded_session(self, tmp_path):
+        argv = list(
+            self._launcher(tmp_path).build_argv(
+                LaunchRequest(
+                    phase="phase2-evaluation",
+                    generation=1,
+                    attempt=2,
+                    resume_session_id="s-1",
+                )
+            )
+        )
+
+        assert argv[argv.index("--resume") + 1] == "s-1"
+
+    def test_the_versioned_plan_is_appended_as_a_system_prompt(self, tmp_path):
+        plan = tmp_path / "plan.md"
+        plan.write_text("plan")
+
+        argv = list(
+            self._launcher(tmp_path, system_prompt_path=plan).build_argv(
+                LaunchRequest(phase="phase2-evaluation", generation=1, attempt=1)
+            )
+        )
+
+        assert argv[argv.index("--append-system-prompt-file") + 1] == str(plan)
+
+    def test_a_continuation_carries_the_explicit_failure_context(self, tmp_path):
+        prompt = self._launcher(tmp_path).build_prompt(
+            LaunchRequest(
+                phase="phase2-evaluation",
+                generation=1,
+                attempt=2,
+                resume_session_id="s-1",
+                failure_context="exit=1 pytest collection error",
+            )
+        )
+
+        assert "do the phase 2 slice" in prompt
+        assert "pytest collection error" in prompt
+        assert "Attempt 2 of generation 1" in prompt
+
+
+class TestLauncherExecution:
+    def _launcher(self, tmp_path: Path, runner) -> ClaudeSessionLauncher:
+        prompt = tmp_path / "phase2.md"
+        prompt.write_text("slice")
+        return ClaudeSessionLauncher(
+            repo=tmp_path, prompt_path=prompt, runner=runner, timeout_sec=5.0
+        )
+
+    def test_reports_the_session_id_claude_printed(self, tmp_path):
+        def runner(argv, **kwargs):
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps({"session_id": "s-9", "is_error": False}), stderr=""
+            )
+
+        outcome = self._launcher(tmp_path, runner).launch(
+            LaunchRequest(phase="p", generation=1, attempt=1)
+        )
+
+        assert outcome == LaunchOutcome(exit_code=0, session_id="s-9", tail="")
+
+    def test_keeps_the_resumed_session_id_when_output_is_unparsable(self, tmp_path):
+        def runner(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 1, stdout="not json", stderr="boom")
+
+        outcome = self._launcher(tmp_path, runner).launch(
+            LaunchRequest(phase="p", generation=1, attempt=2, resume_session_id="s-1")
+        )
+
+        assert (outcome.exit_code, outcome.session_id, outcome.tail) == (1, "s-1", "boom")
+
+    def test_a_hung_session_times_out_instead_of_blocking_the_program(self, tmp_path):
+        def runner(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, 5.0)
+
+        outcome = self._launcher(tmp_path, runner).launch(
+            LaunchRequest(phase="p", generation=1, attempt=1)
+        )
+
+        assert outcome.exit_code == 124
+        assert "timeout" in outcome.tail
+
+    def test_a_missing_claude_binary_is_reported_not_raised(self, tmp_path):
+        def runner(argv, **kwargs):
+            raise OSError("No such file or directory")
+
+        outcome = self._launcher(tmp_path, runner).launch(
+            LaunchRequest(phase="p", generation=1, attempt=1)
+        )
+
+        assert outcome.exit_code == 127
+        assert "could not launch Claude" in outcome.tail
+
+
+class RecordingLauncher:
+    """Launcher stub that returns queued outcomes and records every request."""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.requests = []
+
+    def launch(self, request: LaunchRequest) -> LaunchOutcome:
+        self.requests.append(request)
+        return self.outcomes.pop(0) if self.outcomes else LaunchOutcome(exit_code=0)
+
+
+@pytest.fixture()
+def keeper_environment(tmp_path):
+    store = ProgramStateStore(tmp_path / "state.json")
+    store.initialize(started_at=START, base_sha="abc123")
+    store.transition(phase="phase2-evaluation", status="running", now=START)
+    return store, tmp_path / "keeper.json"
+
+
+def build_keeper(store, keeper_path, launcher, *, progress, now=None, policy=POLICY):
+    return SessionKeeper(
+        store=store,
+        keeper_state_path=keeper_path,
+        launcher=launcher,
+        policy=policy,
+        progress_probe=lambda: progress[0],
+        clock=lambda: now or START + timedelta(hours=1),
+        sleeper=lambda seconds: None,
+    )
+
+
+class TestSessionKeeperStep:
+    def test_a_progressing_session_clears_the_retry_budget(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        progress = ["sha-1"]
+        launcher = RecordingLauncher([LaunchOutcome(exit_code=0, session_id="s-1")])
+
+        def advance(request):
+            progress[0] = "sha-2"
+            return LaunchOutcome(exit_code=0, session_id="s-1")
+
+        launcher.launch = advance
+        keeper = build_keeper(store, keeper_path, launcher, progress=progress)
+
+        action = keeper.step()
+        state = keeper.load_state()
+
+        assert action.kind == "launch"
+        assert state.consecutive_failures == 0
+        assert state.session_id is None
+        assert state.progress_fingerprint == "sha-2"
+
+    def test_a_clean_exit_without_progress_counts_as_a_failure(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        progress = ["sha-1"]
+        launcher = RecordingLauncher([LaunchOutcome(exit_code=0, session_id="s-1")])
+        keeper = build_keeper(store, keeper_path, launcher, progress=progress)
+
+        keeper.step()
+        state = keeper.load_state()
+
+        assert state.consecutive_failures == 1
+        assert state.session_id == "s-1"
+        assert "progressed=False" in state.last_failure
+
+    def test_a_failing_session_is_resumed_with_its_own_identifier(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        progress = ["sha-1"]
+        launcher = RecordingLauncher(
+            [
+                LaunchOutcome(exit_code=1, session_id="s-1", tail="pytest failed"),
+                LaunchOutcome(exit_code=1, session_id="s-1", tail="pytest failed"),
+            ]
+        )
+        keeper = build_keeper(
+            store,
+            keeper_path,
+            launcher,
+            progress=progress,
+            policy=KeeperPolicy(backoff_base_sec=0.0),
+        )
+
+        keeper.step()
+        keeper.step()
+
+        assert launcher.requests[0].resume_session_id is None
+        assert launcher.requests[1].resume_session_id == "s-1"
+        assert "pytest failed" in launcher.requests[1].failure_context
+
+    def test_repeated_failures_end_in_a_recorded_hard_blocker(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        progress = ["sha-1"]
+        policy = KeeperPolicy(
+            max_resume_attempts=2, max_generations=2, backoff_base_sec=0.0
+        )
+        launcher = RecordingLauncher([LaunchOutcome(exit_code=1, session_id="s-1")] * 8)
+        keeper = build_keeper(
+            store, keeper_path, launcher, progress=progress, policy=policy
+        )
+
+        final = keeper.run(max_cycles=10)
+
+        assert final.kind == "block"
+        assert store.load()["status"] == "blocked"
+        assert store.load()["details"]["blocker"] == final.reason
+        assert keeper.load_state().blocked_reason == final.reason
+
+    def test_supervision_stops_cleanly_once_the_program_finishes(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        store.transition(phase="phase9-final", status="complete", now=START)
+        launcher = RecordingLauncher([])
+        keeper = build_keeper(store, keeper_path, launcher, progress=["sha-1"])
+
+        action = keeper.run(max_cycles=3)
+
+        assert action.kind == "stop"
+        assert launcher.requests == []
+
+    def test_every_launch_and_exit_reaches_the_durable_timeline(self, keeper_environment):
+        store, keeper_path = keeper_environment
+        launcher = RecordingLauncher([LaunchOutcome(exit_code=1, session_id="s-1")])
+        keeper = build_keeper(store, keeper_path, launcher, progress=["sha-1"])
+
+        keeper.step()
+
+        kinds = [
+            json.loads(line)["kind"]
+            for line in store.events_path.read_text().splitlines()
+        ]
+        assert kinds[-2:] == ["session_launch", "session_exit"]
+
+    def test_a_probe_failure_does_not_stop_supervision(self, keeper_environment):
+        store, keeper_path = keeper_environment
+
+        def broken_probe():
+            raise RuntimeError("git missing")
+
+        keeper = SessionKeeper(
+            store=store,
+            keeper_state_path=keeper_path,
+            launcher=RecordingLauncher([LaunchOutcome(exit_code=0, session_id="s-1")]),
+            progress_probe=broken_probe,
+            clock=lambda: START + timedelta(hours=1),
+            sleeper=lambda seconds: None,
+        )
+
+        action = keeper.step()
+
+        assert action.kind == "launch"
+        assert "probe-error" in keeper.load_state().progress_fingerprint
+
+
+class TestPromptResolution:
+    def _launcher(self, tmp_path: Path) -> ClaudeSessionLauncher:
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "phase2-evaluation.md").write_text("phase two work")
+        fallback = tmp_path / "default.md"
+        fallback.write_text("standing autonomy contract")
+        return ClaudeSessionLauncher(
+            repo=tmp_path, prompt_path=fallback, prompt_dir=prompts
+        )
+
+    def test_a_phase_with_its_own_prompt_uses_it(self, tmp_path):
+        launcher = self._launcher(tmp_path)
+
+        prompt = launcher.build_prompt(
+            LaunchRequest(phase="phase2-evaluation", generation=1, attempt=1)
+        )
+
+        assert prompt == "phase two work"
+
+    def test_a_phase_without_a_prompt_falls_back_to_the_standing_prompt(self, tmp_path):
+        launcher = self._launcher(tmp_path)
+
+        prompt = launcher.build_prompt(
+            LaunchRequest(phase="phase7-corpus", generation=1, attempt=1)
+        )
+
+        assert prompt == "standing autonomy contract"
+
+
+class TestCommandLine:
+    def _cli(self):
+        import importlib.util
+
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location(
+            "daedalus_session_keeper_cli", root / "scripts" / "session_keeper.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _program(self, tmp_path: Path) -> Path:
+        store = ProgramStateStore(tmp_path / "state.json")
+        store.initialize(started_at=datetime.now(timezone.utc), base_sha="abc123")
+        store.transition(
+            phase="phase2-evaluation",
+            status="running",
+            now=datetime.now(timezone.utc),
+        )
+        return tmp_path / "state.json"
+
+    def _argv(self, tmp_path: Path, state: Path, claude_bin: str) -> list:
+        return [
+            "--repo", str(tmp_path),
+            "--state", str(state),
+            "--keeper-state", str(tmp_path / "keeper.json"),
+            "--default-prompt", str(tmp_path / "default.md"),
+            "--claude-bin", claude_bin,
+            "--poll-interval-sec", "0",
+            "--max-cycles", "1",
+        ]
+
+    def test_a_missing_standing_prompt_fails_before_any_launch(self, tmp_path):
+        cli = self._cli()
+        state = self._program(tmp_path)
+
+        with pytest.raises(SystemExit):
+            cli.main(self._argv(tmp_path, state, "claude"))
+
+    def test_one_cycle_launches_the_configured_binary(self, tmp_path):
+        cli = self._cli()
+        state = self._program(tmp_path)
+        (tmp_path / "default.md").write_text("standing prompt")
+        marker = tmp_path / "launched.txt"
+        fake = tmp_path / "fake-claude"
+        fake.write_text(
+            "#!/bin/bash\n"
+            f'printf "%s\\n" "$@" > {marker}\n'
+            'echo \'{"session_id": "s-cli"}\'\n'
+        )
+        fake.chmod(0o755)
+
+        assert cli.main(self._argv(tmp_path, state, str(fake))) == 0
+
+        recorded = marker.read_text()
+        assert "standing prompt" in recorded
+        assert "--permission-mode" in recorded and "dontAsk" in recorded
+        assert json.loads((tmp_path / "keeper.json").read_text())["launches"] == 1

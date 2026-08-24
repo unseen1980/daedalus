@@ -162,3 +162,29 @@ def test_pr_status_script_renders_draft_commands_without_merge_or_close():
     assert "--draft" in text
     assert "pr merge" not in text
     assert "pr close" not in text
+
+def test_session_keeper_is_supervised_and_never_spins_on_a_hard_blocker():
+    wrapper = ROOT / "ops/vast/daedalus_session_keeper.sh"
+    subprocess.run(["bash", "-n", str(wrapper)], check=True)
+    text = wrapper.read_text()
+    config = (ROOT / "ops/vast/supervisord.conf").read_text()
+    installer = (ROOT / "ops/vast/install_supervisor.sh").read_text()
+
+    assert '. "${utils}/logging.sh" ""' in text
+    assert "scripts/session_keeper.py" in text
+    # The engineering session gets the Claude token only; runtime credentials
+    # stay with the approved wrapper.
+    assert "claude.env" in text
+    assert "runtime.env" not in text
+    assert "[program:daedalus_session_keeper]" in config
+    assert "command=/opt/supervisor-scripts/daedalus_session_keeper.sh" in config
+    assert "exitcodes=0,1" in config
+    assert "supervisorctl status daedalus_session_keeper" in installer
+
+
+def test_standing_engineering_prompt_carries_the_repair_contract():
+    prompt = (ROOT / "ops/vast/prompts/default.md").read_text()
+
+    assert "/usr/local/bin/daedalus-approved" in prompt
+    assert "focused" in prompt
+    assert "Do not ask" in prompt

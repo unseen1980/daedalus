@@ -15,7 +15,9 @@ def _timestamp(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
 
 
-def _write_json_atomic(path: Path, payload: dict) -> None:
+def write_json_atomic(path: Path, payload: dict) -> None:
+    """Replace ``path`` with ``payload`` so a crash never leaves a torn file."""
+
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     with temporary.open("w") as handle:
@@ -26,6 +28,10 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     os.replace(temporary, path)
 
 
+#: Retained for callers written before the helper became part of the API.
+_write_json_atomic = write_json_atomic
+
+
 class ProgramStateStore:
     """Atomic program snapshot accompanied by a durable event timeline."""
 
@@ -34,12 +40,19 @@ class ProgramStateStore:
         self.events_path = (Path(events_path) if events_path is not None
                             else self.state_path.with_name("events.jsonl"))
 
-    def _append_event(self, event: dict) -> None:
+    def append_event(self, event: dict) -> None:
+        """Append one durable, machine-parsable entry to the phase timeline."""
+
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
         with self.events_path.open("a") as handle:
             handle.write(json.dumps(event, sort_keys=True) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+
+    def _append_event(self, event: dict) -> None:
+        """Retained for callers written before the helper became part of the API."""
+
+        self.append_event(event)
 
     def load(self) -> dict:
         with self.state_path.open() as handle:
@@ -59,7 +72,7 @@ class ProgramStateStore:
             "status": "initialized",
             "details": {},
         }
-        _write_json_atomic(self.state_path, state)
+        write_json_atomic(self.state_path, state)
         self._append_event({
             "kind": "initialized",
             "at": _timestamp(started_at),
@@ -76,7 +89,7 @@ class ProgramStateStore:
             "updated_at": _timestamp(now),
             "details": dict(details or {}),
         })
-        _write_json_atomic(self.state_path, state)
+        write_json_atomic(self.state_path, state)
         self._append_event({
             "kind": "transition",
             "at": _timestamp(now),
@@ -92,7 +105,7 @@ class ProgramStateStore:
         state = self.load()
         state["base_sha"] = base_sha
         state["updated_at"] = _timestamp(now)
-        _write_json_atomic(self.state_path, state)
+        write_json_atomic(self.state_path, state)
         self._append_event({
             "kind": "base_sha_updated",
             "at": _timestamp(now),
