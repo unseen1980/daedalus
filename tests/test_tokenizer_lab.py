@@ -30,6 +30,7 @@ from scripts.tokenizer_lab import (
     rule_digest,
     source_budgets,
     split_for,
+    tokens_for_byte_budget,
     write_preregistration,
 )
 
@@ -97,13 +98,22 @@ def test_split_assignment_is_spread_across_all_three_splits():
 
 # ----------------------------------------------------------- probe commands ----
 
-def test_equal_byte_budget_is_derived_from_the_incumbent():
-    """The byte-matched protocol fixes the *text*, so the budget has to come
-    from one arm's fertility. It comes from the incumbent, because that is the
-    arm every candidate is being compared against."""
-    budget = equal_byte_budget(incumbent_bytes_per_token=4.0,
+def test_equal_byte_budget_is_sized_for_the_least_efficient_arm():
+    """One shard set has to serve both protocols. Under equal-tokens every arm
+    must have packed at least the token budget, and the arm with the highest
+    bytes-per-token packs the fewest tokens from a given number of bytes -- so
+    the budget is sized from that arm, not from the incumbent."""
+    budget = equal_byte_budget(max_bytes_per_token=4.2906,
                                tokens=LM_PROBE_TOKENS)
-    assert budget == int(LM_PROBE_TOKENS * 4.0)
+    assert budget > LM_PROBE_TOKENS * 4.2906
+    # Every arm measured on this sample, worst first. All must clear the
+    # equal-tokens budget: an exact product does not -- truncation alone leaves
+    # the worst arm one token short of 200,000,000.
+    for bytes_per_token in (4.2906, 4.2388, 4.1666, 4.0567):
+        assert tokens_for_byte_budget(
+            budget, bytes_per_token=bytes_per_token) >= LM_PROBE_TOKENS
+    assert tokens_for_byte_budget(int(LM_PROBE_TOKENS * 4.2906),
+                                  bytes_per_token=4.2906) < LM_PROBE_TOKENS
 
 
 def test_equal_byte_protocol_gives_each_arm_its_own_token_count():
@@ -394,6 +404,65 @@ def test_a_failing_run_still_reports_a_failure(tmp_path):
         cwd=root, capture_output=True, text=True)
     assert result.returncode != 0
     assert "written once" in result.stderr
+
+
+def test_the_addendum_cannot_be_written_once_an_arm_is_scored(tmp_path):
+    """The addendum records decisions the preregistration left open -- which
+    protocol the BPB clause reads, chiefly. Written before any BPB number
+    exists it is a preregistration; written after, it is a reading chosen to
+    suit the result, and there is no way to tell the two apart from the file.
+    So the guard is the scored directory."""
+    from scripts.tokenizer_lab import build_addendum, write_addendum
+
+    write_addendum(tmp_path, build_addendum())
+    assert json.loads((tmp_path / "addendum.json").read_text())["rule_digest"] \
+        == rule_digest()
+
+    (tmp_path / "scored").mkdir()
+    (tmp_path / "scored" / "32768-equal-bytes.json").write_text("{}")
+    with pytest.raises(PreregistrationError, match="already scored"):
+        write_addendum(tmp_path, build_addendum())
+
+
+def test_the_bpb_clause_reads_the_worse_protocol(tmp_path):
+    """Both protocols bias, in opposite directions, so a candidate that clears
+    the clause under only the favourable one has not shown an improvement."""
+    from scripts.tokenizer_lab import decide_from_artifacts
+
+    def _reading(vocab, bytes_per_token, q6k):
+        return {
+            "vocab_size": vocab,
+            "fertility": {d: {"bytes_per_token": bytes_per_token}
+                          for d in ("general", "math", "technical",
+                                    "dialogue", "code", "__all__")},
+            "embedding": {"q6_k_bytes": q6k},
+            "round_trip": {"passed": True},
+        }
+
+    (tmp_path / "measurements.json").write_text(json.dumps({
+        "32768": _reading(32768, 4.2, 100.0),
+        "24576": _reading(24576, 4.2, 60.0),
+        "40960": _reading(40960, 4.2, 130.0),
+        "49152-smollm2": _reading(49152, 4.0, 150.0),
+    }))
+    scored = tmp_path / "scored"
+    scored.mkdir()
+    for label, by_protocol in {
+            "49152-smollm2": {"equal-bytes": 1.0, "equal-tokens": 1.0},
+            # Wins on bytes, loses badly on tokens: the worse one decides.
+            "32768": {"equal-bytes": 0.99, "equal-tokens": 1.05},
+            "24576": {"equal-bytes": 1.20, "equal-tokens": 1.20},
+            "40960": {"equal-bytes": 1.00, "equal-tokens": 1.00}}.items():
+        for protocol, bpb in by_protocol.items():
+            (scored / f"{label}-{protocol}.json").write_text(json.dumps(
+                {"label": label, "protocol": protocol, "bpb": bpb}))
+
+    verdict = decide_from_artifacts(tmp_path)
+    measured = verdict["measured"]["32768"]
+    assert measured["tiny_bpb_delta_pct"] == pytest.approx(5.0)     # the worse
+    assert measured["tiny_bpb_delta_pct_by_protocol"]["equal-bytes"] == \
+        pytest.approx(-1.0)
+    assert verdict["selected"] == 40960          # the only one still clearing
 
 
 def test_the_rule_digest_changes_if_a_threshold_is_edited(monkeypatch):

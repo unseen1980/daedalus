@@ -58,6 +58,7 @@ from daedalus.tokenizer_train import (  # noqa: E402
     INCUMBENT_VOCAB_SIZE,
     RoundTripError,
     bytes_per_token,
+    round_trip_report,
     embedding_cost,
     identifier_fragmentation,
     kv_bytes_per_context_token,
@@ -644,7 +645,16 @@ def domain_texts(root, split: str) -> Dict[str, List[str]]:
 
 LM_PROBE_TOKENS = 200_000_000
 PROBE_SEQ_LEN = 1024
-PROBE_BATCH_TOKENS = 262_144
+# 131,072 tokens per step is ~1,526 steps at the probe budget. The shipped
+# 512k-token batch would leave 381, of which a 100-step warmup is a quarter --
+# a schedule short enough that the comparison would partly be a comparison of
+# how each vocabulary handles warmup.
+PROBE_BATCH_TOKENS = 131_072
+# 16, not 32: measured on this box, micro-batch 32 uncompiled peaked at 20.8 GB
+# of 24 and ran at 49.0k tok/s, while 16 compiled peaks at 9.2 GB and runs at
+# 91.4k. The step is the same 131,072 tokens either way -- only how many
+# accumulation passes it takes changes -- so this is throughput and headroom,
+# not a different experiment.
 PROBE_MICRO_BATCH = 16
 PROBE_MUON_LR = 0.02          # the shipped rate; these are from-scratch runs
 PROBE_ADAM_LR = 3e-4
@@ -657,17 +667,40 @@ def probe_config_name(vocab_size: int) -> str:
     return tokenizer_probe_preset_name(vocab_size)
 
 
-def equal_byte_budget(*, incumbent_bytes_per_token: float,
-                      tokens: int = LM_PROBE_TOKENS) -> int:
-    """The byte budget every arm reads under the byte-matched protocol.
+def equal_byte_budget(*, max_bytes_per_token: float,
+                      tokens: int = LM_PROBE_TOKENS,
+                      margin: float = 1.01) -> int:
+    """The byte budget every arm packs, shared by both protocols.
 
-    Derived from the incumbent because that is the arm every candidate is
-    measured against: fixing the text at what SmolLM2 reads in `tokens` tokens
-    keeps the incumbent's two protocol runs identical, so the pair of protocols
-    costs seven runs rather than eight and the incumbent cannot drift between
-    them.
+    Derived from the **least token-efficient** arm, which is the only choice
+    that lets one shard set serve both protocols. Under equal-bytes each arm
+    trains on all the tokens this many bytes produced for it; under
+    equal-tokens each trains on `tokens` of them. The second only works if
+    every arm packed at least `tokens`, and a vocabulary that packs more bytes
+    per token produces fewer of them -- so the budget has to be sized for the
+    worst case.
+
+    Sizing it from the incumbent instead (the obvious choice, since it is the
+    comparison arm) leaves the three arms with higher bytes-per-token short of
+    the equal-tokens budget. Measured on this sample that is 195.5M, 192.1M and
+    189.8M tokens against a 200M budget: not an error, just three arms quietly
+    re-reading data the others saw once.
+
+    `margin` covers two ways an exact budget lands just under. Truncation is
+    the small one: `int(200e6 * 4.2906) / 4.2906` is 199,999,999. The large one
+    is that bytes-per-token is measured on the **holdout** while the budget is
+    spent on **LM-train**, and those are different text. Measured here, every
+    arm's LM-train fertility ran 2.8-3.4% above its holdout fertility, so a 1%
+    margin left two arms short of the token budget -- 198.95M and 196.58M
+    against 200M.
+
+    A margin large enough to absorb that would have exceeded the LM-train split
+    itself, so `pack` spends the whole split instead and uses this only as the
+    floor a split has to clear to be usable at all. The default margin stays
+    small deliberately: it is a rounding allowance, not a substitute for
+    knowing the fertility of the text being spent.
     """
-    return int(tokens * incumbent_bytes_per_token)
+    return math.ceil(tokens * max_bytes_per_token * margin)
 
 
 def tokens_for_byte_budget(byte_budget: int, *, bytes_per_token: float) -> int:
@@ -679,13 +712,20 @@ def probe_train_command(*, vocab_size: int, data_dir: str, total_tokens: int,
                         run_name: str, protocol: str,
                         val_dir: Optional[str] = None, device: str = "cuda",
                         python: str = "python",
-                        no_compile: bool = True) -> List[str]:
+                        no_compile: bool = False) -> List[str]:
     """One arm's `train.py` argv.
 
     Built as data so "every arm differs only in vocabulary" is checkable by a
     test rather than by reading seven shell lines. No `--init-from` and no
     `--resume`: these are from-scratch runs, and Phase 3 measured twice what
     `--resume` does to a budget it thinks is already spent.
+
+    Compiled, unlike Phase 3's recovery arms. Those disabled compile because
+    QAT's fake-quant parametrization interacts with it
+    (`runs/preflight/qat-compile-lattice.md`); these probes run no QAT, and
+    compile is worth 1.86x here -- 91.4k tok/s against 49.0k, measured on this
+    box at this shape, which is the difference between a six-hour arm sweep and
+    an eleven-hour one.
     """
     if protocol not in ("equal-bytes", "equal-tokens"):
         raise ValueError(f"unknown protocol {protocol!r}")
@@ -710,6 +750,205 @@ def probe_train_command(*, vocab_size: int, data_dir: str, total_tokens: int,
     if no_compile:
         command += ["--no-compile"]
     return command
+
+
+# ================================================================ packing ====
+
+SHARD_TOKENS = 100_000_000
+# Whole batches to the Rust tokenizer instead of one document per call: 4.9
+# MB/s single-threaded against 24 cores otherwise sitting idle.
+PACK_BATCH_DOCUMENTS = 1000
+
+
+def pack_for_tokenizer(*, sample_root, tokenizer_path: str, vocab_size: int,
+                       label: str, out_root, byte_budget: int,
+                       log=print) -> dict:
+    """Tokenize the shared LM-train prefix and the whole holdout, one vocabulary.
+
+    Every arm packs *the same documents*: `read_split` walks sources in a fixed
+    order and the byte budget is identical, so the prefix is byte-identical
+    across arms and the token counts that come out are the whole difference
+    between them. That is what makes the byte-matched protocol a controlled
+    comparison rather than four runs on four corpora.
+
+    Three holdout layouts are written because three questions are asked of it:
+    `holdout-all` is one flat directory whose BPB is a single number directly
+    comparable across arms; `holdout/<domain>` gives the per-domain breakdown
+    the report needs; and both carry the tokenizer fingerprint, so a later pass
+    that points the wrong vocabulary at them is refused rather than silently
+    scored.
+    """
+    from daedalus.data import get_tokenizer, tokenize_and_pack
+
+    tokenizer = get_tokenizer(tokenizer_path)
+    if tokenizer.vocab_size != vocab_size:
+        raise ValueError(
+            f"{tokenizer_path} has {tokenizer.vocab_size} tokens, not "
+            f"{vocab_size}; packing under it would produce ids the "
+            f"{vocab_size}-row embedding cannot index")
+
+    # Keyed by label, not by vocabulary size: `49152-matched` and
+    # `49152-smollm2` share a size and are different tokenizers, so a
+    # size-keyed directory would have one silently overwrite the other.
+    out_root = Path(out_root) / label
+    summary: Dict[str, dict] = {}
+
+    def budgeted(split: str, budget: Optional[int]) -> Iterator[str]:
+        spent = 0
+        for _key, text in read_split(sample_root, split):
+            yield text
+            spent += len(text.encode("utf-8"))
+            if budget is not None and spent >= budget:
+                return
+
+    started = time.monotonic()
+    summary["train"] = tokenize_and_pack(
+        tokenizer, budgeted("lm-train", byte_budget), str(out_root / "train"),
+        shard_tokens=SHARD_TOKENS, tokenizer_name=tokenizer_path,
+        batch_documents=PACK_BATCH_DOCUMENTS,
+        manifest_extra={"split": "lm-train", "byte_budget": byte_budget})
+    log(f"  {label} train: {summary['train']['total_tokens']:,} tokens "
+        f"from {byte_budget/1e6:.1f} MB "
+        f"({byte_budget / summary['train']['total_tokens']:.4f} bytes/token) "
+        f"in {time.monotonic() - started:.0f}s")
+
+    summary["holdout-all"] = tokenize_and_pack(
+        tokenizer, (text for _key, text in read_split(sample_root, "holdout")),
+        str(out_root / "holdout-all"), shard_tokens=SHARD_TOKENS,
+        tokenizer_name=tokenizer_path, batch_documents=PACK_BATCH_DOCUMENTS,
+        manifest_extra={"split": "holdout"})
+
+    per_domain = {}
+    for domain, texts in domain_texts(sample_root, "holdout").items():
+        per_domain[domain] = tokenize_and_pack(
+            tokenizer, texts, str(out_root / "holdout" / domain),
+            shard_tokens=SHARD_TOKENS, tokenizer_name=tokenizer_path,
+            batch_documents=PACK_BATCH_DOCUMENTS,
+            manifest_extra={"split": "holdout", "domain": domain})
+    summary["holdout-by-domain"] = {
+        domain: record["total_tokens"] for domain, record in per_domain.items()}
+
+    summary["vocab_size"] = vocab_size
+    summary["label"] = label
+    summary["tokenizer"] = tokenizer_path
+    summary["byte_budget"] = byte_budget
+    summary["measured_bytes_per_token"] = (
+        byte_budget / summary["train"]["total_tokens"])
+    (out_root / "pack-summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True, default=str) + "\n")
+    return summary
+
+
+# ================================================================= probing ===
+
+def probe_run_name(label: str, protocol: str) -> str:
+    return f"tok-probe-{label}-{protocol}"
+
+
+def launch_probe(*, vocab_size: int, label: str, protocol: str, shard_root,
+                 tokenizer_path: str, device: str = "cuda",
+                 run_root: str = "runs", max_attempts: int = 3,
+                 stall_min: float = 20.0) -> dict:
+    """Run one arm under the existing watchdog + resume supervisor.
+
+    Token budget by protocol, and the asymmetry is the point:
+
+    - `equal-tokens` gives every arm `LM_PROBE_TOKENS`, so every arm takes the
+      same steps at the same batch shape and does the same non-embedding work.
+      The arms then differ in how much *text* that buys, which favours the
+      larger vocabulary.
+    - `equal-bytes` gives each arm exactly the tokens its own vocabulary
+      produced from the shared byte prefix, so every arm reads the same text.
+      The arms then differ in step count, which favours the smaller vocabulary.
+
+    Neither is neutral, so both are run and a candidate that wins under only
+    one of them is reported as exactly that.
+    """
+    from daedalus.supervise import run_with_resume, start_watchdog, stop_watchdog
+
+    shard_dir = Path(shard_root) / label / "train"
+    manifest = json.loads((shard_dir / "manifest.json").read_text())
+    packed_tokens = int(manifest["total_tokens"])
+    total_tokens = (packed_tokens if protocol == "equal-bytes"
+                    else LM_PROBE_TOKENS)
+    if protocol == "equal-tokens" and packed_tokens < LM_PROBE_TOKENS:
+        raise ValueError(
+            f"{label} packed only {packed_tokens:,} tokens, below the "
+            f"{LM_PROBE_TOKENS:,} the equal-tokens protocol asks for; the arm "
+            f"would silently repeat data the others do not")
+
+    name = probe_run_name(label, protocol)
+    command = probe_train_command(
+        vocab_size=vocab_size, data_dir=str(shard_dir),
+        total_tokens=total_tokens, run_name=name, protocol=protocol,
+        val_dir=str(Path(shard_root) / label / "holdout-all"),
+        device=device)
+    command += ["--tokenizer", tokenizer_path]
+
+    run_dir = Path(run_root) / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    watchdog = start_watchdog(name, str(run_dir), total_tokens,
+                              stall_min=stall_min, supervised=True)
+    try:
+        report = run_with_resume(
+            list(command), str(run_dir / "checkpoint.pt"),
+            max_attempts=max_attempts, halt_marker=str(run_dir / "HALTED"),
+            inflight_extra={"phase": "phase4-tokenizer-lab", "label": label,
+                            "vocab_size": vocab_size, "protocol": protocol,
+                            "total_tokens": total_tokens})
+    finally:
+        stop_watchdog(watchdog)
+    return {"run": name, "protocol": protocol, "label": label,
+            "vocab_size": vocab_size, "total_tokens": total_tokens,
+            "packed_tokens": packed_tokens, "command": list(command), **report}
+
+
+# ================================================================= scoring ===
+
+def score_probe(*, vocab_size: int, label: str, protocol: str, shard_root,
+                tokenizer_path: str, run_root: str = "runs",
+                device: str = "cuda", batch_size: int = 8) -> dict:
+    """Held-out bits per byte for one arm, pooled and by domain.
+
+    Pooled BPB comes from one flat holdout directory rather than from averaging
+    the per-domain numbers: averaging bits-per-byte over domains weights each
+    domain by nothing in particular, while the flat pass weights every domain
+    by the bytes it actually contributes -- and those bytes are identical
+    across arms, which is what makes the arms comparable at all.
+    """
+    from daedalus.config import PRESETS
+    from daedalus.data import get_tokenizer
+    from daedalus.model import Daedalus
+    from eval import evaluate_bpb
+    from train import load_checkpoint
+
+    name = probe_run_name(label, protocol)
+    checkpoint = Path(run_root) / name / "checkpoint.pt"
+    tokenizer = get_tokenizer(tokenizer_path)
+    model = Daedalus(PRESETS[probe_config_name(vocab_size)]).to(device)
+    info = load_checkpoint(str(checkpoint), model, map_location=device)
+    model.eval()
+
+    root = Path(shard_root) / label
+
+    def bpb(directory: Path) -> float:
+        return evaluate_bpb(model, str(directory), PROBE_SEQ_LEN, tokenizer,
+                            device, batch_size=batch_size, max_batches=None)
+
+    by_domain = {directory.name: bpb(directory)
+                 for directory in sorted((root / "holdout").iterdir())
+                 if (directory / "manifest.json").exists()}
+    return {
+        "vocab_size": vocab_size,
+        "label": label,
+        "protocol": protocol,
+        "run": name,
+        "checkpoint": str(checkpoint),
+        "steps": info.get("step"),
+        "tokens_seen": info.get("tokens_seen"),
+        "bpb": bpb(root / "holdout-all"),
+        "bpb_by_domain": by_domain,
+    }
 
 
 # ============================================================== decision =====
@@ -907,6 +1146,51 @@ def build_preregistration(*, sample_target_bytes: int, incumbent: str) -> dict:
     }
 
 
+# Both protocols bias, in opposite directions, so a candidate that clears the
+# BPB clause under only the favourable one has not shown an improvement. The
+# rule therefore reads the *worse* of the two. This is a decision the original
+# preregistration left open ("reported as exactly that"), so it is recorded as
+# an addendum -- and `write_addendum` refuses to write once any arm has been
+# scored, which is what makes it a decision taken before the numbers rather
+# than a reading chosen to suit them.
+BPB_PROTOCOL_RULE = (
+    "the tiny-BPB clause is evaluated against the worse (larger) regression of "
+    "the equal-bytes and equal-tokens protocols; both are recorded")
+
+
+def build_addendum() -> dict:
+    return {
+        "schema": 1,
+        "phase": "phase4-tokenizer-lab",
+        "rule_digest": rule_digest(),
+        "bpb_protocol_rule": BPB_PROTOCOL_RULE,
+        "matched_control": (
+            "a 49,152-token vocabulary trained on the same sample is measured "
+            "alongside SmolLM2. The preregistered rule is evaluated against "
+            "SmolLM2 exactly as written; the matched control is a diagnostic "
+            "column that separates 'what does shrinking the vocabulary cost' "
+            "from 'what does retraining on this corpus buy', which the "
+            "incumbent comparison conflates."),
+        "incumbent_round_trip": (
+            "SmolLM2 is missing 21 of the 256 byte-level characters and cannot "
+            "round-trip code points U+40000-U+FFFFF. Candidates are still held "
+            "to the full round-trip precondition; the incumbent is measured "
+            "and its failure recorded, because refusing to measure the "
+            "reference would leave the phase with nothing to compare against."),
+    }
+
+
+def write_addendum(root, payload: dict, *, force: bool = False) -> Path:
+    """Write the addendum only while no arm has been scored."""
+    root = Path(root)
+    scored = sorted((root / "scored").glob("*.json"))
+    if scored and not force:
+        raise PreregistrationError(
+            f"{len(scored)} arm(s) already scored ({scored[0].name}, ...); an "
+            f"addendum written now could have been chosen to suit them")
+    return write_preregistration(root / "addendum.json", payload, force=True)
+
+
 def write_preregistration(path, payload: dict, *, force: bool = False) -> Path:
     path = Path(path)
     if path.exists() and not force:
@@ -926,6 +1210,38 @@ def write_preregistration(path, payload: dict, *, force: bool = False) -> Path:
 
 
 # ============================================================ measurement ====
+
+INCUMBENT_KEY = "49152-smollm2"
+MATCHED_CONTROL_KEY = "49152-matched"
+
+
+def measurement_targets(tokenizer_root) -> List[Tuple[str, int, str]]:
+    """`(label, vocab_size, path)` for everything measured, in report order.
+
+    Two references, not one, and the second is not decoration.
+
+    The preregistered rule compares candidates to **SmolLM2**, which is what a
+    V2 would actually be replacing. But SmolLM2 was trained on a different
+    corpus, so any tokenizer retrained on this sample beats it partly for
+    reasons that have nothing to do with vocabulary size -- measured here as an
+    8-14% bytes-per-token gain on maths, a domain SmolLM2's own mixture
+    weighted differently. Read alone, that comparison credits *size* for a
+    *corpus-match* effect.
+
+    `49152-matched` is the same 49,152 tokens trained on the same sample with
+    the same trainer, so candidate-vs-matched isolates the one variable the
+    phase is actually about. It is a diagnostic column: the rule is evaluated
+    against the incumbent exactly as written, and adding this changes no
+    threshold.
+    """
+    tokenizer_root = Path(tokenizer_root)
+    targets = [(str(size), size, str(tokenizer_root / f"v{size}"))
+               for size in CANDIDATE_VOCAB_SIZES]
+    matched = tokenizer_root / f"v{INCUMBENT_VOCAB_SIZE}"
+    if (matched / "tokenizer.json").exists():
+        targets.append((MATCHED_CONTROL_KEY, INCUMBENT_VOCAB_SIZE, str(matched)))
+    targets.append((INCUMBENT_KEY, INCUMBENT_VOCAB_SIZE, INCUMBENT_TOKENIZER))
+    return targets
 
 # Identifiers drawn from the sample rather than invented, so fragmentation is
 # measured on names people actually write. Collected once and pinned, because a
@@ -954,10 +1270,20 @@ def collect_identifiers(root, limit: int = 4000) -> List[str]:
 
 
 def measure_tokenizer(tokenizer, *, name: str, vocab_size: int, root,
-                      identifiers: Sequence[str], hidden_size: int = 768
-                      ) -> dict:
-    """Every intrinsic reading for one vocabulary, on the held-out split."""
-    round_trip = verify_round_trip(tokenizer)          # raises on failure
+                      identifiers: Sequence[str], hidden_size: int = 768,
+                      require_round_trip: bool = True) -> dict:
+    """Every intrinsic reading for one vocabulary, on the held-out split.
+
+    `require_round_trip=False` is used for the *incumbent* only, and it is not
+    an exemption granted to make the reference pass. SmolLM2's shipped
+    vocabulary is genuinely missing 21 of the 256 byte-level characters, so
+    three of the four candidate tokenizers would be held to a bar the artifact
+    they are compared against does not clear. Refusing to measure the incumbent
+    would leave the phase with no reference at all; measuring it and recording
+    the failure is what puts the difference in the report, where it belongs.
+    """
+    round_trip = (verify_round_trip(tokenizer) if require_round_trip
+                  else round_trip_report(tokenizer))
     domains = domain_texts(root, "holdout")
     fertility = bytes_per_token(tokenizer, domains)
     sample = [text for _key, text in read_split(root, "holdout")][:400]
@@ -990,6 +1316,314 @@ def fertility_deltas(candidate: dict, incumbent: dict) -> Dict[str, float]:
         base = incumbent["fertility"][domain]["bytes_per_token"]
         deltas[domain] = 100.0 * (base - values["bytes_per_token"]) / base
     return deltas
+
+
+# ------------------------------------------------------ stock llama.cpp -----
+
+def check_stock_gguf_conversion(*, label: str, vocab_size: int,
+                                tokenizer_path: str, out_dir,
+                                llama_cpp_dir: Optional[str] = None) -> dict:
+    """Can stock llama.cpp convert a model carrying this vocabulary?
+
+    This is the constraint that decides whether any of this is actionable,
+    because "unmodified stock llama.cpp" is a fixed program decision.
+    `conversion/base.py::get_vocab_base_pre` identifies a BPE pre-tokenizer by
+    hashing the token **ids** a fixed probe string encodes to, compares that
+    against a hard-coded list, and raises `NotImplementedError` for anything it
+    does not recognise. The hash is over ids, so it moves with the vocabulary
+    and the merges -- a newly trained tokenizer cannot match a registered hash
+    however faithfully it copies SmolLM2's pre-tokenizer configuration.
+
+    Run rather than argued: the model is randomly initialized because the
+    converter reads config.json, the tensor shapes and the tokenizer files, and
+    nothing about the weights, so an untrained model answers the question at no
+    training cost.
+    """
+    import subprocess
+
+    from export import export_hf_model, export_tokenizer
+
+    out_dir = Path(out_dir) / label
+    out_dir.mkdir(parents=True, exist_ok=True)
+    hf_dir = out_dir / "hf"
+
+    # A checkpoint in the shape `export_hf_model` reads, weights untrained.
+    import torch
+
+    from daedalus.config import PRESETS
+    from daedalus.model import Daedalus
+
+    config_name = probe_config_name(vocab_size)
+    checkpoint = out_dir / "checkpoint.pt"
+    torch.save({"model": Daedalus(PRESETS[config_name]).state_dict(),
+                "step": 0, "tokens_seen": 0,
+                "config": {"vocab_size": vocab_size}}, checkpoint)
+
+    export_hf_model(str(checkpoint), config_name, str(hf_dir))
+    export_tokenizer(str(hf_dir), tokenizer=tokenizer_path,
+                     expected_vocab_size=vocab_size)
+
+    llama_cpp_dir = llama_cpp_dir or os.environ.get("LLAMA_CPP_DIR",
+                                                    "/opt/llama.cpp")
+    converter = Path(llama_cpp_dir) / "convert_hf_to_gguf.py"
+    if not converter.exists():
+        return {"label": label, "converter": str(converter),
+                "ran": False, "reason": "converter not found"}
+
+    result = subprocess.run(
+        [sys.executable, str(converter), str(hf_dir), "--outfile",
+         str(out_dir / "model-f16.gguf"), "--outtype", "f16"],
+        capture_output=True, text=True)
+    combined = result.stdout + result.stderr
+    return {
+        "label": label,
+        "vocab_size": vocab_size,
+        "converter": str(converter),
+        "ran": True,
+        "returncode": result.returncode,
+        "converted": result.returncode == 0,
+        "pre_tokenizer_unrecognized":
+            "BPE pre-tokenizer was not recognized" in combined,
+        "chkhsh": next((line.split("chkhsh:")[1].strip()
+                        for line in combined.splitlines() if "chkhsh:" in line),
+                       None),
+        "tail": combined.strip().splitlines()[-12:],
+    }
+
+
+def resolve_label(label: str, tokenizer_root) -> Tuple[int, str]:
+    for known, size, path in measurement_targets(tokenizer_root):
+        if known == label:
+            return size, path
+    raise SystemExit(
+        f"{label!r} is not a measured tokenizer; known: "
+        f"{[k for k, _s, _p in measurement_targets(tokenizer_root)]}")
+
+
+def decide_from_artifacts(root) -> dict:
+    """Assemble each candidate's measured numbers and apply the rule.
+
+    Reads the artifacts the earlier stages wrote rather than re-deriving
+    anything, so a number in the verdict is the number in the file it cites.
+    """
+    root = Path(root)
+    measurements = json.loads((root / "measurements.json").read_text())
+    scored: Dict[str, Dict[str, dict]] = {}
+    for path in sorted((root / "scored").glob("*.json")):
+        record = json.loads(path.read_text())
+        scored.setdefault(record["label"], {})[record["protocol"]] = record
+
+    incumbent = measurements[INCUMBENT_KEY]
+    incumbent_bpb = {protocol: record["bpb"]
+                     for protocol, record in scored.get(INCUMBENT_KEY, {}).items()}
+
+    verdicts, diagnostics = [], {}
+    for label in (str(size) for size in CANDIDATE_VOCAB_SIZES):
+        reading = measurements[label]
+        deltas = {protocol: 100.0 * (record["bpb"] - incumbent_bpb[protocol])
+                  / incumbent_bpb[protocol]
+                  for protocol, record in scored.get(label, {}).items()
+                  if protocol in incumbent_bpb}
+        measured = {
+            "vocab_size": reading["vocab_size"],
+            "domain_fertility_delta_pct": fertility_deltas(reading, incumbent),
+            # The worse of the two protocols; see BPB_PROTOCOL_RULE.
+            "tiny_bpb_delta_pct": max(deltas.values()) if deltas else None,
+            "tiny_bpb_delta_pct_by_protocol": deltas,
+            "embedding_q6_k_bytes": reading["embedding"]["q6_k_bytes"],
+            "incumbent_embedding_q6_k_bytes":
+                incumbent["embedding"]["q6_k_bytes"],
+            "round_trip_passed": reading["round_trip"]["passed"],
+        }
+        verdicts.append(evaluate_candidate(measured))
+        if MATCHED_CONTROL_KEY in measurements:
+            diagnostics[label] = {
+                "fertility_vs_matched_control_pct": fertility_deltas(
+                    reading, measurements[MATCHED_CONTROL_KEY]),
+            }
+
+    verdict = decide(verdicts)
+    verdict["clauses_by_candidate"] = {
+        str(v["vocab_size"]): v["clauses"] for v in verdicts}
+    verdict["measured"] = {str(v["vocab_size"]): v["measured"] for v in verdicts}
+    verdict["diagnostics"] = diagnostics
+    verdict["addendum"] = json.loads((root / "addendum.json").read_text()) \
+        if (root / "addendum.json").exists() else None
+    return verdict
+
+
+# ------------------------------------------------------------------ report ---
+
+def _fertility_table(measurements: dict, reference: str) -> List[str]:
+    rows = [f"| tokenizer | " + " | ".join(DOMAINS) + " | all |",
+            "|---|" + "---|" * (len(DOMAINS) + 1)]
+    for label, reading in measurements.items():
+        if label == reference:
+            continue
+        deltas = fertility_deltas(reading, measurements[reference])
+        cells = [f"{deltas[d]:+.2f}%" if d in deltas else "n/a"
+                 for d in DOMAINS]
+        overall = 100.0 * (
+            measurements[reference]["fertility"]["__all__"]["bytes_per_token"]
+            - reading["fertility"]["__all__"]["bytes_per_token"]) / \
+            measurements[reference]["fertility"]["__all__"]["bytes_per_token"]
+        rows.append(f"| {label} | " + " | ".join(cells) + f" | {overall:+.2f}% |")
+    return rows
+
+
+def write_report(root) -> Path:
+    """The migration report: what was measured, against what, and what it means."""
+    root = Path(root)
+    measurements = json.loads((root / "measurements.json").read_text())
+    verdict = json.loads((root / "verdict.json").read_text()) \
+        if (root / "verdict.json").exists() else {}
+    sample = json.loads(
+        Path("data/tokenizer-lab/sample/sample-manifest.json").read_text()) \
+        if Path("data/tokenizer-lab/sample/sample-manifest.json").exists() else {}
+
+    lines = [
+        "# V2 tokenizer migration report",
+        "",
+        "Phase 4 asks whether a future from-scratch V2 should keep SmolLM2's "
+        "49,152-token vocabulary or adopt 24,576, 32,768 or 40,960.",
+        "",
+        "**Scope.** A tokenizer cannot be transplanted into a trained model: "
+        "every embedding row and every output logit is indexed by the "
+        "vocabulary the model was trained under. Nothing here changes released "
+        "V1 weights or Daedalus-Code, and no result below should be read as a "
+        "gain on either.",
+        "",
+        "## The preregistered rule",
+        "",
+        f"> {RULE_TEXT}",
+        "",
+        f"Rule digest `{rule_digest()}`, written before any measurement. "
+        f"Thresholds: no domain worse than "
+        f"{MAX_DOMAIN_FERTILITY_REGRESSION_PCT:g}%, code "
+        f"<= {MAX_CODE_FERTILITY_REGRESSION_PCT:g}%, tiny-model BPB "
+        f"<= {MAX_TINY_BPB_REGRESSION_PCT:g}%, embedding bytes down at least "
+        f"{MIN_EMBEDDING_BYTE_REDUCTION_PCT:g}%.",
+        "",
+        "## Bytes per token vs the incumbent (SmolLM2), by domain",
+        "",
+        "Negative is better: the candidate needs fewer tokens for the same "
+        "bytes. This is the comparison the rule reads.",
+        "",
+    ]
+    lines += _fertility_table(measurements, INCUMBENT_KEY)
+
+    if MATCHED_CONTROL_KEY in measurements:
+        lines += [
+            "",
+            "## Bytes per token vs a size-matched control",
+            "",
+            "`49152-matched` is 49,152 tokens trained on **this** sample with "
+            "the same trainer. Candidate-vs-matched isolates the cost of "
+            "shrinking the vocabulary; candidate-vs-SmolLM2 above mixes that "
+            "with the gain from retraining on this corpus, and would otherwise "
+            "credit *size* for a *corpus-match* effect.",
+            "",
+        ]
+        lines += _fertility_table(measurements, MATCHED_CONTROL_KEY)
+
+    lines += ["", "## Artifact cost", "",
+              "| tokenizer | embedding params | Q6_K MiB | vs incumbent | "
+              "KV bytes/context-token |", "|---|---|---|---|---|"]
+    base = measurements[INCUMBENT_KEY]["embedding"]["q6_k_bytes"]
+    for label, reading in measurements.items():
+        embedding = reading["embedding"]
+        lines.append(
+            f"| {label} | {embedding['parameters']:,} | "
+            f"{embedding['q6_k_bytes'] / 2**20:.2f} | "
+            f"{100 * (base - embedding['q6_k_bytes']) / base:+.1f}% | "
+            f"{reading['kv']['kv_bytes_per_context_token']:,} |")
+    lines += [
+        "",
+        "`token_embd.weight` ships Q6_K and is tied, so that one tensor is "
+        "both the input table and the output projection "
+        "(`runs/preflight/token-embd-quant-grid.md`). The KV column is "
+        "identical by construction: the cache is attention-shaped, so a "
+        "vocabulary change moves the embedding tensor and nothing in it.",
+        "",
+        "## Byte coverage and round trips",
+        "",
+        "| tokenizer | byte characters | round trip |", "|---|---|---|",
+    ]
+    for label, reading in measurements.items():
+        coverage = reading["round_trip"]["byte_alphabet"]
+        lines.append(
+            f"| {label} | {coverage['covered']}/256 | "
+            f"{'pass' if reading['round_trip']['passed'] else 'FAIL'} |")
+    lines += [
+        "",
+        "The incumbent's row is a finding, not a formatting error. SmolLM2's "
+        "vocabulary is missing 21 byte-level characters; most stand for bytes "
+        "that never occur in valid UTF-8, but 0xf1-0xf3 are four-byte lead "
+        "bytes, so code points U+40000-U+FFFFF are silently dropped rather "
+        "than rejected. Every candidate covers all 256.",
+        "",
+        "## Held-out bits per byte",
+        "",
+        "Bits per **byte**, never per-token perplexity: a larger vocabulary "
+        "improves per-token likelihood by packing more bytes into each token, "
+        "with no improvement in the model.",
+        "",
+        "| arm | protocol | tokens trained | BPB | vs incumbent |",
+        "|---|---|---|---|---|",
+    ]
+    scored_files = sorted((root / "scored").glob("*.json"))
+    scored = [json.loads(p.read_text()) for p in scored_files]
+    incumbent_bpb = {r["protocol"]: r["bpb"] for r in scored
+                     if r["label"] == INCUMBENT_KEY}
+    for record in scored:
+        reference = incumbent_bpb.get(record["protocol"])
+        delta = (f"{100 * (record['bpb'] - reference) / reference:+.2f}%"
+                 if reference else "n/a")
+        lines.append(
+            f"| {record['label']} | {record['protocol']} | "
+            f"{record.get('tokens_seen') or 0:,} | {record['bpb']:.4f} | "
+            f"{delta} |")
+
+    if verdict:
+        lines += [
+            "", "## Verdict", "",
+            f"**Selected: {verdict.get('selected') or 'none'}.** "
+            f"{verdict.get('reason', '')}",
+            "",
+            "| candidate | selectable | failed clauses |", "|---|---|---|",
+        ]
+        for candidate in verdict.get("candidates", []):
+            lines.append(
+                f"| {candidate['vocab_size']} | "
+                f"{'yes' if candidate['selectable'] else 'no'} | "
+                f"{', '.join(candidate['failed']) or '-'} |")
+
+    if sample:
+        lines += [
+            "", "## The sample", "",
+            f"{sample['totals']['bytes'] / 1e9:.3f} GB across "
+            f"{len(sample['sources'])} sources, split disjointly by SHA-256 of "
+            f"each document's bytes: "
+            + ", ".join(f"{split} {size / 1e6:.0f} MB"
+                        for split, size in sample["totals"]["by_split"].items())
+            + ".",
+            "",
+            "| domain | bytes |", "|---|---|",
+        ]
+        for domain, size in sample["totals"]["by_domain"].items():
+            lines.append(f"| {domain} | {size / 1e6:,.1f} MB |")
+        if sample.get("shortfalls"):
+            lines += ["", "Sources that could not fill their share, recorded "
+                          "rather than force-filled:", ""]
+            for key, record in sample["shortfalls"].items():
+                lines.append(
+                    f"- `{key}`: {record['achieved_bytes'] / 1e6:.2f} MB of "
+                    f"{record['planned_bytes'] / 1e6:.2f} MB "
+                    f"({record['fill_frac']:.1%})")
+
+    path = root / "v2-tokenizer-migration.md"
+    path.write_text("\n".join(lines) + "\n")
+    return path
 
 
 # --------------------------------------------------------------------- cli ---
@@ -1028,6 +1662,47 @@ def main(argv=None) -> int:
     measure = sub.add_parser("measure", help="intrinsic readings on the holdout")
     measure.add_argument("--sample", default="data/tokenizer-lab/sample")
     measure.add_argument("--tokenizers", default="data/tokenizer-lab/tokenizers")
+
+    pack = sub.add_parser("pack", help="shard the LM splits under each vocabulary")
+    pack.add_argument("--sample", default="data/tokenizer-lab/sample")
+    pack.add_argument("--tokenizers", default="data/tokenizer-lab/tokenizers")
+    pack.add_argument("--out", default="data/tokenizer-lab/shards")
+    pack.add_argument("--only", action="append", default=[],
+                      help="measurement label to pack; repeatable, default all")
+    pack.add_argument("--byte-budget", type=int, default=None,
+                      help="bytes of LM-train every arm reads (default: the "
+                           "whole split)")
+
+    probe = sub.add_parser("probe", help="train one tiny-model arm")
+    probe.add_argument("--label", required=True)
+    probe.add_argument("--protocol", required=True,
+                       choices=("equal-bytes", "equal-tokens"))
+    probe.add_argument("--shards", default="data/tokenizer-lab/shards")
+    probe.add_argument("--tokenizers", default="data/tokenizer-lab/tokenizers")
+    probe.add_argument("--device", default="cuda")
+    probe.add_argument("--max-attempts", type=int, default=3)
+
+    score = sub.add_parser("score", help="held-out BPB for one arm")
+    score.add_argument("--label", required=True)
+    score.add_argument("--protocol", required=True,
+                       choices=("equal-bytes", "equal-tokens"))
+    score.add_argument("--shards", default="data/tokenizer-lab/shards")
+    score.add_argument("--tokenizers", default="data/tokenizer-lab/tokenizers")
+    score.add_argument("--device", default="cuda")
+
+    addendum = sub.add_parser(
+        "addendum", help="record decisions the preregistration left open, "
+                         "refused once any arm has been scored")
+    addendum.add_argument("--force", action="store_true")
+
+    gguf = sub.add_parser(
+        "gguf-check", help="can stock llama.cpp convert each vocabulary?")
+    gguf.add_argument("--tokenizers", default="data/tokenizer-lab/tokenizers")
+    gguf.add_argument("--out", default="runs/tokenizer-lab/gguf-check")
+    gguf.add_argument("--llama-cpp-dir", default=None)
+
+    sub.add_parser("decide", help="apply the preregistered rule")
+    sub.add_parser("report", help="render the migration report")
 
     args = parser.parse_args(argv)
     root = Path(args.root)
@@ -1084,21 +1759,138 @@ def main(argv=None) -> int:
         print(f"measuring against {len(identifiers)} held-out identifiers",
               flush=True)
         readings = {}
-        for size in list(CANDIDATE_VOCAB_SIZES) + [INCUMBENT_VOCAB_SIZE]:
-            path = (INCUMBENT_TOKENIZER if size == INCUMBENT_VOCAB_SIZE
-                    else str(Path(args.tokenizers) / f"v{size}"))
-            print(f"  {size}: {path}", flush=True)
-            readings[str(size)] = measure_tokenizer(
+        for label, size, path in measurement_targets(args.tokenizers):
+            print(f"  {label}: {path}", flush=True)
+            readings[label] = measure_tokenizer(
                 load_tokenizer(path), name=path, vocab_size=size,
-                root=args.sample, identifiers=identifiers)
+                root=args.sample, identifiers=identifiers,
+                require_round_trip=label != INCUMBENT_KEY)
         out = root / "measurements.json"
         out.write_text(json.dumps(readings, indent=2, sort_keys=True) + "\n")
-        incumbent = readings[str(INCUMBENT_VOCAB_SIZE)]
-        for size in CANDIDATE_VOCAB_SIZES:
-            deltas = fertility_deltas(readings[str(size)], incumbent)
-            print(f"  {size}: " + "  ".join(
-                f"{domain} {delta:+.2f}%" for domain, delta in sorted(deltas.items())))
+        for reference in (INCUMBENT_KEY, MATCHED_CONTROL_KEY):
+            if reference not in readings:
+                continue
+            print(f"\n  bytes/token vs {reference} "
+                  f"(negative = candidate needs fewer tokens):")
+            for label, _size, _path in measurement_targets(args.tokenizers):
+                if label == reference:
+                    continue
+                deltas = fertility_deltas(readings[label], readings[reference])
+                print(f"    {label:16s} " + "  ".join(
+                    f"{domain} {delta:+.2f}%"
+                    for domain, delta in sorted(deltas.items())))
+        print(f"\nwrote {out}")
+        return 0
+
+    if args.command == "pack":
+        measurements = json.loads((root / "measurements.json").read_text())
+        targets = [t for t in measurement_targets(args.tokenizers)
+                   if not args.only or t[0] in args.only]
+        # The whole LM-train split, not a computed budget. Every arm still
+        # reads exactly the same bytes, which is all the byte-matched protocol
+        # requires, and spending the split removes the need to predict its
+        # fertility from the holdout's -- a prediction that was 2.8-3.4% low
+        # and left two arms under the equal-tokens budget.
+        available = int(json.loads(
+            (Path(args.sample) / "sample-manifest.json").read_text()
+        )["totals"]["by_split"]["lm-train"])
+        floor = equal_byte_budget(max_bytes_per_token=max(
+            reading["fertility"]["__all__"]["bytes_per_token"]
+            for reading in measurements.values()))
+        if available < floor:
+            raise SystemExit(
+                f"LM-train holds {available:,} bytes, below the {floor:,} the "
+                f"worst arm needs for {LM_PROBE_TOKENS:,} tokens; rebuild the "
+                f"sample with a larger target")
+        budget = args.byte_budget or available
+        print(f"byte budget {budget:,} ({budget/1e6:.1f} MB); the worst arm "
+              f"needs at least {floor:,} for {LM_PROBE_TOKENS:,} tokens",
+              flush=True)
+        packed = {}
+        for label, size, path in targets:
+            packed[label] = pack_for_tokenizer(
+                sample_root=args.sample, tokenizer_path=path, vocab_size=size,
+                label=label, out_root=args.out, byte_budget=budget)
+        (root / "packed.json").write_text(
+            json.dumps({"byte_budget": budget,
+                        "arms": {label: {k: v for k, v in record.items()
+                                         if k != "train"}
+                                 for label, record in packed.items()}},
+                       indent=2, sort_keys=True, default=str) + "\n")
+        short = {label: record["train"]["total_tokens"]
+                 for label, record in packed.items()
+                 if record["train"]["total_tokens"] < LM_PROBE_TOKENS}
+        for label, record in packed.items():
+            print(f"  {label:16s} {record['train']['total_tokens']:>12,} tokens"
+                  f"  {record['measured_bytes_per_token']:.4f} bytes/token"
+                  f"{'   SHORT' if label in short else ''}")
+        if short:
+            # Loud, not silent: an arm below the budget would either train on
+            # less than the others or quietly re-read data they saw once, and
+            # both are the comparison failing rather than a run failing.
+            print(f"\n{len(short)} arm(s) packed fewer than the "
+                  f"{LM_PROBE_TOKENS:,}-token equal-tokens budget: {short}")
+            return 1
+        return 0
+
+    if args.command == "probe":
+        size, path = resolve_label(args.label, args.tokenizers)
+        report = launch_probe(vocab_size=size, label=args.label,
+                              protocol=args.protocol, shard_root=args.shards,
+                              tokenizer_path=path, device=args.device,
+                              max_attempts=args.max_attempts)
+        out = root / "probes" / f"{args.label}-{args.protocol}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, indent=2, sort_keys=True,
+                                  default=str) + "\n")
+        print(json.dumps({k: report[k] for k in
+                          ("run", "protocol", "total_tokens", "packed_tokens")},
+                         indent=2))
+        return 0
+
+    if args.command == "score":
+        size, path = resolve_label(args.label, args.tokenizers)
+        record = score_probe(vocab_size=size, label=args.label,
+                             protocol=args.protocol, shard_root=args.shards,
+                             tokenizer_path=path, device=args.device)
+        out = root / "scored" / f"{args.label}-{args.protocol}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        print(json.dumps(record, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "gguf-check":
+        results = {}
+        for label, size, path in measurement_targets(args.tokenizers):
+            print(f"  converting with {label} ...", flush=True)
+            results[label] = check_stock_gguf_conversion(
+                label=label, vocab_size=size, tokenizer_path=path,
+                out_dir=args.out, llama_cpp_dir=args.llama_cpp_dir)
+            print(f"    converted={results[label].get('converted')} "
+                  f"unrecognized_pretokenizer="
+                  f"{results[label].get('pre_tokenizer_unrecognized')}",
+                  flush=True)
+        out = root / "gguf-check.json"
+        out.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
         print(f"wrote {out}")
+        return 0
+
+    if args.command == "addendum":
+        written = write_addendum(root, build_addendum(), force=args.force)
+        print(f"recorded {written}")
+        return 0
+
+    if args.command == "decide":
+        verdict = decide_from_artifacts(root)
+        (root / "verdict.json").write_text(
+            json.dumps(verdict, indent=2, sort_keys=True) + "\n")
+        print(json.dumps({k: verdict[k] for k in
+                          ("selected", "negative_result", "reason")}, indent=2))
+        return 0
+
+    if args.command == "report":
+        path = write_report(root)
+        print(f"wrote {path}")
         return 0
 
     return 1

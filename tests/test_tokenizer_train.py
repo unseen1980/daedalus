@@ -93,6 +93,58 @@ def test_arbitrary_bytes_survive_a_round_trip(small_tokenizer):
     assert "all-256-bytes" in report["case_names"]
 
 
+def test_the_byte_decoder_is_the_real_gpt2_map_not_alphabet_order():
+    """`ByteLevel.alphabet()` returns the 256 characters in **unspecified**
+    order -- it collects the values of a hash map. Zipping it against
+    range(256) looks like a byte decoder and is a permutation of one, so it
+    mislabels which byte is missing and mis-measures how long a token is. This
+    caught exactly that: a first pass reported bytes 0x0e, 0x13, 0x3b, 0x5f ...
+    absent from SmolLM2, which would have meant `;` and `_` were unencodable."""
+    from tokenizers import pre_tokenizers
+
+    from daedalus.tokenizer_train import byte_to_unicode
+
+    encoder = byte_to_unicode()
+    assert len(encoder) == 256
+    assert len(set(encoder.values())) == 256               # a bijection
+    assert encoder[0x20] == "Ġ"                       # the known fixed point
+    assert encoder[ord("a")] == "a"
+    assert set(encoder.values()) == set(pre_tokenizers.ByteLevel.alphabet())
+
+
+def test_the_shipped_smollm2_vocabulary_cannot_round_trip_every_byte():
+    """A measured property of the *incumbent*, recorded because Phase 4 asks
+    every candidate to clear a bar the artifact it replaces does not.
+
+    21 of the 256 byte characters are absent from SmolLM2's vocabulary. Most
+    stand for bytes that never occur in valid UTF-8 (0xc0, 0xc1, 0xf5-0xff), so
+    no Python string can reach them -- but 0xf1, 0xf2 and 0xf3 are the lead
+    bytes of four-byte sequences, so code points U+40000 to U+FFFFF are
+    *silently dropped* rather than rejected. `\U00050000` in a document becomes
+    nothing at all.
+    """
+    from daedalus.tokenizer_train import (INCUMBENT_TOKENIZER, load_tokenizer,
+                                          round_trip_report)
+
+    tokenizer = load_tokenizer(INCUMBENT_TOKENIZER)
+    report = round_trip_report(tokenizer)
+    assert report["passed"] is False
+    assert report["byte_alphabet"]["covered"] < 256
+
+    lost = "ok \U00050000 fine"
+    decoded = tokenizer.decode(tokenizer.encode(lost, add_special_tokens=False),
+                               skip_special_tokens=False,
+                               clean_up_tokenization_spaces=False)
+    assert decoded != lost
+    # ...while a plane-16 code point, whose lead byte 0xf4 the vocabulary does
+    # carry, survives. The gap is specific, not a blanket failure on astral
+    # characters, and the report should not overstate it.
+    kept = "ok \U0010fffd fine"
+    assert tokenizer.decode(tokenizer.encode(kept, add_special_tokens=False),
+                            skip_special_tokens=False,
+                            clean_up_tokenization_spaces=False) == kept
+
+
 def test_round_trip_verification_rejects_a_lossy_tokenizer(small_tokenizer):
     """The verifier must fail loudly rather than return a report nobody reads."""
 

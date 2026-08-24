@@ -693,6 +693,31 @@ def test_tokenize_and_pack_records_the_tokenizer_in_the_manifest(tmp_path):
     assert manifest["tokenizer"]["vocab_size"] == 32768
 
 
+def test_batched_packing_produces_identical_ids(tmp_path):
+    """The batched path exists for speed and must be indistinguishable in
+    output, or Phase 4's corpora differ from every other corpus in this
+    repository for a reason nobody would find."""
+
+    class _BatchTokenizer(_FingerprintTokenizer):
+        def __call__(self, texts):
+            return {"input_ids": [self.encode(t) for t in texts]}
+
+    documents = [f"document number {i} with some text" for i in range(37)]
+    one_at_a_time = tmp_path / "single"
+    batched = tmp_path / "batched"
+    tokenize_and_pack(_BatchTokenizer(4096), documents, str(one_at_a_time),
+                      shard_tokens=1000)
+    tokenize_and_pack(_BatchTokenizer(4096), documents, str(batched),
+                      shard_tokens=1000, batch_documents=8)
+
+    for name in ("total_tokens", "n_documents"):
+        assert (json.loads((one_at_a_time / "manifest.json").read_text())[name]
+                == json.loads((batched / "manifest.json").read_text())[name])
+    left = np.fromfile(one_at_a_time / "shard_00000.bin", dtype=np.uint16)
+    right = np.fromfile(batched / "shard_00000.bin", dtype=np.uint16)
+    assert np.array_equal(left, right)
+
+
 def test_reading_shards_under_a_different_tokenizer_is_refused():
     from daedalus.data import assert_manifest_tokenizer, tokenizer_fingerprint
 

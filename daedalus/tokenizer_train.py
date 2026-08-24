@@ -168,20 +168,47 @@ def load_tokenizer(path_or_name):
 
 # -------------------------------------------------------------- verification ---
 
+def byte_to_unicode() -> Dict[int, str]:
+    """GPT-2's byte -> printable-character map, which ByteLevel BPE encodes in.
+
+    Rebuilt rather than read off `ByteLevel.alphabet()`, which returns the same
+    256 characters in **unspecified order** -- it collects the values of a hash
+    map. Zipping that list against `range(256)` looks like a byte decoder and
+    is a permutation of one, so it silently mislabels which byte is missing and
+    mis-measures how long a token is. Checked against the one published fixed
+    point everyone knows: byte 0x20 is `Ġ`.
+    """
+    printable = (list(range(ord("!"), ord("~") + 1))
+                 + list(range(ord("¡"), ord("¬") + 1))
+                 + list(range(ord("®"), ord("ÿ") + 1)))
+    characters = list(printable)
+    overflow = 0
+    for value in range(256):
+        if value not in printable:
+            printable.append(value)
+            characters.append(256 + overflow)
+            overflow += 1
+    return {value: chr(code) for value, code in zip(printable, characters)}
+
+
 def byte_alphabet_coverage(tokenizer) -> dict:
     """Which of the 256 byte-level characters are in the vocabulary.
 
     ByteLevel BPE represents raw bytes as a fixed 256-character alphabet, so
     "complete byte fallback" is exactly "all 256 of those characters are
-    tokens". Anything missing is a byte the tokenizer can never emit.
+    tokens". Anything missing is a byte the tokenizer can never emit -- and any
+    text containing it is silently truncated rather than rejected.
     """
-    from tokenizers import pre_tokenizers
-
-    alphabet = pre_tokenizers.ByteLevel.alphabet()
+    encoder = byte_to_unicode()
     vocab = tokenizer.get_vocab()
-    missing = sorted(ch for ch in alphabet if ch not in vocab)
-    return {"expected": len(alphabet), "covered": len(alphabet) - len(missing),
-            "missing": missing}
+    missing = {value: character for value, character in encoder.items()
+               if character not in vocab}
+    return {
+        "expected": len(encoder),
+        "covered": len(encoder) - len(missing),
+        "missing": sorted(missing.values()),
+        "missing_bytes": [f"0x{value:02x}" for value in sorted(missing)],
+    }
 
 
 # One case per way a tokenizer is usually lossy. `all-256-bytes` is the literal
@@ -201,12 +228,15 @@ _ROUND_TRIP_CASES: Dict[str, str] = {
 }
 
 
-def verify_round_trip(tokenizer) -> dict:
-    """Refuse a candidate that cannot reproduce arbitrary bytes.
+def round_trip_report(tokenizer) -> dict:
+    """Measure round-trip fidelity without deciding anything about it.
 
-    Run before any measurement, and raises rather than returning a verdict,
-    because a bytes-per-token table over a lossy tokenizer is a table of
-    numbers about a broken artifact.
+    Separated from `verify_round_trip` because the same measurement answers two
+    different questions. Of a *candidate* it asks "is this shippable", and the
+    answer had better be yes or the vocabulary is rejected. Of the *incumbent*
+    it asks "what does the tokenizer we already ship actually do", and the
+    answer is a finding to record, not a reason to refuse to measure the
+    reference every candidate is compared against.
     """
     coverage = byte_alphabet_coverage(tokenizer)
     failures = []
@@ -215,6 +245,7 @@ def verify_round_trip(tokenizer) -> dict:
             "case": "byte-alphabet",
             "reason": f"{len(coverage['missing'])} of 256 byte characters are "
                       f"absent from the vocabulary",
+            "missing_bytes": coverage["missing_bytes"],
         })
 
     for name, text in _ROUND_TRIP_CASES.items():
@@ -229,17 +260,28 @@ def verify_round_trip(tokenizer) -> dict:
                 "output_bytes": len(decoded.encode("utf-8")),
             })
 
-    if failures:
-        raise RoundTripError(
-            "tokenizer failed round-trip verification and is rejected before "
-            "measurement: " + json.dumps(failures))
-
     return {
-        "passed": True,
+        "passed": not failures,
         "cases": len(_ROUND_TRIP_CASES),
         "case_names": sorted(_ROUND_TRIP_CASES),
         "byte_alphabet": coverage,
+        "failures": failures,
     }
+
+
+def verify_round_trip(tokenizer) -> dict:
+    """Refuse a candidate that cannot reproduce arbitrary bytes.
+
+    Run before any measurement, and raises rather than returning a verdict,
+    because a bytes-per-token table over a lossy tokenizer is a table of
+    numbers about a broken artifact.
+    """
+    report = round_trip_report(tokenizer)
+    if not report["passed"]:
+        raise RoundTripError(
+            "tokenizer failed round-trip verification and is rejected before "
+            "measurement: " + json.dumps(report["failures"]))
+    return report
 
 
 def special_token_isolation(tokenizer) -> dict:
@@ -356,13 +398,11 @@ def longest_tokens(tokenizer, n: int = 20) -> List[dict]:
     rows in the highest-leverage tensor in the model, and they are only visible
     if someone looks.
     """
-    from tokenizers import pre_tokenizers
-
     # ByteLevel stores bytes as printable stand-ins, so token *string* length
     # over-counts multi-byte characters and under-counts nothing. Decode each
     # piece back to real bytes before measuring.
-    byte_decoder = {ch: i for i, ch in
-                    enumerate(pre_tokenizers.ByteLevel.alphabet())}
+    byte_decoder = {character: value
+                    for value, character in byte_to_unicode().items()}
     entries = []
     for token, index in tokenizer.get_vocab().items():
         if token in PINNED_SPECIAL_IDS:

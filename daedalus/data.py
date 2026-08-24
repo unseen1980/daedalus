@@ -228,7 +228,8 @@ def tokenize_and_pack(tokenizer, documents: Iterable[str], out_dir: str,
                        eos_id: int = DEFAULT_EOS_ID,
                        shard_tokens: int = 100_000_000,
                        manifest_extra: Optional[dict] = None,
-                       tokenizer_name: Optional[str] = None) -> dict:
+                       tokenizer_name: Optional[str] = None,
+                       batch_documents: Optional[int] = None) -> dict:
     """Stream-tokenize `documents` into fixed-size uint16 shards under
     `out_dir`, EOS-separated dense packing. Writes and returns the manifest.
 
@@ -236,12 +237,41 @@ def tokenize_and_pack(tokenizer, documents: Iterable[str], out_dir: str,
     `tokenizer_fingerprint`). That was always worth recording and became
     necessary in Phase 4, where four shard directories differing only in
     vocabulary sit side by side.
+
+    `batch_documents` hands whole batches to the tokenizer instead of one
+    document per call. A Rust fast tokenizer releases the GIL and encodes a
+    batch across every core, while the one-at-a-time path is single-threaded
+    Python overhead per document -- measured at 4.9 MB/s here, which is 73
+    minutes to pack the five Phase 4 corpora and a bad reason to shorten an
+    experiment. `None` (the default) keeps the existing path exactly, so
+    `dataprep`'s streaming build -- whose memory profile is the reason
+    `ShardWriter` uses `array.array` at all -- is untouched. The two paths are
+    asserted to produce identical ids.
     """
     writer = ShardWriter(out_dir, shard_tokens=shard_tokens)
     n_docs = 0
-    for text in documents:
-        writer.write(tokenize_document(tokenizer, text, eos_id))
-        n_docs += 1
+    if batch_documents:
+        batch: List[str] = []
+
+        def flush_batch() -> int:
+            if not batch:
+                return 0
+            for ids in tokenizer(batch)["input_ids"]:
+                writer.write(ids)
+                writer.write((eos_id,))
+            written = len(batch)
+            batch.clear()
+            return written
+
+        for text in documents:
+            batch.append(text)
+            if len(batch) >= batch_documents:
+                n_docs += flush_batch()
+        n_docs += flush_batch()
+    else:
+        for text in documents:
+            writer.write(tokenize_document(tokenizer, text, eos_id))
+            n_docs += 1
     writer.close()
     extra = {"n_documents": n_docs, "eos_id": eos_id,
              "tokenizer": tokenizer_fingerprint(tokenizer, tokenizer_name)}
