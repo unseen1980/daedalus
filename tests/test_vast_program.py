@@ -136,3 +136,45 @@ def test_terminal_program_refuses_new_phase(tmp_path, terminal):
 
     with pytest.raises(TerminalStateError, match=terminal):
         controller.run_phase("again", ["true"])
+
+
+def test_set_base_sha_preserves_started_at_and_records_event(tmp_path):
+    from scripts.vast_program import VastProgramController
+
+    controller = VastProgramController(state_path=tmp_path / "state.json", now=lambda: NOW)
+    controller.initialize(base_sha="")
+    started_at = controller.store.load()["started_at"]
+
+    updated = controller.store.set_base_sha(base_sha="abc123", now=NOW + timedelta(minutes=5))
+
+    assert updated["base_sha"] == "abc123"
+    assert updated["started_at"] == started_at
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert events[-1] == {
+        "kind": "base_sha_updated",
+        "at": "2026-08-24T12:05:00Z",
+        "base_sha": "abc123",
+    }
+
+
+def test_cli_transition_preserves_base_sha_and_started_at(tmp_path):
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    original = json.loads(state.read_text())
+    assert main([
+        "--state", str(state),
+        "transition",
+        "--phase", "phase2-evaluation",
+        "--status", "running",
+        "--details-json", '{"reason":"operator-migration"}',
+    ]) == 0
+
+    updated = json.loads(state.read_text())
+    assert updated["base_sha"] == "abc123"
+    assert updated["started_at"] == original["started_at"]
+    assert updated["phase"] == "phase2-evaluation"
+    assert updated["status"] == "running"
+    assert updated["details"] == {"reason": "operator-migration"}

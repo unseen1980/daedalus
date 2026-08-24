@@ -291,6 +291,14 @@ def main(argv=None) -> int:
     init.add_argument("--phase", default="bootstrap")
     init.add_argument("--status", default="running")
 
+    set_base = sub.add_parser("set-base-sha")
+    set_base.add_argument("base_sha")
+
+    transition = sub.add_parser("transition")
+    transition.add_argument("--phase", required=True)
+    transition.add_argument("--status", required=True)
+    transition.add_argument("--details-json", default="{}")
+
     run = sub.add_parser("run-phase")
     run.add_argument("--phase", required=True)
     run.add_argument("--estimated-hours", type=float, default=0.0)
@@ -303,6 +311,32 @@ def main(argv=None) -> int:
     if args.command == "init":
         controller.initialize(base_sha=args.base_sha)
         controller.store.transition(phase=args.phase, status=args.status, now=controller.now())
+        return 0
+
+    if args.command == "set-base-sha":
+        if not Path(args.state).exists():
+            raise SystemExit(f"state file does not exist: {args.state}")
+        controller.acquire_lease()
+        try:
+            controller.store.set_base_sha(base_sha=args.base_sha, now=controller.now())
+        finally:
+            controller.release_lease()
+        return 0
+
+    if args.command == "transition":
+        if not Path(args.state).exists():
+            raise SystemExit(f"state file does not exist: {args.state}")
+        try:
+            details = json.loads(args.details_json)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"invalid --details-json: {exc}") from exc
+        if not isinstance(details, dict):
+            raise SystemExit("--details-json must decode to an object")
+        controller.acquire_lease()
+        try:
+            controller.store.transition(phase=args.phase, status=args.status, now=controller.now(), details=details)
+        finally:
+            controller.release_lease()
         return 0
 
     if not Path(args.state).exists():

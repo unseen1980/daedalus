@@ -86,6 +86,20 @@ class ProgramStateStore:
         })
         return state
 
+    def set_base_sha(self, *, base_sha: str, now: datetime) -> dict:
+        """Update the recorded source baseline without resetting run timing."""
+
+        state = self.load()
+        state["base_sha"] = base_sha
+        state["updated_at"] = _timestamp(now)
+        _write_json_atomic(self.state_path, state)
+        self._append_event({
+            "kind": "base_sha_updated",
+            "at": _timestamp(now),
+            "base_sha": base_sha,
+        })
+        return state
+
 
 @dataclass(frozen=True)
 class ProgramDeadline:
