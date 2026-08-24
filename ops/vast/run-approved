@@ -43,6 +43,25 @@ validate_path() {
     esac
 }
 
+require_gh() {
+    command -v gh >/dev/null 2>&1 || { echo "gh not installed" >&2; exit 5; }
+}
+
+require_log_path() {
+    local path=$1
+    case "${path}" in
+        /var/log/portal/*.log)
+            ;;
+        *.log|logs/*|runs/*/logs/*|runs/*/*.log|/var/log/portal/*.log)
+            validate_path "${path}"
+            ;;
+        *)
+            echo "refusing non-log path" >&2
+            exit 4
+            ;;
+    esac
+}
+
 case "${command_name}" in
     status)
         exec git status --short --branch
@@ -53,6 +72,48 @@ case "${command_name}" in
     test)
         source "${venv_dir}/bin/activate"
         exec python -m pytest "$@"
+        ;;
+    format)
+        source "${venv_dir}/bin/activate"
+        exec python -m py_compile "$@"
+        ;;
+    phase)
+        source "${venv_dir}/bin/activate"
+        exec python scripts/vast_program.py "$@"
+        ;;
+    hash)
+        [[ $# -gt 0 ]] || { echo "paths required" >&2; exit 2; }
+        for path in "$@"; do
+            validate_path "${path}"
+        done
+        exec sha256sum "$@"
+        ;;
+    safe-log)
+        path=${1:-}
+        [[ -n ${path} ]] || { echo "log path required" >&2; exit 2; }
+        require_log_path "${path}"
+        lines=${2:-120}
+        [[ ${lines} =~ ^[0-9]+$ ]] || { echo "line count must be numeric" >&2; exit 2; }
+        exec tail -n "${lines}" -- "${path}"
+        ;;
+    pr-draft)
+        require_source_branch
+        require_gh
+        title=${1:-}
+        base=${2:-main}
+        body=${3:-}
+        [[ -n ${title} ]] || { echo "title required" >&2; exit 2; }
+        branch=$(current_branch)
+        exec gh pr create --draft --base "${base}" --head "${branch}" --title "${title}" --body "${body}"
+        ;;
+    pr-edit)
+        require_gh
+        number=${1:-}
+        body_file=${2:-}
+        [[ ${number} =~ ^[0-9]+$ ]] || { echo "PR number required" >&2; exit 2; }
+        [[ -n ${body_file} ]] || { echo "body file required" >&2; exit 2; }
+        validate_path "${body_file}"
+        exec gh pr edit "${number}" --body-file "${body_file}"
         ;;
     commit-push)
         require_source_branch
