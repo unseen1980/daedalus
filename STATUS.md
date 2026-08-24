@@ -1,11 +1,11 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-24T19:28:02.991470Z`
-- Phase: `phase3-decide`
+- Heartbeat: `2026-08-24T19:31:07.502944Z`
+- Phase: `phase3-qat-recovery`
 - Status: `passed`
-- Source: `vast/daedalus-improvements-20260824` at `bb5fe4617401`
-- Elapsed: `8.72h` of `144.0h`
-- Finalization window opens in: `127.28h`
+- Source: `vast/daedalus-improvements-20260824` at `9d5a67763474`
+- Elapsed: `8.78h` of `144.0h`
+- Finalization window opens in: `127.22h`
 - Deadline stage: `active`
 
 ## Latest Metrics
