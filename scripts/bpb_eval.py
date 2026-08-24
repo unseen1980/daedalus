@@ -81,6 +81,104 @@ def evaluate_sources(root, *, bpb_fn: Callable[[Path], float]) -> List[dict]:
     return records
 
 
+def build_holdout(mixture_root, holdout_root, train_root,
+                  holdout_frac: float = 0.02) -> dict:
+    """Materialize the train/holdout split this evaluator requires, and record
+    what was reserved.
+
+    `--holdout-root` is required and there is no default place one comes from.
+    Phase 3 found what that costs: the corpus fetched onto the box is train
+    shards only, `make_mixture_holdout_split` had never been run against it, and
+    full-pass BPB -- third in the preregistered selection order -- went
+    unmeasured for want of a directory. Folding the build into scoring makes the
+    split a consequence of asking for the measurement rather than a prerequisite
+    someone has to remember.
+
+    Shards are hardlinked, not copied, so a split of the 3.0 GB corpus on this
+    box costs inodes rather than gigabytes, and re-running is a no-op: the
+    underlying helper reuses a destination only when it is the same file by
+    (device, inode), so this is safe to call before every scoring pass.
+
+    Sources with a single shard cannot be split and are skipped by the helper.
+    They are named in `skipped` rather than dropped silently, because a
+    scorecard that omits a source it did not measure describes a different
+    mixture than the one it claims to.
+    """
+    from daedalus.data import make_mixture_holdout_split
+
+    splits = make_mixture_holdout_split(str(mixture_root), str(train_root),
+                                        str(holdout_root),
+                                        holdout_frac=holdout_frac)
+    present = set(discover_sources(mixture_root))
+    sources = {
+        name: {
+            "train_tokens": int(split["train"]["total_tokens"]),
+            "holdout_tokens": int(split["holdout"]["total_tokens"]),
+            "train_shards": len(split["train"]["shards"]),
+            "holdout_shards": len(split["holdout"]["shards"]),
+        }
+        for name, split in splits.items()
+    }
+    return {
+        "mixture_root": str(mixture_root),
+        "holdout_frac": holdout_frac,
+        "sources": sources,
+        "skipped": sorted(present - set(sources)),
+    }
+
+
+def recovery_exposure(mixture_root, *, run_tokens: int,
+                      weights: Optional[Dict[str, float]] = None,
+                      max_epochs: float = 4.0) -> dict:
+    """How many times a run of `run_tokens` over `mixture_root` covered each
+    source -- and therefore each of that source's holdout shards.
+
+    A holdout carved out of the training corpus *after* a run has already
+    trained on it is not held out from that run. `MixtureBatchSource` draws
+    whole micro-batches from a source chosen by mixture weight, and within a
+    source `ShardBatchSource` samples windows **with replacement** across every
+    shard it has -- so reserving tail shards afterwards reserves nothing the run
+    did not already see. What can be said exactly is *how much* it saw: the
+    expected number of times the run covered a token of source `s` is
+    `run_tokens * prob_s / tokens_on_disk_s`, which is the epoch count
+    `resolve_mixture` already computes for the training preflight.
+
+    The shares used are post-cap, because those are the shares the run actually
+    sampled. Using the pre-cap blueprint would overstate exposure for exactly
+    the short sources `cap_weights_by_epochs` exists to protect.
+
+    This does not make a contaminated holdout clean. It makes the contamination
+    a per-source number, which matters here because it is wildly uneven: a
+    source with 403k tokens on disk and a 2% share is covered thousands of times
+    by a budget that barely grazes a billion-token one, and an equal-weighted
+    aggregate weights those two the same.
+    """
+    from train import resolve_mixture
+
+    names, _target_probs, probs, tokens_on_disk = resolve_mixture(
+        str(mixture_root), run_tokens, max_epochs, weights, verbose=False)
+
+    sources: Dict[str, dict] = {}
+    for name in names:
+        on_disk = int(tokens_on_disk[name])
+        drawn = float(run_tokens) * float(probs[name])
+        sources[name] = {
+            "share": float(probs[name]),
+            "tokens_on_disk": on_disk,
+            "tokens_drawn": drawn,
+            "epochs": drawn / on_disk if on_disk else float("inf"),
+        }
+    repeated = sorted(name for name, s in sources.items() if s["epochs"] > 1.0)
+    return {
+        "run_tokens": int(run_tokens),
+        "max_epochs_cap": max_epochs,
+        "sources": sources,
+        "repeated_sources": repeated,
+        "max_epochs_seen": max((s["epochs"] for s in sources.values()),
+                               default=0.0),
+    }
+
+
 def parse_weights(pairs) -> Dict[str, float]:
     weights = {}
     for pair in pairs or ():
@@ -132,7 +230,8 @@ def run_bpb_eval(*, name: str, holdout_root, out_dir, artifact: ArtifactRef,
                  bpb_fn: Callable[[Path], float],
                  max_batches: Optional[int] = None,
                  weights: Optional[Dict[str, float]] = None,
-                 runtime: Optional[dict] = None) -> Dict[str, Path]:
+                 runtime: Optional[dict] = None,
+                 details_extra: Optional[dict] = None) -> Dict[str, Path]:
     """Score one holdout root and write its scorecard."""
 
     records = evaluate_sources(holdout_root, bpb_fn=bpb_fn)
@@ -152,6 +251,7 @@ def run_bpb_eval(*, name: str, holdout_root, out_dir, artifact: ArtifactRef,
             "holdout_root": str(holdout_root),
             "weighting": "explicit" if weights else "equal",
             "weights": dict(weights) if weights else None,
+            **(details_extra or {}),
         },
     )
     return write_scorecard(Path(out_dir) / f"{name}.json", card)
@@ -175,6 +275,22 @@ def main(argv=None) -> int:
     parser.add_argument("--holdout-root", required=True,
                         help="directory with one manifest-backed subdirectory "
                              "per language (or per replay source)")
+    parser.add_argument("--build-holdout-from", default=None,
+                        help="mixture root to carve --holdout-root out of "
+                             "first, by reserving whole tail shards per source. "
+                             "Hardlinks and is idempotent, so it is safe to "
+                             "pass on every scoring pass")
+    parser.add_argument("--train-root", default=None,
+                        help="where --build-holdout-from writes the "
+                             "complementary train split (default: "
+                             "<holdout-root>-train)")
+    parser.add_argument("--holdout-frac", type=float, default=0.02,
+                        help="fraction of each source's tokens to reserve")
+    parser.add_argument("--exposure-tokens", type=int, default=0,
+                        help="token budget of a run that already trained on "
+                             "--build-holdout-from. Records how many times that "
+                             "run covered each source, since a holdout carved "
+                             "out afterwards is not held out from it")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--config", default="daedalus-150m")
     parser.add_argument("--tokenizer", default=None)
@@ -193,6 +309,18 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     max_batches = None if args.max_batches < 0 else args.max_batches
+    weights = parse_weights(args.weight) or None
+
+    details_extra: Dict[str, object] = {}
+    if args.build_holdout_from:
+        train_root = args.train_root or f"{args.holdout_root.rstrip('/')}-train"
+        details_extra["holdout_build"] = build_holdout(
+            args.build_holdout_from, args.holdout_root, train_root,
+            holdout_frac=args.holdout_frac)
+    if args.exposure_tokens:
+        source_root = args.build_holdout_from or args.holdout_root
+        details_extra["exposure"] = recovery_exposure(
+            source_root, run_tokens=args.exposure_tokens, weights=weights)
 
     from daedalus.config import PRESETS
     from daedalus.data import get_tokenizer
@@ -224,9 +352,10 @@ def main(argv=None) -> int:
                              kind="checkpoint", config=args.config),
         tokenizer_ref=tokenizer_ref, seed=args.seed, git_sha=_git_short_sha(),
         bpb_fn=bpb_fn, max_batches=max_batches,
-        weights=parse_weights(args.weight) or None,
+        weights=weights,
         runtime={"device": args.device, "seq_len": args.seq_len,
-                 "batch_size": args.batch_size})
+                 "batch_size": args.batch_size},
+        details_extra=details_extra or None)
 
     payload = json.loads(Path(paths["scorecard"]).read_text())
     print(json.dumps(payload["metrics"], indent=2, sort_keys=True))

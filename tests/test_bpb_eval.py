@@ -229,3 +229,160 @@ def test_a_holdout_with_different_languages_is_not_pairable(tmp_path):
 
     with pytest.raises(ScorecardError, match="digest"):
         paired_outcomes(before, after, field="bpb")
+
+
+# ----------------------------------------------------------- holdout build ---
+#
+# `--holdout-root` is required, and Phase 3 found the obvious consequence the
+# hard way: the corpus fetched onto the box is train shards only, so there was
+# no split to point it at, and full-pass BPB -- third in the preregistered
+# selection order -- went unmeasured. Building the split is part of scoring,
+# not a separate errand someone has to remember first.
+
+def _write_source(root, name, tokens, shard_tokens):
+    from daedalus.data import ShardWriter
+
+    directory = root / name
+    directory.mkdir(parents=True)
+    writer = ShardWriter(str(directory), shard_tokens=shard_tokens)
+    writer.write(list(range(tokens)))
+    writer.close()
+    writer.write_manifest({"eos_id": 0})
+    return directory
+
+
+def test_build_holdout_materializes_one_split_per_source(tmp_path):
+    from scripts.bpb_eval import build_holdout
+
+    mixture = tmp_path / "shards"
+    _write_source(mixture, "python", tokens=1000, shard_tokens=100)
+    _write_source(mixture, "rust", tokens=1000, shard_tokens=100)
+
+    record = build_holdout(mixture, tmp_path / "holdout", tmp_path / "train",
+                           holdout_frac=0.1)
+
+    assert (tmp_path / "holdout" / "python" / "manifest.json").exists()
+    assert (tmp_path / "holdout" / "rust" / "manifest.json").exists()
+    assert record["sources"]["python"]["holdout_tokens"] == 100
+    assert record["sources"]["python"]["train_tokens"] == 900
+
+
+def test_build_holdout_reserves_shards_the_train_split_does_not_keep(tmp_path):
+    """Disjointness is the whole point of a holdout, so assert it directly
+    rather than trusting the frac arithmetic to imply it."""
+    from scripts.bpb_eval import build_holdout
+
+    mixture = tmp_path / "shards"
+    _write_source(mixture, "python", tokens=1000, shard_tokens=100)
+
+    build_holdout(mixture, tmp_path / "holdout", tmp_path / "train",
+                  holdout_frac=0.2)
+
+    held = {path.name for path in (tmp_path / "holdout" / "python").glob("*.bin")}
+    trained = {path.name for path in (tmp_path / "train" / "python").glob("*.bin")}
+    assert held and trained
+    assert held.isdisjoint(trained)
+
+
+def test_build_holdout_is_idempotent(tmp_path):
+    """Re-scoring an arm must not depend on whether the split already exists."""
+    from scripts.bpb_eval import build_holdout
+
+    mixture = tmp_path / "shards"
+    _write_source(mixture, "python", tokens=1000, shard_tokens=100)
+
+    first = build_holdout(mixture, tmp_path / "holdout", tmp_path / "train",
+                          holdout_frac=0.1)
+    second = build_holdout(mixture, tmp_path / "holdout", tmp_path / "train",
+                           holdout_frac=0.1)
+
+    assert first["sources"] == second["sources"]
+
+
+def test_build_holdout_records_a_source_too_small_to_split(tmp_path):
+    """`make_mixture_holdout_split` skips a single-shard source rather than
+    raising. Skipping quietly would leave the scorecard describing a mixture it
+    did not measure, so the skip is part of the record."""
+    from scripts.bpb_eval import build_holdout
+
+    mixture = tmp_path / "shards"
+    _write_source(mixture, "python", tokens=1000, shard_tokens=100)
+    _write_source(mixture, "tiny", tokens=50, shard_tokens=1000)
+
+    record = build_holdout(mixture, tmp_path / "holdout", tmp_path / "train",
+                           holdout_frac=0.1)
+
+    assert record["skipped"] == ["tiny"]
+    assert "tiny" not in record["sources"]
+    assert not (tmp_path / "holdout" / "tiny").exists()
+
+
+# ---------------------------------------------------------------- exposure ---
+#
+# A holdout carved out of the training corpus *after* a run has trained on it is
+# not held out from that run. `MixtureBatchSource` samples windows with
+# replacement across every shard of a source, holdout shards included, so the
+# expected number of times the run covered each of a source's tokens is exactly
+# the epoch count the mixture resolver already computes. Reporting it turns "the
+# holdout is a bit contaminated" into a number per source.
+
+def test_exposure_reports_epochs_per_source(tmp_path):
+    from scripts.bpb_eval import recovery_exposure
+
+    # Both sources are large enough that the 4.0-epoch cap does not bind, so
+    # the shares are the blueprint ones and the arithmetic is the plain one.
+    # (A capped source is the subject of its own test below.)
+    mixture = tmp_path / "shards"
+    _write_source(mixture, "big", tokens=1000, shard_tokens=100)
+    _write_source(mixture, "small", tokens=1000, shard_tokens=100)
+
+    record = recovery_exposure(mixture, run_tokens=1000,
+                               weights={"big": 0.5, "small": 0.5})
+
+    # 1000 tokens x a 0.5 share = 500 drawn from a 1000-token source.
+    assert record["sources"]["big"]["epochs"] == pytest.approx(0.5)
+    assert record["sources"]["big"]["tokens_drawn"] == pytest.approx(500)
+
+
+def test_exposure_names_the_sources_a_run_covered_more_than_once(tmp_path):
+    """The most contaminated holdouts are the small sources -- exactly the ones
+    an equal-weighted aggregate over-counts."""
+    from scripts.bpb_eval import recovery_exposure
+
+    mixture = tmp_path / "shards"
+    _write_source(mixture, "big", tokens=10000, shard_tokens=1000)
+    _write_source(mixture, "small", tokens=100, shard_tokens=10)
+
+    record = recovery_exposure(mixture, run_tokens=1000,
+                               weights={"big": 0.5, "small": 0.5},
+                               max_epochs=100.0)
+
+    assert record["repeated_sources"] == ["small"]
+    assert record["max_epochs_seen"] == pytest.approx(5.0)
+
+
+def test_exposure_rides_the_same_epoch_cap_training_used(tmp_path):
+    """`resolve_mixture` caps a short source's share at `max_epochs`, and the
+    run sampled the post-cap shares. Reporting pre-cap shares would overstate
+    the contamination of precisely the sources the cap protects."""
+    from scripts.bpb_eval import recovery_exposure
+
+    mixture = tmp_path / "shards"
+    _write_source(mixture, "big", tokens=10000, shard_tokens=1000)
+    _write_source(mixture, "small", tokens=100, shard_tokens=10)
+
+    record = recovery_exposure(mixture, run_tokens=1000,
+                               weights={"big": 0.5, "small": 0.5},
+                               max_epochs=2.0)
+
+    assert record["sources"]["small"]["epochs"] <= 2.0 + 1e-9
+
+
+def test_run_bpb_eval_carries_extra_details_into_the_record(tmp_path):
+    _make_holdout(tmp_path, {"python": 100, "rust": 50})
+
+    paths = _run(tmp_path, tmp_path / "out",
+                 details_extra={"exposure": {"max_epochs_seen": 0.5}})
+
+    payload = json.loads(paths["scorecard"].read_text())
+    assert payload["details"]["exposure"]["max_epochs_seen"] == 0.5
