@@ -11,6 +11,8 @@ install -m 0755 "${repo_root}/ops/vast/daedalus_progress.sh" \
     /opt/supervisor-scripts/daedalus_progress.sh
 install -m 0755 "${repo_root}/ops/vast/daedalus_resume.sh" \
     /opt/supervisor-scripts/daedalus_resume.sh
+install -m 0755 "${repo_root}/ops/vast/run-approved" \
+    /usr/local/bin/daedalus-approved
 install -m 0644 "${repo_root}/ops/vast/supervisord.conf" \
     /etc/supervisor/conf.d/daedalus.conf
 

@@ -1,0 +1,84 @@
+#!/bin/bash
+set -euo pipefail
+
+repo=${DAEDALUS_REPO:-/workspace/daedalus}
+runtime_env=${DAEDALUS_RUNTIME_ENV:-/root/.config/daedalus/runtime.env}
+venv_dir=${DAEDALUS_VENV:-/venv/main}
+
+if [[ -f ${runtime_env} ]]; then
+    source "${runtime_env}"
+fi
+
+cd "${repo}"
+command_name=${1:-}
+[[ -n ${command_name} ]] || { echo "missing approved command" >&2; exit 2; }
+shift
+
+current_branch() {
+    git branch --show-current
+}
+
+require_source_branch() {
+    local branch
+    branch=$(current_branch)
+    case "${branch}" in
+        vast/daedalus-improvements-20260824|vast/daedalus-code-20260824)
+            ;;
+        *)
+            echo "refusing branch ${branch}" >&2
+            exit 3
+            ;;
+    esac
+}
+
+validate_path() {
+    local path=$1
+    [[ ${path} != /* ]] || { echo "refusing absolute path" >&2; exit 4; }
+    [[ /${path}/ != *"/../"* ]] || { echo "refusing parent path" >&2; exit 4; }
+    case "${path}" in
+        .env|.env.*|*/.env|*/.env.*)
+            echo "refusing secret path" >&2
+            exit 4
+            ;;
+    esac
+}
+
+case "${command_name}" in
+    status)
+        exec git status --short --branch
+        ;;
+    diff)
+        exec git diff -- "$@"
+        ;;
+    test)
+        source "${venv_dir}/bin/activate"
+        exec python -m pytest "$@"
+        ;;
+    commit-push)
+        require_source_branch
+        message=""
+        if [[ ${1:-} == "--message" && -n ${2:-} ]]; then
+            message=$2
+            shift 2
+        fi
+        [[ ${1:-} == "--" ]] || { echo "expected -- before paths" >&2; exit 2; }
+        shift
+        [[ -n ${message} && $# -gt 0 ]] || { echo "message and paths required" >&2; exit 2; }
+        for path in "$@"; do
+            validate_path "${path}"
+        done
+        git add -- "$@"
+        git diff --cached --check
+        if git diff --cached --quiet; then
+            echo "no staged changes"
+            exit 0
+        fi
+        git commit -m "${message}"
+        branch=$(current_branch)
+        exec git push origin "HEAD:refs/heads/${branch}"
+        ;;
+    *)
+        echo "unapproved command ${command_name}" >&2
+        exit 2
+        ;;
+esac
