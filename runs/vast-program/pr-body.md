@@ -70,7 +70,11 @@ The quantization penalty is not halved but **inverted** — 102–107% reduction
 
 **Two gates blocked every arm, and they are not equally serious.** FP16 perplexity regressed 1.36–1.77% against a 0.5% limit — inherent to QAT, since the STE optimizes the quantized model and the FP16 artifact is the float master. Retrieval degraded: MQAR is worse at d512/d1024/d2048 in all three arms by 2–6 points, growing with depth. Three independent arms moving the same way is a pattern; the single −23 at passkey d256 is one cell, unreproduced by neighbouring rates, and carries ~3.8 points of binomial noise at n=100.
 
-Per the preregistered stop rule the 300M follow-up and 1B escalation **did not run** — about 14 GPU-hours deliberately not spent. Nothing is published, because publishing implies endorsement.
+Per the preregistered stop rule the 300M follow-up and 1B escalation **did not run** — about 14 GPU-hours deliberately not spent.
+
+All three arms are published **privately** and hash-verified to `Unseen1980/daedalus-qat-recovery-probes` (FP16 and Q4_0 GGUFs per arm, the lr 5e-4 arm in HF format, and the full evidence set). The card leads with the fact that no arm passed its gates — endorsement is a property of what the card says, not of the upload — and the artifacts exist so the two decisions below can be made against real files instead of a summary. The `.pt` checkpoints are deliberately not published: the preregistered 300M follow-up starts from the *released base* with `--init-from`, so no probe checkpoint is an input to anything.
+
+Publishing surfaced a safety gap worth reviewing on its own: `publish_model`'s `repo_id` **defaulted to `Unseen1980/daedalus-150m`**, the shipped model. An experiment published correctly in every other respect and simply missing `--repo-id` would have overwritten the release. It now refuses a released-model target (and the released checkpoint repo) unless `--allow-released` is passed, normalizing case, whitespace and trailing slashes, and checking the target *before* the publishability check so a mistargeted upload reports the wrong target rather than a missing README. `verify_published` re-downloads into a fresh directory and hash-matches, because a successful upload means the request was accepted, not that the bytes match — a truncated GGUF loads far enough to produce numbers, and those numbers are wrong.
 
 **Two decisions for the operator, both of which change a preregistered gate and so are not this branch's to make:**
 
