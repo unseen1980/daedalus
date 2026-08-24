@@ -4,13 +4,13 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-24T11:35:54.949100Z",
+  "heartbeat_at": "2026-08-24T11:40:56.472171Z",
   "metrics": {},
-  "phase": "bootstrap",
+  "phase": "phase1-control-plane",
   "schema": 1,
   "source_branch": "vast/daedalus-improvements-20260824",
-  "source_sha": "beb6317c3ec2",
+  "source_sha": "d052ed71a429",
   "started_at": "2026-08-24T10:44:35.993665Z",
-  "status": "running",
-  "updated_at": "2026-08-24T10:44:36.013231Z"
+  "status": "passed",
+  "updated_at": "2026-08-24T11:39:41.368811Z"
 }
