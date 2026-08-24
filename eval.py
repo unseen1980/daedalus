@@ -274,6 +274,22 @@ def task_record(name: str, result: dict) -> dict:
 
 # --------------------------------------------------------------- task data ---
 
+# Which repo/config/revision each loader actually resolved to, most recent
+# last. A task's numbers move by points when its source changes (see
+# TASK_SPLITS below for the time that happened silently), and the fallback
+# chain above means the source is chosen at runtime -- so it is recorded at the
+# moment it is chosen rather than reconstructed afterwards from the candidate
+# list, which would only say what was *attempted*.
+_LOAD_TRACE: List[dict] = []
+
+# Filled by the most recent `load_all_tasks` call. Read by `_cli` instead of
+# being threaded through as an argument so that `load_all_tasks`'s call
+# signature at the call site stays exactly what it was -- the after-run chain
+# and several tests substitute their own single-argument version of it, and a
+# new required keyword there would break them for no benefit.
+LAST_TASK_SOURCES: Dict[str, dict] = {}
+
+
 def _load_with_fallback(candidates, split):
     """Try each (repo_id, config) candidate in turn, and for each, try the
     normal loading path then a parquet-conversion fallback -- `datasets` 5.x
@@ -292,6 +308,8 @@ def _load_with_fallback(candidates, split):
                     kwargs["revision"] = revision
                 ds = (load_dataset(repo, config, **kwargs) if config
                      else load_dataset(repo, **kwargs))
+                _LOAD_TRACE.append({"repo": repo, "config": config,
+                                    "split": split, "revision": revision})
                 return ds, repo
             except Exception as e:
                 last_err = e
@@ -436,10 +454,18 @@ TASK_SPLITS = {
 }
 
 
-def load_all_tasks(limit: Optional[int] = None) -> Dict[str, List[ClozeExample]]:
+def load_all_tasks(limit: Optional[int] = None,
+                   sources: Optional[dict] = None) -> Dict[str, List[ClozeExample]]:
     """Loads every task, skipping (with a warning) any that fail entirely --
-    a benchmark being temporarily unavailable must not crash the whole eval."""
+    a benchmark being temporarily unavailable must not crash the whole eval.
+
+    `sources`, when given, is filled with the repo/split/revision each task
+    resolved to and the number of items it contributed. A task that fails to
+    load contributes no examples and no provenance entry, so a results file can
+    never imply it scored a benchmark it never saw.
+    """
     out = {}
+    LAST_TASK_SOURCES.clear()
     for name, loader in TASK_LOADERS.items():
         # Only override the split for tasks TASK_SPLITS knows about; the
         # loaders' own defaults already agree with it (pinned by
@@ -452,9 +478,16 @@ def load_all_tasks(limit: Optional[int] = None) -> Dict[str, List[ClozeExample]]
         if name in TASK_SPLITS:
             kwargs["split"] = TASK_SPLITS[name]
         try:
+            _LOAD_TRACE.clear()
             out[name] = loader(**kwargs)
         except Exception as e:
             print(f"WARNING: could not load task '{name}' ({e}); skipping")
+            continue
+        resolved = _LOAD_TRACE[-1] if _LOAD_TRACE else {}
+        record = {**resolved, "n": len(out[name]), "limit": limit}
+        LAST_TASK_SOURCES[name] = record
+        if sources is not None:
+            sources[name] = record
     return out
 
 
@@ -716,6 +749,114 @@ def mean_over_checkpoints(per_checkpoint_results: List[dict]) -> dict:
     return mean
 
 
+# -------------------------------------------------------------- provenance ---
+
+PROVENANCE_SCHEMA = 1
+
+
+def file_digest(path) -> Optional[str]:
+    """SHA-256 of a file's bytes, or None when it cannot be read.
+
+    None rather than an exception: a peer run has no checkpoint, and a results
+    file is still worth writing when a path has moved. What must never happen is
+    a *wrong* digest, so unreadable is recorded as unknown.
+    """
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def tokenizer_digest(tokenizer) -> str:
+    """A fingerprint of the vocabulary that scored the run.
+
+    Hashes the vocabulary and special tokens rather than a file, because peers
+    are scored with their own tokenizers loaded straight from the Hub and there
+    is no single local file to point at. Any id remap, added token, or vocab
+    resize changes this -- which is the property that matters, since all three
+    move cloze scores while leaving the checkpoint path identical.
+    """
+    payload = {
+        "vocab_size": getattr(tokenizer, "vocab_size", None),
+        "vocab": tokenizer.get_vocab() if hasattr(tokenizer, "get_vocab") else {},
+        "special_tokens": sorted(getattr(tokenizer, "all_special_tokens", []) or []),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def provenance_record(*, checkpoints, config, tokenizer, task_sources,
+                      shard_dir, bpb_max_batches, bpb_batch_size, seq_len,
+                      seed, hf_model: Optional[str] = None,
+                      device: Optional[str] = None) -> dict:
+    """Everything needed to decide whether two results may be compared.
+
+    `bpb.mode` is the one most likely to be got wrong by a reader: this file
+    defaults to a bounded 100-batch sample so that per-checkpoint eval during
+    training stays affordable, and a sampled bits-per-byte is simply not the
+    same measurement as a full pass over the held-out shards. Recording the mode
+    beside the number is what stops a final report from quoting one as the
+    other.
+    """
+    from datetime import datetime, timezone
+
+    if not shard_dir:
+        bpb = {"mode": "not-applicable", "max_batches": None}
+    else:
+        bpb = {
+            "mode": "full" if bpb_max_batches is None else "sample",
+            "max_batches": bpb_max_batches,
+        }
+    bpb.update({"shard_dir": shard_dir, "batch_size": bpb_batch_size,
+                "seq_len": seq_len})
+
+    return {
+        "schema": PROVENANCE_SCHEMA,
+        "created_at": datetime.now(timezone.utc).isoformat()
+        .replace("+00:00", "Z"),
+        "git_sha": _git_short_sha(),
+        "config": config,
+        "seed": seed,
+        "device": device,
+        "hf_model": hf_model,
+        "checkpoints": [{"path": path, "sha256": file_digest(path)}
+                        for path in (checkpoints or [])],
+        "tokenizer": {
+            "sha256": tokenizer_digest(tokenizer),
+            "name_or_path": getattr(tokenizer, "name_or_path", None),
+        },
+        "bpb": bpb,
+        "tasks": dict(task_sources or {}),
+    }
+
+
+def write_results(results_path, items_path, *, per_checkpoint, mean, per_item,
+                  provenance, task_limit) -> None:
+    """Write the results file and, when there are outcomes, its item sidecar.
+
+    Provenance goes in *both*. The sidecar is what a paired comparison reads,
+    and it is routinely moved around on its own; a sidecar that cannot say which
+    checkpoint and tokenizer produced it can be paired against anything.
+    """
+    results_path = str(results_path)
+    os.makedirs(os.path.dirname(results_path) or ".", exist_ok=True)
+    with open(results_path, "w") as handle:
+        json.dump({"provenance": provenance, "per_checkpoint": per_checkpoint,
+                   "mean": mean}, handle, indent=2)
+
+    if not (per_item and items_path):
+        return
+    items_path = str(items_path)
+    os.makedirs(os.path.dirname(items_path) or ".", exist_ok=True)
+    with open(items_path, "w") as handle:
+        json.dump({"provenance": provenance, "models": per_item,
+                   "task_limit": task_limit}, handle)
+
+
 # --------------------------------------------------------------------- cli ---
 
 def _cli():
@@ -755,6 +896,9 @@ def _cli():
                         "the peers we are measured against. Set it only for a "
                         "smoke run.")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--seed", type=int, default=20260824,
+                   help="recorded in provenance and applied to torch/numpy, so "
+                        "a re-run of the same checkpoint is reproducible")
     p.add_argument("--out", default="runs/eval/results.json")
     p.add_argument("--per-item", default=None,
                    help="write per-item correctness here (default: alongside "
@@ -779,6 +923,9 @@ def _cli():
     import os
     from daedalus.wandb_logger import WandbLogger
 
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+
     run_name = args.run_name or (
         f"eval-peer-{args.hf_model.split('/')[-1]}-{_git_short_sha()}"
         if args.hf_model else f"eval-{args.config}-{_git_short_sha()}")
@@ -791,6 +938,7 @@ def _cli():
     )
 
     task_examples = None   # loaded after the tokenizer, below
+    task_sources: Dict[str, dict] = {}
 
     per_ckpt = []
     per_item: Dict[str, dict] = {}
@@ -800,6 +948,7 @@ def _cli():
         # the comparable half anyway.
         model, tokenizer = load_peer_model(args.hf_model, device=args.device)
         task_examples = load_all_tasks(limit=args.task_limit)
+        task_sources.update(LAST_TASK_SOURCES)
         r = {}
         raw = {}
         for name, examples in task_examples.items():
@@ -830,6 +979,7 @@ def _cli():
         if task_examples is None:
             tokenizer = get_tokenizer()
             task_examples = load_all_tasks(limit=args.task_limit)
+            task_sources.update(LAST_TASK_SOURCES)
         print(f"evaluating {ckpt} ...")
         raw = {}
         r = evaluate_checkpoint(ckpt, args.config, tokenizer, task_examples,
@@ -847,11 +997,12 @@ def _cli():
     wb.log({f"mean_{k}": v for k, v in mean.items()})
     wb.finish()
 
-    out = {"per_checkpoint": per_ckpt, "mean": mean}
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    with open(args.out, "w") as f:
-        json.dump(out, f, indent=2)
-    print(f"wrote {args.out}")
+    provenance = provenance_record(
+        checkpoints=args.checkpoints or [], config=args.config,
+        tokenizer=tokenizer, task_sources=task_sources,
+        shard_dir=args.shard_dir, bpb_max_batches=bpb_max_batches,
+        bpb_batch_size=args.bpb_batch_size, seq_len=args.seq_len,
+        seed=args.seed, hf_model=args.hf_model, device=args.device)
 
     # Per-item outcomes go beside the results, not inside them: 10,042
     # HellaSwag rows would bury the six numbers a human reads there. They are
@@ -859,12 +1010,12 @@ def _cli():
     # between "we beat Pythia-160M" being a result and being a coin flip --
     # the peer group sits inside a 1.1-point band and the unpaired error of a
     # difference is +/-0.83.
+    write_results(args.out, args.per_item, per_checkpoint=per_ckpt, mean=mean,
+                  per_item=per_item, provenance=provenance,
+                  task_limit=args.task_limit)
+    print(f"wrote {args.out}")
     if per_item and args.per_item:
-        items_path = args.per_item
-        os.makedirs(os.path.dirname(items_path) or ".", exist_ok=True)
-        with open(items_path, "w") as f:
-            json.dump({"models": per_item, "task_limit": args.task_limit}, f)
-        print(f"wrote {items_path}")
+        print(f"wrote {args.per_item}")
 
     print(json.dumps(mean, indent=2))
 
