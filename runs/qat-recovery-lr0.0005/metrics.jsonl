@@ -1,0 +1,1 @@
+{"step": 20, "tokens": 10485760, "loss": 2.569710038602352, "val_bpb": null, "lr": 0.0005, "tok_per_sec": 26890.25828199625, "elapsed_h": 0.1083184517092175, "cost_usd": 0.04863498490664694, "grad_norm": 0.7596789598464966, "peak_mem_GB": 17.416866816, "qat_active": 1, "skipped_updates": 0, "qat_rel_rmse": 0.035029583374581806, "qat_tensors": 103.0}
