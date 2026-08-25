@@ -338,12 +338,19 @@ class VastProgramController:
             raise ValueError("max_attempts must be >= 1")
         command = list(command)
         self._check_deadline(phase, estimated_hours)
+        started_at = self.now()
         self.store.transition(
             phase=phase,
             status="running",
-            now=self.now(),
+            now=started_at,
             lane=self.lane,
-            details={"command": command, "max_attempts": max_attempts, "estimated_hours": estimated_hours},
+            # `started_at` explicitly, because `updated_at` stopped meaning
+            # "when this phase began" as soon as a second lane could bump it --
+            # and "how long has this been running" is the first question asked
+            # of a phase that is still holding the lease.
+            details={"command": command, "max_attempts": max_attempts,
+                     "estimated_hours": estimated_hours,
+                     "started_at": _timestamp(started_at)},
         )
 
         returncodes: list[int] = []
@@ -473,6 +480,40 @@ def detach_phase(
     return {"pid": process.pid, "log": str(log_path), "argv": argv}
 
 
+def take_lease(controller: "VastProgramController") -> dict:
+    """Acquire the lane's lease, or exit saying who is already driving it.
+
+    A busy lease is an *expected* answer, not a defect: a session that comes
+    back while a detached ten-hour phase is still running asks for it every
+    time. Uncaught, that answered with a traceback, which reads as "the
+    controller is broken" rather than "this is already running" -- and the
+    obvious response to a broken controller is to try again harder. So the
+    refusal names the phase in progress and where to watch it.
+    """
+
+    try:
+        return controller.acquire_lease()
+    except ControllerLeaseError as exc:
+        try:
+            state = controller.store.load()
+        except (OSError, ValueError):
+            state = {}
+        if controller.lane != MAIN_LANE:
+            current = (state.get("lanes") or {}).get(controller.lane) or {}
+        else:
+            current = state
+        since = (current.get("details") or {}).get("started_at") \
+            or current.get("updated_at", "an unrecorded time")
+        raise SystemExit(
+            f"{exc}: lane {controller.lane!r} is running "
+            f"{current.get('phase', 'an unrecorded phase')} "
+            f"({current.get('status', 'unknown')}) since {since}. Watch it in "
+            f"{controller.state_path} and its phase log; do not relaunch it. "
+            f"A pass that does not contend for the same device can run beside "
+            f"it under its own --lane."
+        ) from exc
+
+
 def _details(raw: str) -> dict:
     """`--details-json`, or a refusal naming what was wrong with it."""
     try:
@@ -544,7 +585,7 @@ def main(argv=None) -> int:
     if args.command == "set-base-sha":
         if not Path(args.state).exists():
             raise SystemExit(f"state file does not exist: {args.state}")
-        controller.acquire_lease()
+        take_lease(controller)
         try:
             controller.store.set_base_sha(base_sha=args.base_sha, now=controller.now())
         finally:
@@ -563,7 +604,7 @@ def main(argv=None) -> int:
         if not Path(args.state).exists():
             raise SystemExit(f"state file does not exist: {args.state}")
         details = _details(args.details_json)
-        controller.acquire_lease()
+        take_lease(controller)
         try:
             controller.store.transition(phase=args.phase, status=args.status,
                                         now=controller.now(), lane=lane, details=details)
@@ -607,7 +648,7 @@ def main(argv=None) -> int:
 
     if not Path(args.state).exists():
         controller.initialize(base_sha=args.base_sha)
-    controller.acquire_lease()
+    take_lease(controller)
     try:
         controller.run_phase(
             args.phase,

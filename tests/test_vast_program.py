@@ -345,6 +345,40 @@ def test_one_lane_still_admits_one_controller(tmp_path):
         second.acquire_lease()
 
 
+def test_a_busy_lane_answers_with_what_is_running_not_a_traceback(tmp_path):
+    """A session that comes back while a detached ten-hour phase is still
+    running asks for the lease every time. A traceback reads as "the controller
+    is broken", and the obvious response to a broken controller is to try
+    again harder -- which is the one thing that must not happen here."""
+    from scripts.vast_program import VastProgramController, main
+
+    state = tmp_path / "state.json"
+    lease = tmp_path / "controller.lock"
+    holder = VastProgramController(state_path=state, lease_path=lease, now=lambda: NOW)
+    holder.initialize(base_sha="abc123")
+    holder.acquire_lease()
+    holder.store.transition(
+        phase="phase6-stageb-sweep", status="running", now=NOW,
+        details={"started_at": "2026-08-24T12:00:00Z"})
+    # A side lane advancing bumps `updated_at`, so the phase's own start has to
+    # be read from where it was recorded, not from the state's last change.
+    holder.store.transition(phase="phase6-evidence", status="running",
+                            now=NOW + timedelta(hours=3), lane="evidence")
+
+    with pytest.raises(SystemExit) as refusal:
+        main(["--state", str(state), "--lease", str(lease), "run-phase",
+              "--phase", "phase6-evidence", "--estimated-hours", "0.01",
+              "--", "true"])
+
+    message = str(refusal.value)
+    assert "phase6-stageb-sweep" in message
+    assert "since 2026-08-24T12:00:00Z" in message
+    assert "do not relaunch it" in message
+    assert "--lane" in message, "the message must name the way out"
+    # The refused phase left no mark: the running one still owns the record.
+    assert json.loads(state.read_text())["phase"] == "phase6-stageb-sweep"
+
+
 def test_a_side_lane_refused_by_the_deadline_leaves_the_phase_alone(tmp_path):
     """The refusal is the lane's, and so is the record of it.
 
