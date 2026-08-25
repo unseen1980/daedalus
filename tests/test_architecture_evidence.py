@@ -38,7 +38,8 @@ from scripts.architecture_report import (RETRIEVAL_GATE_TASKS,
                                          RETRIEVAL_MIN_ITEMS_PER_DEPTH,
                                          TRAINED_CONTEXT, decode_entry,
                                          export_check, read_decode_passes,
-                                         read_retrieval)
+                                         read_retrieval,
+                                         retrieval_scorecard_path)
 from scripts.architecture_sweep import ARMS_BY_NAME, CONTROL
 
 
@@ -573,6 +574,27 @@ def test_the_retrieval_sweep_reads_the_export_manifest_and_summarizes(tmp_path):
 
 def test_the_two_stages_do_not_share_a_retrieval_directory():
     assert retrieval_out_dir(ARM, "stagea") != retrieval_out_dir(ARM, "stageb")
+
+
+def test_the_scorecards_land_where_the_gate_looks_for_them(tmp_path):
+    """The join between this producer and its reader, pinned.
+
+    A scorecard written one directory away from `retrieval_scorecard_path` is
+    the most expensive kind of mistake available here: every pass succeeds,
+    every file is on disk, and the gate reports the column unmeasured anyway --
+    an arm's hour of llama-cli spent to change nothing.
+    """
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-cli").write_text("#!/bin/sh\n")
+    root = str(tmp_path / "retrieval")
+
+    score_retrieval_arm(ARM, _exported(tmp_path), root=root,
+                        llama_cpp_dir=str(llama_cpp),
+                        runner=FakeRetrieval().runner)
+
+    for task in RETRIEVAL_GATE_TASKS:
+        assert retrieval_scorecard_path(ARM, task, tag="stagea",
+                                        root=root).exists()
 
 
 def test_cli_retrieval_scores_the_arms_the_export_manifest_names(
