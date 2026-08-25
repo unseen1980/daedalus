@@ -62,7 +62,7 @@ successful quantize, so a failure leaves every intermediate in place for
 diagnosis, and `--keep-hf` turns the cleanup off. Nothing is reachable by this
 path except directories this module itself wrote.
 
-Subcommands: `export`, `retrieval`, `decode`.
+Subcommands: `export`, `retrieval`, `decode`, `all`.
 """
 
 from __future__ import annotations
@@ -661,6 +661,113 @@ def run_decode(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
     return result
 
 
+# ==================================================================== chain ====
+# The three passes above are one pipeline over one input -- the arms a screen
+# advanced -- and they run in a lane that is not the GPU's. Launched as three
+# separate phases they need three sessions to notice a predecessor finished and
+# start the next, and the CPU lane is idle for however long that takes. Under a
+# controller whose whole point is that launched work outlives the session that
+# launched it, that idle time is the session's schedule leaking into the
+# program's: stage B holds the GPU for eight hours, and the evidence columns
+# either finish inside that window or the phase ends with a table whose
+# `export`, `retrieval` and `decode` cells still read `unmeasured`.
+#
+# Three decisions about how the passes compose.
+#
+# **Export gates the chain; retrieval does not gate decode.** Both later passes
+# read the export manifest, so nothing quantized means neither has an artifact
+# to measure, and the chain stops rather than writing two summaries that say
+# `no-gguf` once per arm. Retrieval and decode are *different columns* read off
+# the same GGUFs independently, so a retrieval failure must not also cost the
+# decode column -- `gate_verdict` already returns `unproven` for one unmeasured
+# column, and losing a second to the first one's failure would only widen a
+# verdict that is already blocked.
+#
+# **A refused arm is not a failed chain.** `export_arm` records a conversion
+# stock llama.cpp declined as that arm's finding, and `export_check` reads it as
+# `unmeasured` rather than as a pass. The chain fails only when *no* arm
+# produced an artifact, because that is the case where continuing measures
+# nothing at all.
+#
+# **The depths are deliberately not overridable here.** `decode_check` reads
+# depth 0 and the trained context or it reads nothing, and `RETRIEVAL_PER_DEPTH`
+# is already the smallest count the gate's own threshold can carry. A chain flag
+# that could narrow either would only ever buy time by producing a column the
+# gate declines to read, which is the failure this whole module exists to avoid.
+
+
+def run_all(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
+            shape: StageShape = STAGE_A, run_root: str = RUN_ROOT,
+            evidence_root: str = EVIDENCE_ROOT,
+            retrieval_root: str = RETRIEVAL_ROOT,
+            decode_out: str = DECODE_REPORT,
+            llama_cpp_dir: str = DEFAULT_LLAMA_CPP_DIR, keep_hf: bool = False,
+            per_depth: int = RETRIEVAL_PER_DEPTH, threads: int = 8,
+            n_ctx: int = 4096, seed: Optional[int] = None,
+            rounds: int = DECODE_ROUNDS, n_gen: int = DECODE_N_GEN,
+            note: Optional[str] = None, refresh: bool = False,
+            selection: Optional[dict] = None) -> dict:
+    """Export, then retrieval, then decode, as one phase.
+
+    Each pass is the same re-entrant one the individual subcommands run, so a
+    chain the deadline or a dead controller cut short costs the arm it was on
+    and resumes from the manifests the finished passes already wrote.
+    """
+    stages: list = []
+
+    export = export_arms(arms, tag=tag, shape=shape, root=evidence_root,
+                         run_root=run_root, llama_cpp_dir=llama_cpp_dir,
+                         keep_hf=keep_hf, refresh=refresh, selection=selection)
+    summary = summarize_export(export["arms"])
+    stages.append({"stage": "export", **summary,
+                   "manifest": export["manifest"],
+                   "ok": summary["n_quantized"] > 0,
+                   "reason": None if summary["n_quantized"] else
+                             "no arm produced a Q4_0 GGUF, so neither the "
+                             "retrieval nor the decode column has an artifact "
+                             "to measure"})
+    advanced_from = export.get("advanced_from")
+
+    if stages[0]["ok"]:
+        retrieval = score_retrieval_arms(
+            arms, tag=tag, shape=shape, evidence_root=evidence_root,
+            root=retrieval_root, llama_cpp_dir=llama_cpp_dir,
+            per_depth=per_depth, threads=threads, n_ctx=n_ctx, seed=seed,
+            refresh=refresh, selection=selection)
+        scored = summarize_retrieval(retrieval["arms"])
+        stages.append({"stage": "retrieval", **scored,
+                       "summary": retrieval["summary"],
+                       "ok": not scored["failed"],
+                       "reason": None if not scored["failed"] else
+                                 f"{scored['failed']} ran but left no scorecard "
+                                 f"for every gate task"})
+
+        decode = run_decode(arms, tag=tag, shape=shape,
+                            evidence_root=evidence_root, out=decode_out,
+                            llama_cpp_dir=llama_cpp_dir, threads=threads,
+                            rounds=rounds, n_gen=n_gen, note=note,
+                            refresh=refresh, selection=selection)
+        stages.append({"stage": "decode", "ok": bool(decode.get("measured")),
+                       "out": decode.get("out"),
+                       "measured_depths": decode.get("measured_depths"),
+                       "skipped": decode.get("skipped"),
+                       "reason": decode.get("reason")})
+
+    result = {
+        "tag": tag, "shape": shape.name, "at": _utcnow(),
+        "advanced_from": advanced_from,
+        "arms": [arm.name for arm in arms],
+        "stages": stages,
+        # Which pass ended the chain, or None. Only export can: the other two
+        # are independent columns, so a failure in either is reported without
+        # taking the one behind it down.
+        "stopped_at": None if stages[0]["ok"] else "export",
+        "ok": all(stage["ok"] for stage in stages),
+    }
+    _write_json(Path(evidence_root) / f"evidence-{tag}.json", result)
+    return result
+
+
 # ====================================================================== cli ====
 
 #: One help string for all three passes: the flag means the same thing in each,
@@ -742,6 +849,40 @@ def main(argv=None) -> int:
                         help="replace a report that measures models this "
                              "invocation does not")
 
+    chain = sub.add_parser(
+        "all", help="export, then retrieval, then decode, as one phase, so the "
+                    "CPU lane does not wait for a session between them")
+    chain.add_argument("--arms", default=None,
+                       help="comma-separated subset, control first")
+    chain.add_argument("--arms-from-report", default=None, metavar="TAG",
+                       help=ARMS_FROM_REPORT_HELP)
+    chain.add_argument("--llama-cpp-dir", default=DEFAULT_LLAMA_CPP_DIR)
+    chain.add_argument("--keep-hf", action="store_true",
+                       help="keep the intermediate HF directory the stock "
+                            "converter reads")
+    chain.add_argument("--retrieval-root", default=RETRIEVAL_ROOT,
+                       help="where the gate reads one directory per arm run")
+    chain.add_argument("--per-depth", type=int, default=RETRIEVAL_PER_DEPTH,
+                       help="retrieval items per depth; below the default the "
+                            "gate's threshold has no power")
+    chain.add_argument("--n-ctx", type=int, default=4096)
+    chain.add_argument("--seed", type=int, default=None)
+    chain.add_argument("--out", default=DECODE_REPORT,
+                       help="the single decode report the gate reads")
+    chain.add_argument("--threads", type=int, default=8,
+                       help="llama.cpp threads, for both stock passes")
+    chain.add_argument("--rounds", type=int, default=DECODE_ROUNDS)
+    chain.add_argument("--n-gen", type=int, default=DECODE_N_GEN)
+    chain.add_argument("--note", default=None,
+                       help="what else the box was doing; decode absolutes are "
+                            "only comparable within one invocation")
+    chain.add_argument("--refresh", action="store_true",
+                       help="redo work every pass would otherwise skip as "
+                            "already done")
+    # No --depths, at either pass. See the chain's comment block: the gate reads
+    # depth 0 and the trained context or it reads nothing, so narrowing here
+    # could only buy time by producing a column that is refused.
+
     args = parser.parse_args(argv)
     shape = SHAPES[args.shape]
     tag = shape.tag if args.tag is None else args.tag
@@ -788,6 +929,22 @@ def main(argv=None) -> int:
         # phase, and a phase that "passed" without measuring is how an
         # unmeasured column reaches a report as a finished one.
         return 0 if report.get("measured") else 1
+
+    if args.command == "all":
+        report = run_all(arms, tag=tag, shape=shape, run_root=args.run_root,
+                         evidence_root=args.evidence_root,
+                         retrieval_root=args.retrieval_root,
+                         decode_out=args.out,
+                         llama_cpp_dir=args.llama_cpp_dir,
+                         keep_hf=args.keep_hf, per_depth=args.per_depth,
+                         threads=args.threads, n_ctx=args.n_ctx, seed=args.seed,
+                         rounds=args.rounds, n_gen=args.n_gen, note=args.note,
+                         refresh=args.refresh, selection=selection)
+        print(json.dumps(report, indent=2))
+        # Same rule as `decode`'s, over three passes: a phase that exits 0
+        # without measuring is how an unmeasured column reaches a report
+        # looking finished.
+        return 0 if report["ok"] else 1
 
     raise SystemExit(f"unhandled command {args.command}")
 

@@ -969,3 +969,195 @@ def test_an_unscored_screen_stops_the_evidence_pass(tmp_path, monkeypatch):
                        "--report-root", str(tmp_path / "reports"),
                        "decode", "--arms-from-report", "stagea",
                        "--out", str(tmp_path / "decode.json")])
+
+
+# ------------------------------------------------------------------ chain ----
+# Three passes over one arm list, in a lane that is not the GPU's. Launched
+# separately each needs a session to notice the previous one finished, and the
+# CPU lane idles until one arrives -- so what is pinned here is the ordering,
+# and which failures stop the chain versus which are recorded and stepped past.
+
+
+class FakeChain:
+    """One runner for all three stock passes, dispatched by command shape.
+
+    The chain is a single process, so every pass reaches `_run`. A fake that
+    answered only one of them could not exercise the ordering, which is the
+    behaviour being added.
+    """
+
+    def __init__(self, *, tools=None, retrieval=None, bench=None):
+        self.tools = tools if tools is not None else FakeToolchain()
+        self.retrieval = retrieval if retrieval is not None else FakeRetrieval()
+        self.bench = bench if bench is not None else FakeBench()
+        self.order = []
+
+    def runner(self, command, timeout):
+        parts = [str(part) for part in command]
+        if "--models" in parts:
+            self.order.append("decode")
+            return self.bench.runner(parts, timeout)
+        if "--gguf" in parts:
+            self.order.append("retrieval")
+            return self.retrieval.runner(parts, timeout)
+        self.order.append("export")
+        return self.tools.runner(parts, timeout)
+
+    @property
+    def passes(self) -> list:
+        """The order the three passes first ran in, deduplicated.
+
+        `export` reaches the runner twice per arm -- convert then quantize --
+        so the raw log answers "which pass ran first" only after collapsing
+        repeats.
+        """
+        seen = []
+        for name in self.order:
+            if name not in seen:
+                seen.append(name)
+        return seen
+
+
+def _chain_box(tmp_path: Path, arms, monkeypatch, chain=None):
+    """A box with a checkpoint per arm and all three stock entry points."""
+    chain = chain if chain is not None else FakeChain()
+    run_root = tmp_path / "runs"
+    for arm in arms:
+        _checkpoint(run_root, arm)
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-cli").write_text("#!/bin/sh\n")
+    (llama_cpp / "build" / "bin" / "llama-bench").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(evidence, "_export_hf", chain.tools.export_fn)
+    monkeypatch.setattr(evidence, "_run", chain.runner)
+    return chain, [
+        "--run-root", str(run_root),
+        "--evidence-root", str(tmp_path / "evidence"),
+        # Named explicitly rather than left empty: an empty --arms means "the
+        # whole grid", which is a fifteen-arm chain rather than a focused test.
+        "all", "--arms", ",".join(arm.name for arm in arms) or CONTROL.name,
+        "--retrieval-root", str(tmp_path / "retrieval"),
+        "--out", str(tmp_path / "decode.json"),
+        "--llama-cpp-dir", str(llama_cpp),
+    ]
+
+
+def test_the_chain_runs_the_three_passes_in_order(tmp_path, capsys,
+                                                  monkeypatch):
+    """Export has to precede both stock passes -- they read the manifest it
+    writes -- and one phase running all three is what keeps the CPU lane busy
+    while stage B holds the GPU."""
+    chain, argv = _chain_box(tmp_path, (CONTROL, ARM), monkeypatch)
+
+    code = evidence_main(argv)
+
+    assert code == 0
+    assert chain.passes == ["export", "retrieval", "decode"]
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["ok"] is True and printed["stopped_at"] is None
+    assert [stage["stage"] for stage in printed["stages"]] == [
+        "export", "retrieval", "decode"]
+    # And it leaves one artifact recording the whole chain, beside the three
+    # each pass already writes.
+    written = json.loads(
+        (tmp_path / "evidence" / "evidence-stagea.json").read_text())
+    assert written["arms"] == [CONTROL.name, ARM.name]
+    assert written["ok"] is True
+
+
+def test_nothing_exported_stops_the_chain_before_the_stock_passes(
+        tmp_path, capsys, monkeypatch):
+    """Both later passes measure the GGUFs export writes, so with none of them
+    the chain would only write two summaries saying `no-gguf` per arm."""
+    chain, argv = _chain_box(tmp_path, (CONTROL, ARM), monkeypatch,
+                             chain=FakeChain(tools=FakeToolchain(convert_rc=1)))
+
+    code = evidence_main(argv)
+
+    assert code == 1
+    assert chain.passes == ["export"], "measured past an empty export"
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["stopped_at"] == "export" and printed["ok"] is False
+    assert len(printed["stages"]) == 1
+    assert printed["stages"][0]["ok"] is False
+    assert "Q4_0 GGUF" in printed["stages"][0]["reason"]
+
+
+def test_a_refused_arm_does_not_stop_the_chain(tmp_path, capsys, monkeypatch):
+    """A conversion stock llama.cpp declines is that arm's finding, not a
+    broken chain: `export_check` already reads it as unmeasured, and the arms
+    that did convert still have four columns to answer."""
+
+    class RefusesOneArm(FakeToolchain):
+        def runner(self, command, timeout):
+            parts = [str(part) for part in command]
+            if any(f"arch-stagea-{ARM.name}" in part for part in parts):
+                return 1, "converter refused this shape"
+            return super().runner(parts, timeout)
+
+    chain, argv = _chain_box(tmp_path, (CONTROL, ARM), monkeypatch,
+                             chain=FakeChain(tools=RefusesOneArm()))
+
+    code = evidence_main(argv)
+
+    assert code == 0
+    assert chain.passes == ["export", "retrieval", "decode"]
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["stages"][0]["quantized"] == [CONTROL.name]
+    assert printed["stages"][0]["refused"] == [ARM.name]
+    assert printed["stages"][0]["ok"] is True
+    assert printed["ok"] is True
+
+
+def test_a_retrieval_failure_does_not_cost_the_decode_column(tmp_path, capsys,
+                                                             monkeypatch):
+    """They are different columns read off the same GGUFs. `gate_verdict`
+    already returns `unproven` for one unmeasured column; dropping decode
+    because retrieval failed would only widen that for no reason."""
+    chain, argv = _chain_box(
+        tmp_path, (CONTROL, ARM), monkeypatch,
+        chain=FakeChain(retrieval=FakeRetrieval(returncode=1)))
+
+    code = evidence_main(argv)
+
+    assert code == 1, "a chain that did not measure must not exit 0"
+    assert chain.passes == ["export", "retrieval", "decode"]
+    printed = json.loads(capsys.readouterr().out)
+    stages = {stage["stage"]: stage for stage in printed["stages"]}
+    assert stages["retrieval"]["ok"] is False
+    assert stages["decode"]["ok"] is True
+    assert printed["stopped_at"] is None
+
+
+def test_the_chain_measures_the_arms_the_report_advanced(tmp_path, capsys,
+                                                         monkeypatch):
+    """Same handoff the retrieval pass has: the list is read, not retyped, so
+    the arms measured here and the arms stage B trains cannot differ."""
+    chain, _ = _chain_box(tmp_path, (CONTROL, ARM, ARMS_BY_NAME["a3-kv4"]),
+                          monkeypatch)
+    _commit_stage_a_report(tmp_path / "reports", selected=[ARM.name])
+
+    code = evidence_main([
+        "--run-root", str(tmp_path / "runs"),
+        "--evidence-root", str(tmp_path / "evidence"),
+        "--report-root", str(tmp_path / "reports"),
+        "all", "--arms-from-report", "stagea",
+        "--retrieval-root", str(tmp_path / "retrieval"),
+        "--out", str(tmp_path / "decode.json"),
+        "--llama-cpp-dir", str(tmp_path / "llama.cpp")])
+
+    assert code == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["arms"] == [CONTROL.name, ARM.name]
+    assert printed["advanced_from"]["report"].endswith("stagea-report.json")
+
+
+def test_the_chain_cannot_narrow_the_depths_the_gate_requires(tmp_path,
+                                                              monkeypatch):
+    """`decode_check` reads depth 0 and the trained context or it reads
+    nothing, so a flag that narrowed either could only buy time by producing a
+    column the gate refuses."""
+    _chain_box(tmp_path, (CONTROL,), monkeypatch)
+
+    with pytest.raises(SystemExit):
+        evidence_main(["--evidence-root", str(tmp_path / "evidence"),
+                       "all", "--depths", "0"])
