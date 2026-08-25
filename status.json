@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 21.37,
-    "finalization_in_hours": 114.63,
+    "elapsed_hours": 21.45,
+    "finalization_in_hours": 114.55,
     "hard_hours": 144.0,
-    "remaining_hours": 122.63,
+    "remaining_hours": 122.55,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 14266,
     "utilization_pct": 100
   },
-  "heartbeat_at": "2026-08-25T08:06:44.879399Z",
+  "heartbeat_at": "2026-08-25T08:11:46.178081Z",
   "metrics": {},
   "phase": "phase5-paired-escalation",
   "schema": 1,
