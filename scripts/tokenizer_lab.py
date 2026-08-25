@@ -1452,8 +1452,13 @@ def run_sweep(*, root, shard_root, tokenizer_root, device: str = "cuda",
     `score_only` re-scores arms that are already trained. Scoring is minutes
     and training is ~37 an arm, so a defect found in the scorer while a sweep
     is in flight is repaired by re-scoring afterwards rather than by killing
-    the sweep -- which would restart the running arm from step zero, since
-    attempt one of a fresh launch deliberately carries no `--resume`.
+    the sweep.
+
+    A killed sweep is now recoverable rather than lost: finished arms are
+    skipped by their scored file, and the arm that was mid-flight is picked up
+    from its checkpoint, because `run_with_resume` reads the open in-flight
+    marker its dead supervisor left instead of counting attempts. That was not
+    true when this sweep started, and the difference was 60.3M tokens.
     """
     root = Path(root)
     results = {}
