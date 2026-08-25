@@ -1,0 +1,55 @@
+{
+  "created_at": "2026-08-25T21:26:07.287920Z",
+  "details": {
+    "arm": "a8-kv2",
+    "holdout_root": "data/holdout",
+    "phase": "phase6-architecture",
+    "preset": "arch-a8-kv2",
+    "run": "arch-stagea-a8-kv2",
+    "sources_requested": [
+      "fineweb-edu"
+    ],
+    "tag": "stagea",
+    "weighting": "equal",
+    "weights": null
+  },
+  "item_count": 1,
+  "item_digest": "43782b3431329588f4336aa725e07eea",
+  "kind": "bpb",
+  "metrics": {
+    "bpb": 1.2671464882780097,
+    "bpb_equal_weight": 1.2671464882780097,
+    "bpb_fineweb-edu": 1.2671464882780097,
+    "bpb_token_weighted": 1.2671464882780097,
+    "n_sources": 1.0,
+    "tokens_fineweb-edu": 53588955.0
+  },
+  "name": "arch-stagea-a8-kv2-bpb",
+  "provenance": {
+    "artifact": {
+      "config": "arch-a8-kv2",
+      "kind": "checkpoint",
+      "path": "runs/arch-stagea-a8-kv2/checkpoint.pt",
+      "revision": null,
+      "sha256": "77cee0d8abb4d521c65c2cf3dc6aa37e05421362cd0ea5fb0ce9065a62cddc0c"
+    },
+    "bpb_mode": "full",
+    "bpb_sample_batches": null,
+    "git_sha": "06f5737",
+    "runtime": {
+      "batch_size": 8,
+      "device": "cuda",
+      "seq_len": 2048
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<smollm2-default>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

@@ -1,0 +1,14 @@
+{
+  "item_count": 1,
+  "item_digest": "886b4fbedbde21f12b74d7f442a519cd",
+  "items": [
+    {
+      "bpb": 1.2673798018712739,
+      "id": "fineweb-edu",
+      "tokens": 53588955
+    }
+  ],
+  "kind": "bpb",
+  "name": "arch-stagea-a3-kv4-bpb",
+  "schema": 1
+}
