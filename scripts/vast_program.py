@@ -304,8 +304,16 @@ class VastProgramController:
             if attempt < max_attempts and backoff_sec > 0:
                 self.sleeper(backoff_sec)
 
+        # "failed", not "halted". `halted` is terminal -- it is how the program
+        # records PROGRAM_HALTED -- so marking a phase halted wedged the whole
+        # controller on the first non-zero exit, and every later phase, related
+        # or not, raised TerminalStateError until someone transitioned the state
+        # by hand. A malformed argv is not a hard blocker; the plan's rule is
+        # that a failed phase preserves its artifacts and unrelated safe phases
+        # continue. `failed` is already one of the progress publisher's
+        # attention statuses, so this is still surfaced, just not fatal.
         details = {"command": command, "attempts": max_attempts, "returncodes": returncodes}
-        self.store.transition(phase=phase, status="halted", now=self.now(), details=details)
+        self.store.transition(phase=phase, status="failed", now=self.now(), details=details)
         raise PhaseFailed(phase, returncodes)
 
 

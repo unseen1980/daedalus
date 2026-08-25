@@ -104,7 +104,7 @@ def test_phase_records_bounded_retries_then_passes(tmp_path):
     ]
 
 
-def test_phase_failure_marks_halted_without_extra_attempts(tmp_path):
+def test_phase_failure_marks_failed_without_extra_attempts(tmp_path):
     from scripts.vast_program import PhaseFailed, VastProgramController
 
     calls = []
@@ -123,8 +123,45 @@ def test_phase_failure_marks_halted_without_extra_attempts(tmp_path):
     assert len(calls) == 2
     state = controller.store.load()
     assert state["phase"] == "gate"
-    assert state["status"] == "halted"
+    assert state["status"] == "failed"
     assert state["details"]["returncodes"] == [7, 7]
+
+
+def test_a_failed_phase_does_not_wedge_the_whole_program(tmp_path):
+    """A non-zero exit is a failed phase, not PROGRAM_HALTED.
+
+    Marking it `halted` -- which is terminal -- meant one malformed argv left
+    every later phase, related or not, raising TerminalStateError until the
+    state was edited by hand. The plan's rule is the opposite: preserve the
+    failed phase's artifacts and continue unrelated safe phases.
+    """
+    from scripts.vast_program import PhaseFailed, VastProgramController
+
+    returncodes = iter([3, 0])
+    controller = VastProgramController(state_path=tmp_path / "state.json",
+                                       now=lambda: NOW,
+                                       runner=lambda command: next(returncodes))
+    controller.initialize(base_sha="abc123")
+
+    with pytest.raises(PhaseFailed):
+        controller.run_phase("typo", ["bad-argv"])
+
+    controller.run_phase("unrelated", ["true"])
+
+    assert controller.store.load()["status"] == "passed"
+
+
+def test_a_deliberate_halt_is_still_terminal(tmp_path):
+    """PROGRAM_HALTED must keep stopping everything; only the automatic
+    per-phase failure was reclassified."""
+    from scripts.vast_program import TerminalStateError, VastProgramController
+
+    controller = VastProgramController(state_path=tmp_path / "state.json", now=lambda: NOW)
+    controller.initialize(base_sha="abc123")
+    controller.store.transition(phase="blocker", status="halted", now=NOW)
+
+    with pytest.raises(TerminalStateError):
+        controller.run_phase("anything", ["true"])
 
 
 @pytest.mark.parametrize("terminal", ["completed", "halted"])
