@@ -210,10 +210,16 @@ def test_detached_phase_argv_round_trips_every_option(tmp_path):
     ]
 
 
-def test_long_phase_refuses_to_run_inside_the_calling_session(tmp_path):
+def test_long_phase_refuses_to_run_inside_the_calling_session(tmp_path, monkeypatch):
     """A forgotten --detach must fail loudly, not silently lose GPU hours."""
 
+    from scripts import vast_program
     from scripts.vast_program import main
+
+    # Pinned rather than inherited: whether the *test runner* happens to lead
+    # its own session is an accident of how pytest was invoked, and this test
+    # is about the caller that does not.
+    monkeypatch.setattr(vast_program, "running_in_own_session", lambda: False)
 
     state = tmp_path / "state.json"
     assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
@@ -250,6 +256,85 @@ def test_short_phase_still_runs_inline(tmp_path):
     recorded = json.loads(state.read_text())
     assert recorded["phase"] == "phase4-budget"
     assert recorded["status"] == "passed"
+
+
+def test_a_session_leader_may_run_a_long_phase_inline(tmp_path, monkeypatch):
+    """The detached controller's own case, unit-sized.
+
+    It leads its own session, so the phase it runs is already outside the
+    engineering session's process group -- there is nothing left for `--detach`
+    to buy, and the guard has nothing to refuse.
+    """
+
+    from scripts import vast_program
+    from scripts.vast_program import main
+
+    monkeypatch.setattr(vast_program, "running_in_own_session", lambda: True)
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    assert main([
+        "--state", str(state),
+        "--lease", str(tmp_path / "controller.lock"),
+        "run-phase",
+        "--phase", "phase4-gguf-check",
+        "--estimated-hours", "6.0",
+        "--", "python", "-c", "pass",
+    ]) == 0
+
+    recorded = json.loads(state.read_text())
+    assert recorded["phase"] == "phase4-gguf-check"
+    assert recorded["status"] == "passed"
+
+
+def test_detaching_a_long_phase_actually_runs_it(tmp_path):
+    """The guard must not refuse the child it just detached.
+
+    `detached_phase_argv` deliberately drops `--detach` so the child cannot fork
+    again -- which handed the child an invocation the guard reads as "a long
+    phase running inside its calling session" and refuses. Every phase at or
+    past the bound was therefore un-startable: the parent detached, the child
+    exited 1 into its log, and the state never left the previous phase. Found
+    launching phase 4's gguf-check, whose whole 0.25h estimate is why it was
+    detached in the first place.
+    """
+
+    import sys
+    import time
+
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+
+    marker = tmp_path / "phase-ran"
+    phase_script = tmp_path / "phase.py"
+    phase_script.write_text(f"import pathlib\npathlib.Path({str(marker)!r}).write_text('ok')\n")
+
+    assert main([
+        "--state", str(state),
+        "--lease", str(tmp_path / "controller.lock"),
+        "run-phase",
+        "--phase", "phase4-gguf-check",
+        "--estimated-hours", "6.0",
+        "--detach",
+        "--log", str(tmp_path / "phase.log"),
+        "--", sys.executable, str(phase_script),
+    ]) == 0
+
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        recorded = json.loads(state.read_text())
+        if recorded["phase"] == "phase4-gguf-check" and recorded["status"] != "running":
+            break
+        time.sleep(0.1)
+
+    recorded = json.loads(state.read_text())
+    assert recorded["phase"] == "phase4-gguf-check", (
+        f"the detached child never claimed the phase; log: "
+        f"{(tmp_path / 'phase.log').read_text()}")
+    assert recorded["status"] == "passed", (tmp_path / "phase.log").read_text()
+    assert marker.exists(), "the phase command never ran"
 
 
 def test_detached_phase_survives_a_group_kill_of_its_launching_session(tmp_path):

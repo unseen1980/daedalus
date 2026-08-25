@@ -90,6 +90,28 @@ def process_start_ticks(pid: int) -> Optional[int]:
         return None
 
 
+def running_in_own_session() -> bool:
+    """True when this process leads its own session, as ``setsid`` makes it.
+
+    What the detach guard actually wants to know is whether the phase will
+    outlive the session that started it, and that is a property of the process,
+    not of an argument. Asking the OS rather than trusting ``--detach`` matters
+    because the detached child is deliberately handed an argv *without* the
+    flag, so that it cannot fork again -- and a flag-based guard then refuses
+    the very child the parent just detached, which made every phase at or past
+    the bound un-startable.
+
+    A session leader's children sit in its session rather than in the
+    engineering session's process group, so the keeper's group kill cannot
+    reach them. That is exactly the property ``--detach`` buys.
+    """
+
+    try:
+        return os.getsid(0) == os.getpid()
+    except (AttributeError, OSError):  # non-POSIX: the guard is advisory there
+        return False
+
+
 def process_is_alive(pid: int, start_ticks: Optional[int]) -> bool:
     """True only when pid exists and, when knowable, matches its start time."""
 
@@ -443,7 +465,8 @@ def main(argv=None) -> int:
     if not command:
         raise SystemExit("run-phase requires a command after --")
 
-    if not args.detach and args.estimated_hours >= DETACH_REQUIRED_HOURS:
+    if (not args.detach and args.estimated_hours >= DETACH_REQUIRED_HOURS
+            and not running_in_own_session()):
         raise SystemExit(
             f"phase {args.phase!r} is estimated at {args.estimated_hours:g}h, at or "
             f"past the {DETACH_REQUIRED_HOURS:g}h bound where a phase outlives the "
