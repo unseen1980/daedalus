@@ -286,3 +286,13 @@ def test_session_keeper_bounds_a_turn_on_silence_as_well_as_lifetime():
     assert "--idle-timeout-sec" in wrapper
     # Liveness is filesystem activity: an hour of training changes no git state.
     assert "filesystem_activity_probe" in cli
+
+
+def test_phase_five_prompt_requires_functional_ablation():
+    prompt = (ROOT / "ops/vast/prompts/phase5-conv-health.md").read_text()
+
+    # Norms above a threshold are not evidence a channel carries signal.
+    assert "matched functional ablation" in prompt
+    assert "positive control" in prompt
+    assert "does not revive the released model" in prompt
+    assert "/usr/local/bin/daedalus-approved" in prompt
