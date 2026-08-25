@@ -78,6 +78,15 @@ the instrument; and a depth where the control itself scores under 2 points
 cannot host a 2-point drop. Both are reported as powerless, which is a different
 statement from passing.
 
+**And the decision is handed on as a file, not as a sentence.** `select_stage_b`
+writes which arms advance; stage B is the longest run this phase makes, at 2.5x
+the tokens and 1.5x the width of the screen that chose them. Between the two sits
+a `--arms a4-kv2,...` that somebody types. `advanced_selection` closes that gap:
+stage B reads its arm list out of the committed stage-A report, so the arms that
+run are the arms that were selected, a `no-advance` verdict actually stops stage
+B rather than merely recommending that it stop, and the stage-B artifact records
+which report chose it.
+
 Subcommands: `score`, `report`, `recommend`.
 """
 
@@ -499,6 +508,100 @@ def select_stage_b(rows: Sequence[dict], *, floor_pct: float = STAGE_B_FLOOR_PCT
                 "advance on the KV saving, not on a quality win, and must not "
                 "be reported as beating the shipped ratio.")
     return decision
+
+
+def report_path(tag: str = "stagea", root: str = REPORT_ROOT) -> Path:
+    """Where `report` writes its machine-readable half, and where the next stage
+    reads its arm list from. One function so the writer and the reader cannot
+    disagree about the filename."""
+    return Path(root) / f"{tag}-report.json"
+
+
+def advanced_selection(*, from_tag: str = STAGE_A.tag,
+                       report_root: str = REPORT_ROOT,
+                       for_shape: Optional[str] = None) -> dict:
+    """The arms a committed report advanced, ready to hand to the next stage.
+
+    Stage B costs 2.5x stage A's tokens at 1.5x its width, and what it runs is
+    decided entirely by a list of arm names. Retyping that list is a way to spend
+    those hours on shapes the screen did not choose, and nothing downstream would
+    notice: the run directories would be right, the schedule would be right, and
+    the report would name arms that were never selected.
+
+    Four refusals, each a way the handoff could produce a plausible wrong answer:
+
+    - **No report.** Stage B's arm list is a stage-A *conclusion*; without one
+      there is no default that is better than stopping. Scoring an unscored grid
+      first is the remedy, not a fallback list.
+    - **`no-advance`.** That verdict is preregistered: no arm held the control's
+      quality inside the floor, so the shipped ratio stands and stage B does not
+      run. A negative result that the next command can walk past is not a gate.
+    - **A report for the shape being launched.** Reading stage B's own report to
+      choose stage B's arms is circular -- it would re-run whatever already ran
+      and call the result a scale-up.
+    - **`advance` with nothing selected.** Verdict and list disagreeing means the
+      file was hand-edited or written by another version; guessing which half is
+      true is not a launcher's decision.
+
+    A screen the deadline truncated is *not* refused -- the degradation policy
+    prunes rather than blocks, and a frontier over the arms that finished is the
+    best evidence there is. It is reported instead: `screened` carries what was
+    scored against the full grid so a partial basis travels with the decision
+    rather than being rediscovered from the row count later.
+    """
+    path = report_path(from_tag, report_root)
+    if not path.exists():
+        raise SystemExit(
+            f"no report at {path}: the arms a later stage runs are a conclusion "
+            f"of the {from_tag!r} screen, so score it and run `report` first. "
+            "There is no default arm list that is better than stopping here.")
+    try:
+        report = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"cannot read {path}: {exc}") from exc
+    decision = (report or {}).get("stage_b")
+    if not isinstance(decision, dict) or "verdict" not in decision:
+        raise SystemExit(
+            f"{path} carries no stage_b decision; it was not written by this "
+            "module's `report` command")
+
+    report_shape = (report.get("shape") or {}).get("name")
+    if for_shape is not None and report_shape == for_shape:
+        raise SystemExit(
+            f"{path} is a {report_shape!r} report and {for_shape!r} is what is "
+            "being launched: a stage cannot select its own arms from its own "
+            "results. Point --arms-from-report at the screen that ran before it.")
+
+    selected = list(decision.get("selected") or ())
+    if decision["verdict"] != "advance":
+        raise SystemExit(
+            f"{path} records verdict {decision['verdict']!r}, so no arm "
+            f"advances: {decision.get('note', 'see the report')} "
+            "This is a preregistered negative result; re-run the screen or "
+            "record it, but do not launch the next stage past it.")
+    if not selected:
+        raise SystemExit(
+            f"{path} says {decision['verdict']!r} but selects no arm; verdict "
+            "and selection disagree, and which of the two is true is not a "
+            "question a launcher may answer by guessing")
+
+    scored = len(report.get("rows") or ())
+    grid = len(arms_for(SHAPES[report_shape])) if report_shape in SHAPES else None
+    return {
+        "report": str(path),
+        "tag": report.get("tag", from_tag),
+        "shape": report_shape,
+        "created_at": report.get("created_at"),
+        "control": report.get("control"),
+        "verdict": decision["verdict"],
+        "selected": selected,
+        "frontier": list(decision.get("frontier") or ()),
+        "eligible": list(decision.get("eligible") or ()),
+        "dropped_from_frontier": list(decision.get("dropped_from_frontier") or ()),
+        "rule": decision.get("rule"),
+        "screened": {"scored": scored, "grid": grid,
+                     "complete": grid is not None and scored == grid},
+    }
 
 
 def build_report(rows: Sequence[dict], *, tag: str = "stagea",
@@ -1232,7 +1335,7 @@ def main(argv=None) -> int:
         rows = read_rows(arms_for(shape), tag=tag, out_dir=args.scorecard_root,
                          source=args.source)
         report = build_report(rows, tag=tag, shape=shape, source=args.source)
-        json_path = Path(args.report_root) / f"{tag}-report.json"
+        json_path = report_path(tag, args.report_root)
         markdown_path = Path(args.report_root) / f"{tag}-report.md"
         _write_json(json_path, report)
         markdown_path.write_text(render_markdown(report))

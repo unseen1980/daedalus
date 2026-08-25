@@ -742,6 +742,102 @@ def test_refresh_does_not_override_the_foreign_run_guard(tmp_path, monkeypatch):
     assert ckpt.read_bytes() == b"the stage-A result"
 
 
+# --------------------------------------------- the decision reaches the arms ----
+# Stage A's conclusion is a list of arm names; stage B is the longest run this
+# phase makes. A hand-typed `--arms` between them is a way to give 250M tokens
+# each to shapes the screen did not select, with correct run directories, a
+# correct schedule, and a final table naming arms nobody chose.
+
+
+def _commit_stage_a_report(root, *, selected, verdict="advance"):
+    """The half of the stage-A report the launcher reads, at the path it reads
+    it from."""
+    import json
+
+    from scripts.architecture_report import report_path
+
+    path = report_path(STAGE_A.tag, str(root))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "tag": STAGE_A.tag, "created_at": "2026-08-25T00:00:00Z",
+        "control": CONTROL.name, "shape": {"name": STAGE_A.name},
+        "rows": [{"arm": arm.name} for arm in ARMS],
+        "stage_b": {"verdict": verdict, "selected": list(selected),
+                    "frontier": list(selected), "eligible": list(selected),
+                    "dropped_from_frontier": [],
+                    "rule": {"floor_pct": 0.5, "max_arms": 3}},
+    }, indent=2) + "\n")
+    return path
+
+
+def _capture_trained_arms(monkeypatch):
+    trained = []
+
+    def fake(cmd, ckpt_path, **kw):
+        trained.append(kw["inflight_extra"]["arm"])
+        return {"attempts": 1, "resumed": False, "returncodes": [0]}
+
+    import daedalus.supervise as supervise
+    monkeypatch.setattr(supervise, "run_with_resume", fake)
+    monkeypatch.setattr(supervise, "start_watchdog", lambda *a, **k: None)
+    monkeypatch.setattr(supervise, "stop_watchdog", lambda *a, **k: None)
+    return trained
+
+
+def test_stage_b_trains_exactly_the_arms_the_stage_a_report_advanced(
+        tmp_path, monkeypatch):
+    import json
+
+    from scripts.architecture_sweep import main as sweep_main
+
+    trained = _capture_trained_arms(monkeypatch)
+    _commit_stage_a_report(tmp_path, selected=["a4-kv2", "a2-kv1"])
+
+    assert sweep_main(["--run-root", str(tmp_path), "--report-root",
+                       str(tmp_path), "--shape", "stage-b", "sweep",
+                       "--arms-from-report", STAGE_A.tag, "--data-dir", "d",
+                       "--device", "cpu",
+                       "--total-tokens", str(STAGE_B.batch_tokens)]) == 0
+
+    assert trained == [CONTROL.name, "a4-kv2", "a2-kv1"], "control first"
+    artifact = json.loads((tmp_path / f"sweep-{STAGE_B.tag}.json").read_text())
+    assert artifact["advanced_from"]["selected"] == ["a4-kv2", "a2-kv1"]
+    assert artifact["advanced_from"]["report"].endswith("stagea-report.json")
+
+
+def test_a_no_advance_report_stops_the_stage_b_launch(tmp_path, monkeypatch):
+    """The refusal has to reach the launcher, not just the reader: a negative
+    result that the next command walks past is not a gate."""
+    from scripts.architecture_sweep import main as sweep_main
+
+    trained = _capture_trained_arms(monkeypatch)
+    _commit_stage_a_report(tmp_path, selected=[], verdict="no-advance")
+
+    with pytest.raises(SystemExit):
+        sweep_main(["--run-root", str(tmp_path), "--report-root", str(tmp_path),
+                    "--shape", "stage-b", "sweep", "--arms-from-report",
+                    STAGE_A.tag, "--data-dir", "d", "--device", "cpu"])
+
+    assert trained == []
+
+
+def test_naming_the_arms_twice_is_refused(tmp_path, monkeypatch):
+    """The whole point of reading the list is that it is not also retyped; two
+    sources of truth for it is the failure this closes, not a convenience."""
+    from scripts.architecture_sweep import main as sweep_main
+
+    trained = _capture_trained_arms(monkeypatch)
+    _commit_stage_a_report(tmp_path, selected=["a4-kv2"])
+
+    with pytest.raises(SystemExit):
+        sweep_main(["--run-root", str(tmp_path), "--report-root", str(tmp_path),
+                    "--shape", "stage-b", "sweep", "--arms-from-report",
+                    STAGE_A.tag, "--arms", "a2-kv1", "--data-dir", "d",
+                    "--device", "cpu"])
+
+    assert trained == []
+
+
 def test_a_changed_budget_on_the_same_preset_is_still_a_rerun(tmp_path,
                                                               monkeypatch):
     """The guard has to separate "another experiment's directory" from "the same

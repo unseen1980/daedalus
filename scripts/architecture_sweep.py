@@ -56,6 +56,12 @@ The cost is that one arm name now maps to two run directories, and
 `foreign_run` is what stops a mistyped `--tag` from resolving that ambiguity by
 overwriting a finished arm.
 
+**Which arms stage B runs is read, not retyped.** `--arms-from-report stagea`
+takes the list out of the stage-A report's own `stage_b.selected`, so the arms
+that get 250M tokens each are the arms the screen advanced, and a `no-advance`
+verdict stops the launch instead of being a paragraph somebody has to have read.
+`architecture_report.advanced_selection` holds the refusals.
+
 Scoring lives in `architecture_report.py`, next to the evaluators it reads.
 
 Subcommands: `arms`, `shapes`, `run`, `sweep`.
@@ -533,12 +539,18 @@ def sweep(*, data_dir: str, run_root: str = RUN_ROOT,
           tag: Optional[str] = None, shape: StageShape = STAGE_A,
           total_tokens: Optional[int] = None, val_dir: Optional[str] = None,
           arms: Optional[Sequence[ArchArm]] = None,
+          selection: Optional[dict] = None,
           refresh: bool = False) -> dict:
     """Every arm in order, control first.
 
     Re-entrant by design: arms that already finished are returned from their
     closed markers, so relaunching a sweep the deadline or a dead session cut
     short costs only the arms that have not run.
+
+    `selection` is the earlier stage's decision record when this sweep's arms
+    came from one. Written into the artifact rather than left implicit: "these
+    four arms" and "the four arms the stage-A screen advanced, from this report,
+    on this rule" are different claims, and only the second can be checked later.
     """
     tag = shape.tag if tag is None else tag
     arms = arms_for(shape) if arms is None else arms
@@ -558,9 +570,11 @@ def sweep(*, data_dir: str, run_root: str = RUN_ROOT,
                      # Written beside the results, not left to be re-derived:
                      # the scoring slice needs it to read any BPB difference.
                      "parameter_spread": parameter_spread(arms),
+                     "advanced_from": selection,
                      "arms": results})
     return {"tag": tag, "shape": asdict(shape),
-            "parameter_spread": parameter_spread(arms), "arms": results}
+            "parameter_spread": parameter_spread(arms),
+            "advanced_from": selection, "arms": results}
 
 
 # ====================================================================== cli ====
@@ -587,6 +601,10 @@ def main(argv=None) -> int:
             cmd.add_argument("--arms", default=None,
                              help="comma-separated subset, control first; "
                                   "default every grid point")
+            cmd.add_argument("--arms-from-report", default=None, metavar="TAG",
+                             help="take the arms from that tag's committed "
+                                  "report instead, so the stage that runs is "
+                                  "the stage that was selected")
         cmd.add_argument("--data-dir", required=True)
         cmd.add_argument("--val-dir", default=None)
         cmd.add_argument("--device", default="cuda")
@@ -622,15 +640,44 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "sweep":
+        selection, names = None, args.arms
+        if args.arms_from_report:
+            if args.arms:
+                raise SystemExit(
+                    "--arms and --arms-from-report both name the arm list, and "
+                    "the point of the second is that the first is not retyped; "
+                    "pass one")
+            # Imported here rather than at module scope: the report module reads
+            # this one, and the arrow only points that way at import time.
+            from scripts.architecture_report import advanced_selection
+
+            selection = advanced_selection(from_tag=args.arms_from_report,
+                                           report_root=args.report_root,
+                                           for_shape=shape.name)
+            names = ",".join(selection["selected"])
+            screened = selection["screened"]
+            if not screened["complete"]:
+                # Surfaced, never silent: a frontier over a truncated screen is
+                # still the best evidence available, but a reader of the stage-B
+                # result must know the choice was made over part of the grid.
+                print(f"[architecture] warning: {selection['report']} scored "
+                      f"{screened['scored']} of {screened['grid']} arms; these "
+                      f"arms are the frontier of a partial screen",
+                      file=sys.stderr)
+            print(f"[architecture] {selection['selected']} advanced by "
+                  f"{selection['report']}", file=sys.stderr)
+
         report = sweep(data_dir=args.data_dir, run_root=args.run_root,
                        report_root=args.report_root, device=args.device,
                        tag=args.tag, shape=shape,
                        total_tokens=args.total_tokens, val_dir=args.val_dir,
-                       arms=selected_arms(args.arms, arms_for(shape)),
-                       refresh=args.refresh)
+                       arms=selected_arms(names, arms_for(shape)),
+                       selection=selection, refresh=args.refresh)
         print(json.dumps({"arms": [a["arm"] for a in report["arms"]],
                           "skipped": [a["arm"] for a in report["arms"]
-                                      if a.get("skipped")]}, indent=2))
+                                      if a.get("skipped")],
+                          "advanced_from": (selection or {}).get("report")},
+                         indent=2))
         return 0
 
     raise SystemExit(f"unhandled command {args.command}")

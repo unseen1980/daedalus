@@ -26,18 +26,20 @@ from scripts.architecture_report import (GATE_COLUMNS, MATCHED_HOLDOUT_SOURCE,
                                          RETRIEVAL_MAX_DROP_POINTS,
                                          RETRIEVAL_MIN_ITEMS_PER_DEPTH,
                                          STAGE_B_FLOOR_PCT, STAGE_B_MAX_ARMS,
-                                         arm_bpb, build_recommendation,
+                                         advanced_selection, arm_bpb,
+                                         build_recommendation,
                                          build_report,
                                          credited_bpb_delta_pct, decode_check,
                                          export_check, gate_arm, gate_verdict,
                                          kv_check, pareto_frontier, read_rows,
                                          read_decode_passes, render_markdown,
                                          render_recommendation_markdown,
-                                         retrieval_check, score_arm,
-                                         scorecard_path, scored_from,
+                                         report_path, retrieval_check,
+                                         score_arm, scorecard_path, scored_from,
                                          select_stage_b)
 from scripts.architecture_report import main as architecture_report_main
-from scripts.architecture_sweep import ARMS_BY_NAME, CONTROL, arm_checkpoint_path
+from scripts.architecture_sweep import (ARMS, ARMS_BY_NAME, CONTROL, STAGE_A,
+                                        STAGE_B, arm_checkpoint_path)
 
 
 # --------------------------------------------------------------- fixtures ----
@@ -241,6 +243,138 @@ def test_a_genuine_quality_win_is_not_labelled_as_bought():
 
     assert rows[1]["quality_win_survives_param_margin"] is True
     assert "note" not in decision
+
+
+# --------------------------------------------------- handing the decision on ----
+# Stage B is 2.5x the tokens at 1.5x the width of the screen that chooses its
+# arms, and what it runs is decided by a list of names. Between the report and
+# the launcher there used to be a person retyping that list, which is a way to
+# spend those hours on shapes the screen never selected -- with correct run
+# directories, a correct schedule, and a final table naming arms nobody chose.
+
+
+def _commit_report(root, rows, *, tag="stagea", shape=STAGE_A):
+    """Write a report through the real writer, so these tests pin the join
+    rather than a hand-built approximation of the file."""
+    report = build_report(_with_deltas(rows), tag=tag, shape=shape)
+    path = report_path(tag, str(root))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    return report
+
+
+def _advancing_rows():
+    """A control and one arm well inside the floor at a quarter of the cache."""
+    return [_row(CONTROL.name, bpb=1.2000, kv=8192, is_control=True),
+            _row("a4-kv2", bpb=1.1990, kv=2048)]
+
+
+def test_the_next_stage_reads_the_arms_the_screen_advanced(tmp_path):
+    written = _commit_report(tmp_path, _advancing_rows())
+
+    selection = advanced_selection(report_root=str(tmp_path),
+                                   for_shape=STAGE_B.name)
+
+    assert selection["selected"] == written["stage_b"]["selected"] == ["a4-kv2"]
+    assert selection["verdict"] == "advance"
+    assert selection["shape"] == STAGE_A.name
+    assert selection["control"] == CONTROL.name
+
+
+def test_the_selection_carries_the_report_it_came_from(tmp_path):
+    """"these arms" and "the arms this report advanced, on this rule" are
+    different claims, and only the second survives into the stage-B artifact as
+    something a reader can check."""
+    _commit_report(tmp_path, _advancing_rows())
+
+    selection = advanced_selection(report_root=str(tmp_path))
+
+    assert selection["report"] == str(report_path("stagea", str(tmp_path)))
+    assert selection["rule"]["floor_pct"] == STAGE_B_FLOOR_PCT
+    assert selection["rule"]["max_arms"] == STAGE_B_MAX_ARMS
+    assert selection["created_at"]
+
+
+def test_a_no_advance_verdict_stops_the_next_stage(tmp_path):
+    """The preregistered negative result has to *bind*. An arm list that falls
+    back to the whole grid when nothing advanced would spend stage B's hours
+    re-running a screen that already concluded the shipped ratio stands."""
+    _commit_report(tmp_path, [_row(CONTROL.name, bpb=1.2000, kv=8192,
+                                   is_control=True),
+                              _row("a2-kv1", bpb=1.4000, kv=512)])
+
+    with pytest.raises(SystemExit) as excinfo:
+        advanced_selection(report_root=str(tmp_path))
+
+    assert "no-advance" in str(excinfo.value)
+
+
+def test_a_missing_report_is_refused_rather_than_defaulted(tmp_path):
+    """There is no default arm list that is better than stopping: the list is a
+    conclusion of the screen, and the remedy is to score it."""
+    with pytest.raises(SystemExit) as excinfo:
+        advanced_selection(report_root=str(tmp_path))
+
+    assert "stagea-report.json" in str(excinfo.value)
+
+
+def test_a_stage_cannot_select_its_own_arms_from_its_own_results(tmp_path):
+    """Reading stage B's report to choose stage B's arms would re-run whatever
+    already ran and present it as a scale-up."""
+    _commit_report(tmp_path, _advancing_rows(), tag=STAGE_B.tag, shape=STAGE_B)
+
+    with pytest.raises(SystemExit) as excinfo:
+        advanced_selection(from_tag=STAGE_B.tag, report_root=str(tmp_path),
+                           for_shape=STAGE_B.name)
+
+    assert "its own" in str(excinfo.value)
+
+
+def test_a_file_that_is_not_a_report_is_refused(tmp_path):
+    path = report_path("stagea", str(tmp_path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"tag": "stagea", "rows": []}) + "\n")
+
+    with pytest.raises(SystemExit) as excinfo:
+        advanced_selection(report_root=str(tmp_path))
+
+    assert "no stage_b decision" in str(excinfo.value)
+
+
+def test_a_verdict_that_contradicts_its_own_selection_is_refused(tmp_path):
+    """Which half of a disagreeing file is true is not a question a launcher may
+    answer by guessing."""
+    report = _commit_report(tmp_path, _advancing_rows())
+    report["stage_b"]["selected"] = []
+    report_path("stagea", str(tmp_path)).write_text(json.dumps(report) + "\n")
+
+    with pytest.raises(SystemExit) as excinfo:
+        advanced_selection(report_root=str(tmp_path))
+
+    assert "selects no arm" in str(excinfo.value)
+
+
+def test_a_truncated_screen_still_advances_but_says_it_was_partial(tmp_path):
+    """The degradation policy prunes rather than blocks, so a frontier over the
+    arms that finished is the best evidence there is. What must not happen is
+    that basis being invisible: a Pareto set over 2 of 15 arms and one over all
+    15 are different claims about the same list of names."""
+    _commit_report(tmp_path, _advancing_rows())
+
+    screened = advanced_selection(report_root=str(tmp_path))["screened"]
+
+    assert screened == {"scored": 2, "grid": len(ARMS), "complete": False}
+
+
+def test_a_complete_screen_is_recorded_as_complete(tmp_path):
+    rows = [_row(CONTROL.name, bpb=1.2000, kv=8192, is_control=True)]
+    rows += [_row(arm.name, bpb=1.1990, kv=arm.kv_bytes_per_context_token)
+             for arm in ARMS if not arm.is_control]
+    _commit_report(tmp_path, rows)
+
+    screened = advanced_selection(report_root=str(tmp_path))["screened"]
+
+    assert screened == {"scored": len(ARMS), "grid": len(ARMS), "complete": True}
 
 
 # ------------------------------------------------------------ measurement ----
