@@ -213,6 +213,30 @@ for _vocab in TOKENIZER_PROBE_VOCAB_SIZES:
 del _vocab
 
 
+# ------------------------------------------- Phase 5 conv-death probe shape ----
+# The positive control for channel death, at the shape the 2026-08-11 mechanism
+# experiment established (`runs/preflight/conv-death-fix-validated.md`): hidden
+# 256, 9 layers at the shipped 2:1 conv:attention ratio, run at Muon lr 0.15.
+#
+# The lr is the accelerant, not a different mechanism. Muon's decay is
+# `w *= (1 - lr*wd)`, so lr sets the clock while `wd` alone decides the race --
+# 0.15 makes in ~600 steps what `hero` took ~10,000 steps at 0.02 to show. The
+# arms differ in `wd`, which is the variable, so the accelerant is shared.
+#
+# **The vocabulary is the shipped one, which the CPU-era control could not
+# afford.** That probe remapped to 8,192 tokens by frequency rank to stay
+# runnable on a laptop; on the GPU that remap only adds a step to get wrong, and
+# the death is a property of decay on the conv projections, which no vocabulary
+# touches. The cost is an embedding-heavy probe (~80% of parameters), which
+# matters for a loss comparison and not for a within-model ablation delta.
+
+PRESETS["conv-probe"] = DaedalusConfig(
+    hidden_size=256, num_hidden_layers=9, num_attention_heads=4,
+    num_key_value_heads=2, head_dim=64, block_ff_dim=768,
+    num_attention_blocks=3, max_position_embeddings=256,
+)
+
+
 if __name__ == "__main__":
     for name, cfg in PRESETS.items():
         p = cfg.param_count()

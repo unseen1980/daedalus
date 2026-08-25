@@ -177,6 +177,24 @@ def load_checkpoint(path: str, model, muon=None, adamw=None,
 
 # ------------------------------------------------------------------ metrics ---
 
+def run_dir_for(args) -> str:
+    """Where a run writes, from its args alone.
+
+    Named because two sides have to agree on it and only one of them used to
+    know it. A supervised launcher hands `run_with_resume` a checkpoint path so
+    it can resume from it; if that path is not the one the `Trainer` writes, the
+    marker sits beside a file that never appears, every relaunch starts from
+    step 0, and nothing anywhere reports a problem. Resolving it in one place
+    lets a caller ask instead of assume.
+    """
+    return args.run_dir or os.path.join("runs", args.run_name)
+
+
+def checkpoint_path_for(args) -> str:
+    """The rolling checkpoint a run writes and resumes from."""
+    return os.path.join(run_dir_for(args), "checkpoint.pt")
+
+
 def append_metrics(run_dir: str, record: dict) -> str:
     os.makedirs(run_dir, exist_ok=True)
     path = os.path.join(run_dir, "metrics.jsonl")
@@ -962,8 +980,8 @@ def _config_for(args: TrainArgs) -> DaedalusConfig:
 class Trainer:
     def __init__(self, args: TrainArgs):
         self.args = args
-        self.run_dir = args.run_dir or os.path.join("runs", args.run_name)
-        self.ckpt_path = os.path.join(self.run_dir, "checkpoint.pt")
+        self.run_dir = run_dir_for(args)
+        self.ckpt_path = checkpoint_path_for(args)
 
         torch.manual_seed(args.seed)
         # `dataclasses.replace`, never mutation: `PRESETS` holds one shared
