@@ -296,3 +296,23 @@ def test_phase_five_prompt_requires_functional_ablation():
     assert "positive control" in prompt
     assert "does not revive the released model" in prompt
     assert "/usr/local/bin/daedalus-approved" in prompt
+
+
+def test_phase_seven_prompt_targets_the_successor_budget():
+    prompt = (ROOT / "ops/vast/prompts/phase7-corpus.md").read_text()
+
+    # Unique data, not compute, is the binding constraint at 1T tokens.
+    assert "1T" in prompt
+    assert "500M parameters" in prompt
+    assert "shortfall" in prompt
+    assert "/usr/local/bin/daedalus-approved" in prompt
+
+
+def test_phase_six_prompt_states_proxy_limits_and_the_target():
+    prompt = (ROOT / "ops/vast/prompts/phase6-architecture.md").read_text()
+
+    assert "500M" in prompt
+    # A proxy at small scale cannot rank quality for a 500M successor.
+    assert "not a configuration to copy" in prompt
+    assert "KV bytes per context token" in prompt
+    assert "/usr/local/bin/daedalus-approved" in prompt
