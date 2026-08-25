@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-from daedalus.program_state import ProgramDeadline, ProgramStateStore, _timestamp
+from daedalus.program_state import (MAIN_LANE, ProgramDeadline,
+                                    ProgramStateStore, _timestamp, valid_lane)
 
 
 TERMINAL_STATUSES = {"completed", "halted"}
@@ -28,6 +29,19 @@ TERMINAL_STATUSES = {"completed", "halted"}
 #: this bound was never going to survive in-session anyway -- it would only look
 #: like it had until the session ended and killed the trainer with it.
 DETACH_REQUIRED_HOURS = 0.25
+
+
+def default_lease_name(lane: str = MAIN_LANE) -> str:
+    """The lease filename a lane owns.
+
+    One lease per lane, because the lease answers "is someone already driving
+    *this* work", and a CPU pass beside a GPU run is not the same work. The
+    main lane keeps the original filename so a controller started before lanes
+    existed and one started after contend for the same lock rather than both
+    believing they own the box.
+    """
+
+    return "controller.lock" if lane == MAIN_LANE else f"controller-{lane}.lock"
 
 
 class ControllerLeaseError(RuntimeError):
@@ -134,13 +148,16 @@ class VastProgramController:
         state_path,
         lease_path=None,
         events_path=None,
+        lane: str = MAIN_LANE,
         now: Callable[[], datetime] = _utcnow,
         runner: Optional[Callable[[Sequence[str]], object]] = None,
         sleeper: Callable[[float], None] = time.sleep,
     ):
         self.store = ProgramStateStore(state_path, events_path=events_path)
         self.state_path = Path(state_path)
-        self.lease_path = Path(lease_path) if lease_path is not None else self.state_path.with_name("controller.lock")
+        self.lane = valid_lane(lane)
+        self.lease_path = (Path(lease_path) if lease_path is not None
+                           else self.state_path.with_name(default_lease_name(self.lane)))
         self.now = now
         self.runner = runner or self._run_command
         self.sleeper = sleeper
@@ -204,7 +221,8 @@ class VastProgramController:
                 handle.flush()
                 os.fsync(handle.fileno())
         self._lease = payload
-        self.store._append_event({"kind": "lease_acquired", "at": payload["acquired_at"], "pid": payload["pid"]})
+        self.store._append_event({"kind": "lease_acquired", "at": payload["acquired_at"],
+                                  "pid": payload["pid"], **self._lane_field()})
         return payload
 
     def release_lease(self) -> bool:
@@ -218,9 +236,16 @@ class VastProgramController:
         if existing.get("start_ticks") != self._lease.get("start_ticks"):
             return False
         self.lease_path.unlink(missing_ok=True)
-        self.store._append_event({"kind": "lease_released", "at": _timestamp(self.now()), "pid": os.getpid()})
+        self.store._append_event({"kind": "lease_released", "at": _timestamp(self.now()),
+                                  "pid": os.getpid(), **self._lane_field()})
         self._lease = None
         return True
+
+    def _lane_field(self) -> dict:
+        """`{"lane": ...}` for a side lane, nothing for the main one, so a
+        timeline written before lanes existed still reads identically."""
+
+        return {} if self.lane == MAIN_LANE else {"lane": self.lane}
 
     def note(self, *, phase: str, kind: str = "decision",
              details: Optional[dict] = None) -> dict:
@@ -246,7 +271,8 @@ class VastProgramController:
         """
 
         record = {"kind": kind, "at": _timestamp(self.now()), "phase": phase,
-                  "pid": os.getpid(), "details": dict(details or {})}
+                  "pid": os.getpid(), "details": dict(details or {}),
+                  **self._lane_field()}
         self.store.append_event(record)
         return record
 
@@ -271,10 +297,16 @@ class VastProgramController:
         now = self.now()
         stage = deadline.stage(now)
         if stage != "active" or not deadline.can_start(now, estimated_hours):
+            # Recorded in this controller's own lane. A side lane refused by
+            # the deadline must not rewrite the top-level phase to
+            # `finalization` while the main lane's run is still going: the
+            # progress branch would announce finalization hours early, on
+            # behalf of a pass that never started.
             self.store.transition(
                 phase="finalization",
                 status="running",
                 now=now,
+                lane=self.lane,
                 details={
                     "refused_phase": phase,
                     "deadline_stage": stage,
@@ -310,6 +342,7 @@ class VastProgramController:
             phase=phase,
             status="running",
             now=self.now(),
+            lane=self.lane,
             details={"command": command, "max_attempts": max_attempts, "estimated_hours": estimated_hours},
         )
 
@@ -324,10 +357,12 @@ class VastProgramController:
                 "phase": phase,
                 "attempt": attempt,
                 "returncode": rc,
+                **self._lane_field(),
             })
             if rc == 0:
                 details = {"command": command, "attempts": attempt, "returncodes": returncodes}
-                self.store.transition(phase=phase, status="passed", now=self.now(), details=details)
+                self.store.transition(phase=phase, status="passed", now=self.now(),
+                                      lane=self.lane, details=details)
                 return details
             if attempt < max_attempts and backoff_sec > 0:
                 self.sleeper(backoff_sec)
@@ -341,7 +376,8 @@ class VastProgramController:
         # continue. `failed` is already one of the progress publisher's
         # attention statuses, so this is still surfaced, just not fatal.
         details = {"command": command, "attempts": max_attempts, "returncodes": returncodes}
-        self.store.transition(phase=phase, status="failed", now=self.now(), details=details)
+        self.store.transition(phase=phase, status="failed", now=self.now(),
+                              lane=self.lane, details=details)
         raise PhaseFailed(phase, returncodes)
 
 
@@ -352,6 +388,7 @@ def detached_phase_argv(
     command: Sequence[str],
     lease=None,
     base_sha: str = "",
+    lane: str = MAIN_LANE,
     estimated_hours: float = 0.0,
     max_attempts: int = 1,
     backoff_sec: float = 0.0,
@@ -368,6 +405,10 @@ def detached_phase_argv(
         argv += ["--lease", str(lease)]
     if base_sha:
         argv += ["--base-sha", str(base_sha)]
+    if lane != MAIN_LANE:
+        # Dropping it would detach the side pass into the main lane, where it
+        # would take the GPU run's lease -- and be refused by it.
+        argv += ["--lane", str(lane)]
     argv += [
         "run-phase",
         "--phase", str(phase),
@@ -388,6 +429,7 @@ def detach_phase(
     log_path,
     lease=None,
     base_sha: str = "",
+    lane: str = MAIN_LANE,
     estimated_hours: float = 0.0,
     max_attempts: int = 1,
     backoff_sec: float = 0.0,
@@ -413,6 +455,7 @@ def detach_phase(
         command=command,
         lease=lease,
         base_sha=base_sha,
+        lane=lane,
         estimated_hours=estimated_hours,
         max_attempts=max_attempts,
         backoff_sec=backoff_sec,
@@ -446,6 +489,12 @@ def main(argv=None) -> int:
     parser.add_argument("--state", default="runs/vast-program/state.json")
     parser.add_argument("--lease", default=None)
     parser.add_argument("--base-sha", default="")
+    parser.add_argument(
+        "--lane", default=MAIN_LANE,
+        help="which lane of the program this phase belongs to. The default "
+             "'main' lane owns the box's phase and the top-level status; a "
+             "named lane records a pass that runs beside it without "
+             "contending for the same device, and takes its own lease")
     sub = parser.add_subparsers(dest="command", required=True)
 
     init = sub.add_parser("init")
@@ -481,7 +530,12 @@ def main(argv=None) -> int:
     run.add_argument("phase_command", nargs=argparse.REMAINDER)
 
     args = parser.parse_args(argv)
-    controller = VastProgramController(state_path=args.state, lease_path=args.lease)
+    try:
+        lane = valid_lane(args.lane)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    controller = VastProgramController(state_path=args.state, lease_path=args.lease,
+                                       lane=lane)
     if args.command == "init":
         controller.initialize(base_sha=args.base_sha)
         controller.store.transition(phase=args.phase, status=args.status, now=controller.now())
@@ -511,7 +565,8 @@ def main(argv=None) -> int:
         details = _details(args.details_json)
         controller.acquire_lease()
         try:
-            controller.store.transition(phase=args.phase, status=args.status, now=controller.now(), details=details)
+            controller.store.transition(phase=args.phase, status=args.status,
+                                        now=controller.now(), lane=lane, details=details)
         finally:
             controller.release_lease()
         return 0
@@ -541,11 +596,13 @@ def main(argv=None) -> int:
             log_path=log_path,
             lease=args.lease,
             base_sha=args.base_sha,
+            lane=lane,
             estimated_hours=args.estimated_hours,
             max_attempts=args.max_attempts,
             backoff_sec=args.backoff_sec,
         )
-        print(f"detached phase {args.phase} pid {started['pid']} log {started['log']}")
+        print(f"detached phase {args.phase} lane {lane} pid {started['pid']} "
+              f"log {started['log']}")
         return 0
 
     if not Path(args.state).exists():

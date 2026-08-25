@@ -68,6 +68,32 @@ daedalus-approved phase run-phase --phase <name> --estimated-hours <h> --detach 
 A detached phase is orphaned to init by design; `runs/vast-program/state.json`
 and `controller.lock` say whether one is still running.
 
+## Running a second pass beside the phase that owns the box
+
+The schedule pairs work that does not contend for the same device -- phase 6's
+evidence pass is stock `llama-cli` on the CPU and runs beside stage B's ten GPU
+hours; hours 28-50 pair the corpus rebuild with QAT probes the same way. One
+lease and one `phase`/`status` pair could not express that: the second job
+either took the lease and was refused by the run in progress, or took no lease
+and left no trace in the ledger.
+
+`--lane <name>` gives it its own lane. A lane takes its own lease
+(`controller-<name>.lock`) and records under `lanes.<name>` in the state file,
+leaving the top-level phase -- which is what the progress branch, the resume
+guard and the deadline check all mean by "the phase" -- to whatever owns the
+box. Everything else is unchanged: the lane checks the same deadline, stops on
+the same terminal state, and shows up in `STATUS.md` and in the attention
+banner when it fails.
+
+```bash
+daedalus-approved phase --lane evidence run-phase --phase <name> \
+    --estimated-hours <h> --detach --log runs/<area>/<name>.log -- <command>
+```
+
+`--lane` is a controller option, so it goes before `run-phase`. Use it only for
+a pass that genuinely does not contend: two GPU phases in two lanes is two
+trainers on one card, which nothing here prevents.
+
 ## Changing repository files by hand
 
 An engineering session is a child process of the keeper, not a supervised

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 
-STATE_FIELDS = ("schema", "phase", "status", "started_at", "updated_at")
+STATE_FIELDS = ("schema", "phase", "status", "started_at", "updated_at", "lanes")
 METRIC_FIELDS = (
     "step",
     "tokens",
@@ -85,7 +85,13 @@ def build_deadline_view(state: dict, now: datetime) -> dict:
 
 
 def build_attention_view(state: dict) -> dict:
-    """Whether a human has to act, and the scrubbed reason when one does."""
+    """Whether a human has to act, and the scrubbed reason when one does.
+
+    Side lanes count. A pass running beside the main phase fails the same ways
+    the main phase does, and a heartbeat that reads `running` because the GPU
+    run is fine, while the CPU lane beside it died hours ago, is exactly the
+    silence this file exists to prevent.
+    """
 
     status = str(state.get("status", ""))
     details = state.get("details") or {}
@@ -93,6 +99,17 @@ def build_attention_view(state: dict) -> dict:
     required = status in ATTENTION_STATUSES or bool(
         details.get("user_action_required")
     )
+    for name, lane in sorted((state.get("lanes") or {}).items()):
+        lane = lane if isinstance(lane, dict) else {}
+        lane_details = lane.get("details") or {}
+        if str(lane.get("status", "")) not in ATTENTION_STATUSES and not \
+                lane_details.get("user_action_required"):
+            continue
+        required = True
+        if not blocker:
+            blocker = sanitize_blocker(lane_details.get("blocker")) or (
+                f"lane {name}: {lane.get('phase', 'unknown')} "
+                f"{lane.get('status', 'unknown')}")
     return {"user_action_required": bool(required), "blocker": blocker}
 
 
@@ -165,6 +182,24 @@ def _render_deadline(deadline: dict) -> str:
     )
 
 
+def _render_lanes(lanes) -> str:
+    """One line per lane running beside the main phase, or nothing.
+
+    Nothing, not an empty section: for most of the program only the main lane
+    runs, and a permanent empty heading trains a reader to skip the place where
+    the second lane will appear.
+    """
+
+    if not isinstance(lanes, dict) or not lanes:
+        return ""
+    rows = "".join(
+        f"- `{name}`: `{(lane or {}).get('phase', 'unknown')}` "
+        f"({(lane or {}).get('status', 'unknown')})\n"
+        for name, lane in sorted(lanes.items())
+    )
+    return f"\n## Lanes\n\n{rows}"
+
+
 def _render_status(snapshot: dict) -> str:
     metrics = json.dumps(snapshot.get("metrics", {}), indent=2, sort_keys=True)
     gpu = json.dumps(snapshot.get("gpu", {}), indent=2, sort_keys=True)
@@ -182,6 +217,7 @@ def _render_status(snapshot: dict) -> str:
         f"- Source: `{snapshot.get('source_branch', 'unknown')}` "
         f"at `{snapshot.get('source_sha', 'unknown')}`\n"
         f"{_render_deadline(snapshot.get('deadline', {}))}"
+        f"{_render_lanes(snapshot.get('lanes'))}"
         "\n## Latest Metrics\n\n"
         f"```json\n{metrics}\n```\n\n"
         "## GPU\n\n"

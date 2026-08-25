@@ -296,6 +296,93 @@ def test_a_malformed_note_is_refused_rather_than_recorded_empty(tmp_path):
     assert "decision" not in kinds, "a refused note must leave no record"
 
 
+def test_a_side_lane_runs_beside_the_phase_that_owns_the_box(tmp_path):
+    """The controller has to be able to express what the schedule already asks
+    for: a CPU pass beside a GPU run.
+
+    Phase 6's evidence pass is ~400 stock llama-cli invocations per arm and
+    nothing else; stage B is ten hours of GPU. Serialising them spends a third
+    of a day of an idle CPU waiting for a device it never touches. Before
+    lanes the second job had two options, and both were wrong: take the lease
+    and be refused by the run in progress, or take no lease and vanish from the
+    ledger entirely.
+    """
+    from scripts.vast_program import VastProgramController
+
+    state = tmp_path / "state.json"
+    main = VastProgramController(state_path=state, now=lambda: NOW,
+                                 runner=lambda command: 0)
+    main.initialize(base_sha="abc123")
+    main.acquire_lease()
+    main.store.transition(phase="phase6-stageb-sweep", status="running", now=NOW)
+
+    side = VastProgramController(state_path=state, lane="evidence",
+                                 now=lambda: NOW, runner=lambda command: 0)
+    side.acquire_lease()          # its own lease, so the main one cannot refuse it
+    side.run_phase("phase6-evidence", ["true"], estimated_hours=3.0)
+
+    assert side.lease_path.name == "controller-evidence.lock"
+    assert main.lease_path.exists(), "the side lane must not take the main lease"
+    recorded = json.loads(state.read_text())
+    assert recorded["phase"] == "phase6-stageb-sweep"
+    assert recorded["status"] == "running"
+    assert recorded["lanes"]["evidence"]["phase"] == "phase6-evidence"
+    assert recorded["lanes"]["evidence"]["status"] == "passed"
+
+
+def test_one_lane_still_admits_one_controller(tmp_path):
+    """Lanes multiply the leases, not the writers per lane."""
+    from scripts.vast_program import ControllerLeaseError, VastProgramController
+
+    state = tmp_path / "state.json"
+    VastProgramController(state_path=state, now=lambda: NOW).initialize(base_sha="abc")
+    first = VastProgramController(state_path=state, lane="evidence", now=lambda: NOW)
+    second = VastProgramController(state_path=state, lane="evidence", now=lambda: NOW)
+
+    first.acquire_lease()
+
+    with pytest.raises(ControllerLeaseError, match="active controller"):
+        second.acquire_lease()
+
+
+def test_a_side_lane_refused_by_the_deadline_leaves_the_phase_alone(tmp_path):
+    """The refusal is the lane's, and so is the record of it.
+
+    Writing `finalization` to the top-level pair would have the progress branch
+    announce finalization on behalf of a pass that never started, hours before
+    the main lane's run is due to end.
+    """
+    from scripts.vast_program import DeadlineRefused, VastProgramController
+
+    state = tmp_path / "state.json"
+    main = VastProgramController(state_path=state, now=lambda: NOW)
+    main.initialize(base_sha="abc123", started_at=NOW - timedelta(hours=137))
+    main.store.transition(phase="phase8-code-1b", status="running", now=NOW)
+
+    side = VastProgramController(state_path=state, lane="evidence", now=lambda: NOW)
+    with pytest.raises(DeadlineRefused):
+        side.run_phase("phase6-evidence", ["true"], estimated_hours=3.0)
+
+    recorded = json.loads(state.read_text())
+    assert recorded["phase"] == "phase8-code-1b"
+    assert recorded["status"] == "running"
+    assert recorded["lanes"]["evidence"]["phase"] == "finalization"
+
+
+def test_a_lane_still_stops_when_the_program_is_terminal(tmp_path):
+    """PROGRAM_HALTED halts everything, including whatever runs beside it."""
+    from scripts.vast_program import TerminalStateError, VastProgramController
+
+    state = tmp_path / "state.json"
+    main = VastProgramController(state_path=state, now=lambda: NOW)
+    main.initialize(base_sha="abc123")
+    main.store.transition(phase="blocker", status="halted", now=NOW)
+
+    side = VastProgramController(state_path=state, lane="evidence", now=lambda: NOW)
+    with pytest.raises(TerminalStateError, match="halted"):
+        side.run_phase("phase6-evidence", ["true"])
+
+
 def test_detached_phase_argv_round_trips_every_option(tmp_path):
     """The detached controller must be handed the same phase, verbatim."""
 
@@ -314,6 +401,8 @@ def test_detached_phase_argv_round_trips_every_option(tmp_path):
 
     # The child must not re-detach, or every phase would fork forever.
     assert "--detach" not in argv
+    # The main lane is the default, so it is not spelled out.
+    assert "--lane" not in argv
     assert argv[1].endswith("vast_program.py")
     assert "--state" in argv and str(tmp_path / "state.json") in argv
     assert argv[argv.index("--phase") + 1] == "phase4-probe-sweep"
@@ -323,6 +412,25 @@ def test_detached_phase_argv_round_trips_every_option(tmp_path):
     assert argv[argv.index("--") + 1:] == [
         "python", "scripts/tokenizer_lab.py", "sweep", "--device", "cuda",
     ]
+
+
+def test_detaching_a_side_lane_carries_the_lane_to_the_child(tmp_path):
+    """Dropping `--lane` would detach the CPU pass into the main lane, where it
+    would try to take the GPU run's lease and be refused by it -- from a
+    detached child whose only trace is a log nobody is reading."""
+
+    from scripts.vast_program import detached_phase_argv
+
+    argv = detached_phase_argv(
+        state=tmp_path / "state.json",
+        phase="phase6-evidence",
+        lane="evidence",
+        command=["python", "scripts/architecture_evidence.py", "retrieval"],
+    )
+
+    assert argv[argv.index("--lane") + 1] == "evidence"
+    assert argv.index("--lane") < argv.index("run-phase"), (
+        "--lane is a controller option, not one of the phase command's")
 
 
 def test_long_phase_refuses_to_run_inside_the_calling_session(tmp_path, monkeypatch):

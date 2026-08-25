@@ -245,6 +245,55 @@ class TestDeadlineAndAttention:
         assert "ghp_" not in scrubbed
         assert len(scrubbed) <= BLOCKER_SUMMARY_LIMIT + 3
 
+    def test_a_failed_lane_asks_for_a_human(self):
+        """A heartbeat that reads `running` because the GPU phase is fine,
+        while the CPU pass beside it died hours ago, is the silence this file
+        exists to prevent."""
+        from scripts.github_progress import build_attention_view
+
+        view = build_attention_view(self._state(lanes={
+            "evidence": {"phase": "phase6-evidence", "status": "failed",
+                         "details": {}}}))
+
+        assert view["user_action_required"] is True
+        assert view["blocker"] == "lane evidence: phase6-evidence failed"
+
+    def test_a_healthy_lane_asks_for_nobody(self):
+        from scripts.github_progress import build_attention_view
+
+        view = build_attention_view(self._state(lanes={
+            "evidence": {"phase": "phase6-evidence", "status": "running"}}))
+
+        assert view["user_action_required"] is False
+
+    def test_the_status_page_names_every_running_lane(self):
+        """A lane the snapshot carries but the page omits is a pass nobody
+        watching the progress branch knows is running."""
+        from scripts.github_progress import _render_status, build_public_snapshot
+
+        snapshot = build_public_snapshot(
+            self._state(lanes={"evidence": {"phase": "phase6-evidence",
+                                            "status": "running"}}),
+            source_branch="vast/daedalus-improvements-20260824",
+            source_sha="abc1234",
+            now=self._at(10),
+        )
+
+        assert snapshot["lanes"]["evidence"]["status"] == "running"
+        assert "- `evidence`: `phase6-evidence` (running)" in _render_status(snapshot)
+
+    def test_the_status_page_omits_the_lane_section_when_only_one_lane_runs(self):
+        from scripts.github_progress import _render_status, build_public_snapshot
+
+        snapshot = build_public_snapshot(
+            self._state(),
+            source_branch="vast/daedalus-improvements-20260824",
+            source_sha="abc1234",
+            now=self._at(10),
+        )
+
+        assert "## Lanes" not in _render_status(snapshot)
+
     def test_the_status_page_leads_with_the_action_banner(self):
         from scripts.github_progress import _render_status, build_public_snapshot
 
