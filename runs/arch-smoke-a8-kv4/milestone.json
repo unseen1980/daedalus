@@ -1,0 +1,14 @@
+{
+  "revision": "arch-smoke-a8-kv4-stable-end-step5",
+  "step": 5,
+  "tokens_seen": 327680,
+  "total_steps": 30,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 0.05,
+  "muon_lr": 0.02,
+  "adam_lr": 0.0003,
+  "config": "arch-a8-kv4",
+  "repo": null,
+  "path_in_repo": "milestone/arch-smoke-a8-kv4/checkpoint.pt",
+  "created_at": 1787665364.325397
+}
