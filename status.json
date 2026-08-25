@@ -4,19 +4,19 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 32.18,
-    "finalization_in_hours": 103.82,
+    "elapsed_hours": 32.27,
+    "finalization_in_hours": 103.73,
     "hard_hours": 144.0,
-    "remaining_hours": 111.82,
+    "remaining_hours": 111.73,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
     "memory_used_mb": 12366,
-    "utilization_pct": 100
+    "utilization_pct": 99
   },
-  "heartbeat_at": "2026-08-25T18:55:40.022855Z",
+  "heartbeat_at": "2026-08-25T19:00:41.353241Z",
   "metrics": {},
   "phase": "phase6-stagea-sweep",
   "schema": 1,
