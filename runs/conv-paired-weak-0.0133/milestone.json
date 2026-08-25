@@ -1,0 +1,14 @@
+{
+  "revision": "conv-paired-weak-0.0133-stable-end-step2098",
+  "step": 2098,
+  "tokens_seen": 274989056,
+  "total_steps": 3815,
+  "decay_frac": 0.45,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.04,
+  "adam_lr": 0.0003,
+  "config": "daedalus-150m",
+  "repo": null,
+  "path_in_repo": "milestone/conv-paired-weak-0.0133/checkpoint.pt",
+  "created_at": 1787647238.9716258
+}
