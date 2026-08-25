@@ -286,6 +286,41 @@ def held_out_loss(model, windows, device: str = "cuda") -> float:
     return total / count
 
 
+def matched_ablation_set(layers: Sequence["object"], sizes: Dict[int, int]):
+    """The control-sized weakest-alive set per layer, and what could not be met.
+
+    `weakest_alive` slices a list, so a layer with fewer alive channels than the
+    control's `k` returns everything it has and no error. That is a different
+    measurement from the one the matched control claims to be: on the
+    2026-08-25 probe it turned three arms' "weakest baseline-sized alive set"
+    into "every channel still alive", and the resulting 1.6-1.8 nat delta read
+    as the arm passing the check. Removing every live channel hurting is a
+    tautology.
+
+    Returns `(matched, requested, short)` so the caller records the size beside
+    the delta and the verdict can decline to credit a set that was never
+    baseline-sized. Truncation is reported rather than raised: an arm too dead
+    to supply `k` has already failed on its dead fraction, and the sweep should
+    still report it.
+    """
+    from daedalus.conv_health import weakest_alive
+
+    matched: Dict[int, List[int]] = {}
+    short: Dict[int, dict] = {}
+    requested = 0
+    for layer_health in layers:
+        k = int(sizes.get(layer_health.layer_index, 0))
+        requested += k
+        if not k:
+            continue
+        channels = weakest_alive(layer_health, k)
+        matched[layer_health.layer_index] = channels
+        if len(channels) < k:
+            short[layer_health.layer_index] = {"requested": k,
+                                               "delivered": len(channels)}
+    return matched, requested, short
+
+
 def score_arm(arm: ConvArm, *, run_root: str = RUN_ROOT, holdout_dir: str,
               device: str = "cuda", tag: str = "probe",
               config: str = PROBE_CONFIG,
@@ -304,7 +339,7 @@ def score_arm(arm: ConvArm, *, run_root: str = RUN_ROOT, holdout_dir: str,
     from daedalus.config import PRESETS
     from daedalus.conv_health import (DEAD_THRESHOLD, ablated_model,
                                       conv_layers, dead_channels, model_health,
-                                      projection_norms, weakest_alive)
+                                      projection_norms)
     from daedalus.model import Daedalus
     from train import load_checkpoint
 
@@ -329,11 +364,7 @@ def score_arm(arm: ConvArm, *, run_root: str = RUN_ROOT, holdout_dir: str,
     # it proves nothing, so this is the load-bearing half of the pair.
     sizes = matched_k or {index: len(channels)
                           for index, channels in flagged.items()}
-    matched = {}
-    for layer_health in health.layers:
-        k = int(sizes.get(layer_health.layer_index, 0))
-        if k:
-            matched[layer_health.layer_index] = weakest_alive(layer_health, k)
+    matched, requested, short = matched_ablation_set(health.layers, sizes)
     if matched:
         with ablated_model(model, matched):
             matched_loss = held_out_loss(model, windows, device)
@@ -365,6 +396,9 @@ def score_arm(arm: ConvArm, *, run_root: str = RUN_ROOT, holdout_dir: str,
         },
         "ablate_matched": {
             "channels": sum(len(v) for v in matched.values()),
+            "requested_channels": requested,
+            "baseline_sized": not short,
+            "short_layers": {str(k): v for k, v in short.items()},
             "per_layer_k": {str(k): v for k, v in sizes.items()},
             "loss": matched_loss,
             "delta": matched_loss - baseline_loss,
@@ -427,6 +461,22 @@ MAX_LOSS_REGRESSION = 0.005
 CONTROL_DEATH_FLOOR = 0.05
 
 
+def _matched_is_baseline_sized(ablation: dict) -> bool:
+    """Did the matched ablation actually get the control's k channels?
+
+    Reads the explicit flag when the scorer wrote one and falls back to
+    comparing the delivered count against the requested one, so a score written
+    before either field existed is not retroactively failed on a fact it never
+    recorded.
+    """
+    if "baseline_sized" in ablation:
+        return bool(ablation["baseline_sized"])
+    requested = ablation.get("requested_channels")
+    if requested is None:
+        return True
+    return int(ablation.get("channels", 0)) >= int(requested)
+
+
 def verdict(scored: dict) -> dict:
     """Apply the preregistered rule to a scored sweep.
 
@@ -458,21 +508,30 @@ def verdict(scored: dict) -> dict:
         norm_ratio = {key: norms[key] / control_norms[key]
                       for key in ("in_proj", "out_proj", "kernel")}
         loss_regression = (score["held_out_loss"] - control_loss) / control_loss
+        ablation = score["ablate_matched"]
         checks = {
             "dead_fraction_under_1pc": dead is not None and dead < MAX_DEAD_FRACTION,
             "norms_within_2x": max(norm_ratio.values()) <= MAX_NORM_RATIO,
             "loss_not_worse": loss_regression <= MAX_LOSS_REGRESSION,
             # The matched control: a clean arm has to lose capacity when its
             # weakest baseline-sized set goes, or its 0% is a metric that never
-            # fired rather than channels that stayed alive.
-            "matched_ablation_bites": score["ablate_matched"]["delta"] > 0.0,
+            # fired rather than channels that stayed alive. The size is half the
+            # claim -- an arm too dead to supply k weakest-*alive* channels
+            # instead has all of them ablated, and "removing every live channel
+            # hurts" is a tautology, not evidence. Uncredited rather than
+            # crashed: that arm has already failed on its dead fraction, and the
+            # sweep should still report it.
+            "matched_ablation_bites": (_matched_is_baseline_sized(ablation)
+                                       and ablation["delta"] > 0.0),
         }
         arms.append({
             "arm": score["arm"],
             "dead_fraction": dead,
             "norm_ratio": norm_ratio,
             "loss_regression": loss_regression,
-            "matched_ablation_delta": score["ablate_matched"]["delta"],
+            "matched_ablation_delta": ablation["delta"],
+            "matched_ablation_channels": ablation.get("channels"),
+            "matched_ablation_requested": ablation.get("requested_channels"),
             "checks": checks,
             "passes": all(checks.values()),
         })

@@ -7,6 +7,8 @@ cheap to assert and expensive to discover from a finished sweep.
 
 Run: python -m pytest tests/test_conv_health_sweep.py -v
 """
+from dataclasses import replace
+
 import pytest
 
 from daedalus.config import PRESETS
@@ -21,6 +23,7 @@ from scripts.conv_health import (
     ConvArm,
     arm_checkpoint_path,
     arm_run_name,
+    matched_ablation_set,
     probe_train_command,
     probe_total_tokens,
     verdict,
@@ -175,11 +178,80 @@ def test_arm_run_names_are_distinct_and_carry_the_tag():
     assert arm_run_name(CONTROL, "paired") != arm_run_name(CONTROL, "probe")
 
 
+# -------------------------------------------------------- matched ablation ----
+
+def _health_with(alive_per_layer, hidden=256):
+    """Layer healths where layer `i` has `alive_per_layer[i]` live channels.
+
+    Built from the real `layer_health`, not a stub, so `weakest_alive`'s actual
+    ordering and alive test are what the bookkeeping is measured against.
+    """
+    import torch
+
+    from daedalus.conv_health import layer_health
+    from daedalus.model import ShortConv
+
+    cfg = replace(PRESETS["tiny"], hidden_size=hidden, block_ff_dim=256)
+    layers = []
+    for index, alive in enumerate(alive_per_layer):
+        layer = ShortConv(cfg)
+        torch.manual_seed(index)
+        with torch.no_grad():
+            layer.in_proj.weight.normal_(0.0, 0.02)
+            layer.conv.weight.normal_(0.0, 0.05)
+            layer.out_proj.weight.normal_(0.0, 0.02)
+            # Collapse every channel past `alive`, which the coupled reading
+            # then flags as dead.
+            layer.out_proj.weight[:, alive:] *= 1e-11
+        layers.append(layer_health(layer, index))
+    return layers
+
+
+def test_the_matched_set_reports_a_layer_that_could_not_supply_its_k():
+    """The 2026-08-25 probe defect. `weakest_alive` slices a list, so a layer
+    with fewer alive channels than the control's k silently returns all of them
+    and the ablation stops being baseline-sized. That has to reach the report,
+    because the delta on its own looks like the check passing."""
+    layers = _health_with([200, 40], hidden=256)
+
+    matched, requested, short = matched_ablation_set(layers, {0: 150, 1: 150})
+
+    assert requested == 300
+    assert len(matched[0]) == 150            # 200 alive, k met
+    assert len(matched[1]) == 40             # 40 alive, k of 150 impossible
+    assert list(short) == [1]
+    assert short[1] == {"requested": 150, "delivered": 40}
+
+
+def test_a_matched_set_that_met_every_k_reports_no_shortfall():
+    layers = _health_with([200, 200], hidden=256)
+
+    matched, requested, short = matched_ablation_set(layers, {0: 150, 1: 150})
+
+    assert requested == 300
+    assert sum(len(v) for v in matched.values()) == 300
+    assert short == {}
+
+
+def test_the_matched_set_never_includes_a_channel_the_instrument_called_dead():
+    """Matched means weakest *alive*: including flagged channels would make the
+    control and the flagged ablation the same measurement."""
+    layers = _health_with([200], hidden=256)
+    dead = {index for index in range(200, 256)}
+
+    matched, _, _ = matched_ablation_set(layers, {0: 150})
+
+    assert not (set(matched[0]) & dead)
+
+
 # ---------------------------------------------------------------- verdict -----
 
 def _score(name, *, dead, in_proj=0.08, out_proj=0.05, kernel=0.05,
            loss=5.0, matched_delta=0.6, flagged_delta=0.0, hidden=256,
-           layers=6):
+           layers=6, matched=None):
+    ablate_matched = {"delta": matched_delta}
+    if matched is not None:
+        ablate_matched.update(matched)
     return {
         "arm": name,
         "health": {"defined": True, "dead_fraction": dead,
@@ -188,7 +260,7 @@ def _score(name, *, dead, in_proj=0.08, out_proj=0.05, kernel=0.05,
                                  for i in range(layers)]},
         "held_out_loss": loss,
         "ablate_flagged": {"delta": flagged_delta},
-        "ablate_matched": {"delta": matched_delta},
+        "ablate_matched": ablate_matched,
         "projection_norms": {"alive_weighted": {
             "in_proj": in_proj, "out_proj": out_proj, "kernel": kernel,
             "alive_channels": hidden * layers}},
@@ -256,6 +328,49 @@ def test_an_arm_whose_matched_ablation_costs_nothing_is_rejected():
     arm = decision["arms"][0]
     assert arm["checks"]["matched_ablation_bites"] is False
     assert arm["passes"] is False
+
+
+def test_a_matched_ablation_that_could_not_be_baseline_sized_is_not_credited():
+    """`weakest_alive` slices a list, so an arm with fewer alive channels than
+    the control's k silently gets all of them instead of k of them. On the
+    2026-08-25 probe that turned three arms' matched ablation into "remove
+    every channel still alive", whose large delta then read as the check
+    passing. Removing every live channel hurting is a tautology, so the size
+    has to be part of the claim."""
+    decision = verdict(_scored(
+        _score(CONTROL.name, dead=0.67),
+        _score("warmup-0-to-0.1", dead=0.72, matched_delta=1.77,
+               matched={"channels": 422, "requested_channels": 1112,
+                        "baseline_sized": False})))
+
+    arm = decision["arms"][0]
+    assert arm["matched_ablation_delta"] > 0.0
+    assert arm["checks"]["matched_ablation_bites"] is False
+    assert arm["matched_ablation_channels"] == 422
+    assert arm["matched_ablation_requested"] == 1112
+
+
+def test_a_matched_ablation_that_got_its_full_k_is_credited():
+    decision = verdict(_scored(
+        _score(CONTROL.name, dead=0.67),
+        _score("weak-0.0133", dead=0.0, matched_delta=0.6,
+               matched={"channels": 1112, "requested_channels": 1112,
+                        "baseline_sized": True})))
+
+    arm = decision["arms"][0]
+    assert arm["checks"]["matched_ablation_bites"] is True
+    assert arm["passes"] is True
+
+
+def test_a_score_written_before_the_size_was_recorded_still_reads():
+    """Backwards compatibility, deliberately: a score with neither field never
+    recorded the fact, and failing it on that would rewrite an old result
+    rather than read it."""
+    decision = verdict(_scored(
+        _score(CONTROL.name, dead=0.67),
+        _score("weak-0.0133", dead=0.0, matched_delta=0.6)))
+
+    assert decision["arms"][0]["checks"]["matched_ablation_bites"] is True
 
 
 def test_an_arm_that_costs_held_out_loss_is_rejected():
