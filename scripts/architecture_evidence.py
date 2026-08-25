@@ -43,7 +43,7 @@ successful quantize, so a failure leaves every intermediate in place for
 diagnosis, and `--keep-hf` turns the cleanup off. Nothing is reachable by this
 path except directories this module itself wrote.
 
-Subcommands: `export`.
+Subcommands: `export`, `retrieval`.
 """
 
 from __future__ import annotations
@@ -61,6 +61,9 @@ from typing import Callable, Optional, Sequence, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from daedalus.scorecard import sha256_file  # noqa: E402
+from scripts.architecture_report import (RETRIEVAL_GATE_TASKS,  # noqa: E402
+                                         RETRIEVAL_MIN_ITEMS_PER_DEPTH,
+                                         RETRIEVAL_ROOT, read_retrieval)
 from scripts.architecture_sweep import (ARMS, REPORT_ROOT, RUN_ROOT,  # noqa: E402
                                         SHAPES, STAGE_A, ArchArm, StageShape,
                                         arm_checkpoint_path, arm_run_name,
@@ -82,6 +85,21 @@ DEFAULT_LLAMA_CPP_DIR = os.environ.get("LLAMA_CPP_DIR", "/opt/llama.cpp")
 #: converter cannot eat a sweep's night.
 CONVERT_TIMEOUT_S = 1800.0
 QUANTIZE_TIMEOUT_S = 900.0
+
+#: One arm's whole retrieval pass: two tasks over four depths at
+#: `RETRIEVAL_PER_DEPTH` items, each item a separate `llama-cli` invocation over
+#: a prompt as long as the trained context. Generous because the box may be
+#: training at the same time, and bounded because a wedged pass must not take
+#: the arms behind it with it.
+RETRIEVAL_TIMEOUT_S = 7200.0
+
+#: Items per depth for this phase's retrieval pass. Not a number chosen here:
+#: `RETRIEVAL_MIN_ITEMS_PER_DEPTH` is what the gate's own 2-point threshold needs
+#: before a cell can carry it at all, and `retrieval_eval.py`'s default of ten
+#: puts every cell in `no-power` -- a whole column measured at a resolution
+#: coarser than the thing it screens for. Imported rather than copied so the two
+#: cannot drift; raising the gate's threshold lowers this automatically.
+RETRIEVAL_PER_DEPTH = RETRIEVAL_MIN_ITEMS_PER_DEPTH
 
 
 def _utcnow() -> str:
@@ -278,7 +296,7 @@ def export_arms(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
             "arms": records}
 
 
-def summarize(records: dict) -> dict:
+def summarize_export(records: dict) -> dict:
     """What the sweep produced, in the terms the gate reads it in."""
     converted = sorted(name for name, record in records.items()
                        if record.get("quantized"))
@@ -290,6 +308,164 @@ def summarize(records: dict) -> dict:
                               if record.get("skipped")
                               and record.get("skipped") != "already-exported"),
             "n_quantized": len(converted), "n_arms": len(records)}
+
+
+# ================================================================ retrieval ====
+# The gate's fourth column, and the one that also carries the third: a retrieval
+# scorecard whose artifact is a GGUF is the only evidence `export_check` accepts
+# that stock llama.cpp loaded this shape, because it exists only if `llama-cli`
+# actually generated from that file.
+#
+# **Scored on the Q4_0 artifact, through the stock binary.** The alternative --
+# the PyTorch checkpoint -- is cheaper and measures a model nobody deploys, and
+# it would leave the export column unmeasured while looking like a retrieval
+# result. Arm and control get identical treatment, so quantization is a constant
+# of the comparison rather than a confound in it.
+#
+# **`retrieval_eval.py` is invoked, not imported.** The scorecard's provenance
+# has to be the evaluator's own -- its prompts, its normalization, its artifact
+# digest -- and a second in-process path that assembled the same card by hand is
+# a second implementation to keep honest.
+
+
+def retrieval_out_dir(arm: ArchArm, tag: str = "stagea",
+                      root: str = RETRIEVAL_ROOT) -> Path:
+    return Path(root) / arm_run_name(arm, tag)
+
+
+def retrieval_command(gguf: str, out_dir: str, *, llama_cli: str,
+                      per_depth: int = RETRIEVAL_PER_DEPTH, threads: int = 8,
+                      n_ctx: int = 4096, seed: Optional[int] = None,
+                      depths: Optional[str] = None) -> list:
+    """The exact `retrieval_eval.py` invocation for one arm.
+
+    Optional flags are omitted rather than defaulted here: the evaluator owns
+    what a depth set and a seed are for this project, and restating its defaults
+    in a second file is how two of them end up disagreeing.
+    """
+    # Resolved beside this file rather than as a path relative to the working
+    # directory: a phase the controller detaches is not guaranteed to be
+    # standing in the repository root, and a retrieval pass that dies on
+    # "No such file" costs an arm's hour for a cwd.
+    evaluator = Path(__file__).resolve().parent / "retrieval_eval.py"
+    command = [sys.executable, str(evaluator),
+               "--backend", "llama-cpp", "--gguf", str(gguf),
+               "--llama-cli", str(llama_cli), "--out-dir", str(out_dir),
+               "--per-depth", str(int(per_depth)), "--threads", str(int(threads)),
+               "--n-ctx", str(int(n_ctx))]
+    if seed is not None:
+        command += ["--seed", str(int(seed))]
+    if depths:
+        command += ["--depths", str(depths)]
+    return command
+
+
+def retrieval_scored_from(arm: ArchArm, *, tag: str, root: str,
+                          artifact_sha: str,
+                          tasks: Sequence[str] = RETRIEVAL_GATE_TASKS) -> bool:
+    """True when every gate task is already scored from exactly this GGUF.
+
+    Both halves again, and the digest half matters more here than at the export
+    step: a re-exported arm writes a new GGUF into the same path, and a scorecard
+    keyed only on existence would keep the previous artifact's retention curve
+    under the new artifact's name.
+    """
+    scored = read_retrieval(arm, tag=tag, root=root, tasks=tasks)
+    if sorted(scored) != sorted(tasks):
+        return False
+    return all(record.get("artifact_sha256") == artifact_sha
+               for record in scored.values())
+
+
+def score_retrieval_arm(arm: ArchArm, record: Optional[dict], *,
+                        tag: str = "stagea", root: str = RETRIEVAL_ROOT,
+                        llama_cpp_dir: str = DEFAULT_LLAMA_CPP_DIR,
+                        per_depth: int = RETRIEVAL_PER_DEPTH, threads: int = 8,
+                        n_ctx: int = 4096, seed: Optional[int] = None,
+                        depths: Optional[str] = None, refresh: bool = False,
+                        runner: Optional[Callable[[Sequence[str], float],
+                                                  Tuple[int, str]]] = None
+                        ) -> dict:
+    """Run one arm's retrieval pass through stock llama.cpp on its Q4_0 GGUF."""
+    runner = runner or _run
+    out_dir = retrieval_out_dir(arm, tag, root)
+    common = {"arm": arm.name, "run": arm_run_name(arm, tag),
+              "is_control": arm.is_control, "out_dir": str(out_dir),
+              "at": _utcnow()}
+
+    artifact = (record or {}).get("gguf_q4_0") or {}
+    gguf = Path(artifact["path"]) if artifact.get("path") else None
+    if gguf is None or not gguf.exists():
+        # An arm the converter refused has no artifact to score, and that is
+        # already its export verdict -- recorded here rather than presented as a
+        # retrieval failure, which would double-count one cause as two.
+        return {**common, "skipped": "no-gguf", "scored": False,
+                "reason": "this arm has no Q4_0 GGUF; export it first"}
+
+    llama_cli = Path(llama_cpp_dir) / "build" / "bin" / "llama-cli"
+    if not llama_cli.exists():
+        return {**common, "skipped": "no-llama-cli", "scored": False,
+                "reason": f"stock llama.cpp has no {llama_cli}"}
+
+    digest = artifact.get("sha256") or sha256_file(gguf)
+    if not refresh and retrieval_scored_from(arm, tag=tag, root=root,
+                                             artifact_sha=digest):
+        return {**common, "skipped": "already-scored", "scored": True,
+                "artifact_sha256": digest, "gguf": str(gguf)}
+
+    command = retrieval_command(str(gguf), str(out_dir), llama_cli=str(llama_cli),
+                                per_depth=per_depth, threads=threads,
+                                n_ctx=n_ctx, seed=seed, depths=depths)
+    returncode, output = runner(command, RETRIEVAL_TIMEOUT_S)
+    scored = read_retrieval(arm, tag=tag, root=root)
+    result = {**common, "gguf": str(gguf), "artifact_sha256": digest,
+              "per_depth": int(per_depth), "threads": int(threads),
+              "returncode": returncode, "command": command,
+              "tasks": sorted(scored),
+              "scored": returncode == 0
+                        and sorted(scored) == sorted(RETRIEVAL_GATE_TASKS)}
+    if not result["scored"]:
+        result["reason"] = ("the retrieval pass did not leave a scorecard for "
+                            f"every gate task {list(RETRIEVAL_GATE_TASKS)}")
+        result["tail"] = output.strip().splitlines()[-12:]
+    return result
+
+
+def score_retrieval_arms(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
+                         shape: StageShape = STAGE_A,
+                         evidence_root: str = EVIDENCE_ROOT,
+                         root: str = RETRIEVAL_ROOT, **kwargs) -> dict:
+    """Every arm with an artifact, control first, summary rewritten as it goes.
+
+    The export manifest is the input: an arm is scored on the GGUF that manifest
+    says was built from its checkpoint, so a retrieval curve can always be traced
+    back to the weights it came from.
+    """
+    exported = (_read_json(manifest_path(tag, evidence_root)).get("arms") or {})
+    path = Path(evidence_root) / f"retrieval-{tag}.json"
+    summary = _read_json(path)
+    records = dict(summary.get("arms") or {})
+    for arm in arms:
+        records[arm.name] = score_retrieval_arm(arm, exported.get(arm.name),
+                                                tag=tag, root=root, **kwargs)
+        _write_json(path, {"tag": tag, "shape": shape.name, "at": _utcnow(),
+                           "retrieval_root": str(root), "arms": records})
+    return {"tag": tag, "shape": shape.name, "summary": str(path),
+            "arms": records}
+
+
+def summarize_retrieval(records: dict) -> dict:
+    """Which arms now carry a retrieval curve, and which the gate will not read."""
+    scored = sorted(name for name, record in records.items()
+                    if record.get("scored"))
+    return {"scored": scored,
+            "failed": sorted(name for name, record in records.items()
+                             if not record.get("scored")
+                             and not record.get("skipped")),
+            "skipped": sorted(name for name, record in records.items()
+                              if record.get("skipped")
+                              and record.get("skipped") != "already-scored"),
+            "n_scored": len(scored), "n_arms": len(records)}
 
 
 # ====================================================================== cli ====
@@ -317,6 +493,23 @@ def main(argv=None) -> int:
                         help="re-export arms whose GGUF already matches their "
                              "checkpoint")
 
+    retrieval = sub.add_parser("retrieval")
+    retrieval.add_argument("--arms", default=None,
+                           help="comma-separated subset, control first")
+    retrieval.add_argument("--llama-cpp-dir", default=DEFAULT_LLAMA_CPP_DIR)
+    retrieval.add_argument("--retrieval-root", default=RETRIEVAL_ROOT,
+                           help="where the gate reads one directory per arm run")
+    retrieval.add_argument("--per-depth", type=int, default=RETRIEVAL_PER_DEPTH,
+                           help="items per depth; below the default the gate's "
+                                "own threshold has no power and every cell "
+                                "reads no-power rather than pass")
+    retrieval.add_argument("--threads", type=int, default=8)
+    retrieval.add_argument("--n-ctx", type=int, default=4096)
+    retrieval.add_argument("--seed", type=int, default=None)
+    retrieval.add_argument("--depths", default=None)
+    retrieval.add_argument("--refresh", action="store_true",
+                           help="re-score arms already scored from this GGUF")
+
     args = parser.parse_args(argv)
     shape = SHAPES[args.shape]
     tag = shape.tag if args.tag is None else args.tag
@@ -327,8 +520,22 @@ def main(argv=None) -> int:
                              run_root=args.run_root,
                              llama_cpp_dir=args.llama_cpp_dir,
                              keep_hf=args.keep_hf, refresh=args.refresh)
-        print(json.dumps({**summarize(report["arms"]),
+        print(json.dumps({**summarize_export(report["arms"]),
                           "manifest": report["manifest"]}, indent=2))
+        return 0
+
+    if args.command == "retrieval":
+        report = score_retrieval_arms(selected_arms(args.arms, arms_for(shape)),
+                                      tag=tag, shape=shape,
+                                      evidence_root=args.evidence_root,
+                                      root=args.retrieval_root,
+                                      llama_cpp_dir=args.llama_cpp_dir,
+                                      per_depth=args.per_depth,
+                                      threads=args.threads, n_ctx=args.n_ctx,
+                                      seed=args.seed, depths=args.depths,
+                                      refresh=args.refresh)
+        print(json.dumps({**summarize_retrieval(report["arms"]),
+                          "summary": report["summary"]}, indent=2))
         return 0
 
     raise SystemExit(f"unhandled command {args.command}")

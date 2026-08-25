@@ -16,14 +16,26 @@ Run: python -m pytest tests/test_architecture_evidence.py -v
 """
 import json
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
+from daedalus.scorecard import (ArtifactRef, Provenance, Scorecard,
+                                write_scorecard)
 from scripts import architecture_evidence as evidence
-from scripts.architecture_evidence import (exported_from, export_arm,
-                                           export_arms, gguf_paths,
-                                           manifest_path, summarize)
+from scripts.architecture_evidence import (RETRIEVAL_PER_DEPTH, exported_from,
+                                           export_arm, export_arms, gguf_paths,
+                                           manifest_path, retrieval_command,
+                                           retrieval_out_dir,
+                                           retrieval_scored_from,
+                                           score_retrieval_arm,
+                                           score_retrieval_arms,
+                                           summarize_export,
+                                           summarize_retrieval)
 from scripts.architecture_evidence import main as evidence_main
+from scripts.architecture_report import (RETRIEVAL_GATE_TASKS,
+                                         RETRIEVAL_MIN_ITEMS_PER_DEPTH,
+                                         export_check, read_retrieval)
 from scripts.architecture_sweep import ARMS_BY_NAME, CONTROL
 
 
@@ -124,7 +136,7 @@ def test_a_refused_arm_does_not_stop_the_sweep(tmp_path):
 
     assert report["arms"][CONTROL.name]["quantized"] is True
     assert report["arms"][ARM.name]["converted"] is False
-    assert summarize(report["arms"]) == {
+    assert summarize_export(report["arms"]) == {
         "quantized": [CONTROL.name], "refused": [ARM.name], "skipped": [],
         "n_quantized": 1, "n_arms": 2}
 
@@ -360,6 +372,229 @@ def test_the_two_stages_do_not_share_an_artifact_directory(tmp_path):
     stage_a, stage_b = gguf_paths(ARM, "stagea"), gguf_paths(ARM, "stageb")
     assert stage_a[1] != stage_b[1]
     assert manifest_path("stagea") != manifest_path("stageb")
+
+
+# -------------------------------------------------------------- retrieval ----
+
+def _retrieval_card(path: Path, *, task: str, artifact: str, sha: str,
+                    per_depth: int = RETRIEVAL_PER_DEPTH) -> None:
+    """A scorecard shaped as `retrieval_eval.py` writes one."""
+    metrics = {"exact_match": 0.5, "n": float(per_depth * 4)}
+    for depth in (256, 512, 1024, 2048):
+        metrics[f"exact_match_d{depth}"] = 0.5
+        metrics[f"n_d{depth}"] = float(per_depth)
+    write_scorecard(path, Scorecard(
+        kind="retrieval", name=f"retrieval-{task}",
+        provenance=Provenance(
+            artifact=ArtifactRef(path=artifact, sha256=sha, kind="gguf-q4_0"),
+            tokenizer=ArtifactRef(path="tok", sha256="0" * 64, kind="tokenizer"),
+            seed=1, git_sha="deadbee", bpb_mode="not-applicable"),
+        metrics=metrics, created_at="2026-08-25T00:00:00Z", item_count=1))
+
+
+class FakeRetrieval:
+    """Stands in for `retrieval_eval.py`, writing the scorecards it would."""
+
+    def __init__(self, *, returncode: int = 0,
+                 tasks: Sequence = RETRIEVAL_GATE_TASKS, sha: str = "c" * 64):
+        self.returncode = returncode
+        self.tasks = tuple(tasks)
+        self.sha = sha
+        self.calls = []
+
+    def runner(self, command, timeout):
+        command = [str(part) for part in command]
+        self.calls.append(command)
+        out_dir = Path(command[command.index("--out-dir") + 1])
+        gguf = command[command.index("--gguf") + 1]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for task in self.tasks:
+            _retrieval_card(out_dir / f"retrieval-{task}.json", task=task,
+                            artifact=gguf, sha=self.sha)
+        return self.returncode, "retrieval output"
+
+
+def _exported(tmp_path: Path, arm=None, *, sha: str = "c" * 64) -> dict:
+    """The export-manifest record a scored arm is read from."""
+    arm = arm or ARM
+    gguf = tmp_path / "evidence" / f"arch-stagea-{arm.name}" / "model-q4_0.gguf"
+    gguf.parent.mkdir(parents=True, exist_ok=True)
+    gguf.write_bytes(b"q4")
+    return {"arm": arm.name, "quantized": True,
+            "gguf_q4_0": {"path": str(gguf), "sha256": sha}}
+
+
+def test_the_retrieval_pass_defaults_to_the_items_the_gate_needs():
+    """Ten items per depth -- the evaluator's default -- makes one item worth
+    ten points against a two-point threshold, so every cell would read no-power.
+    The default here is the gate's own requirement, imported, not a number
+    picked to look thorough."""
+    assert RETRIEVAL_PER_DEPTH == RETRIEVAL_MIN_ITEMS_PER_DEPTH
+    command = retrieval_command("m.gguf", "out", llama_cli="llama-cli")
+    assert command[command.index("--per-depth") + 1] == str(RETRIEVAL_PER_DEPTH)
+    # Flags the evaluator owns are left to it rather than restated here.
+    assert "--seed" not in command and "--depths" not in command
+
+
+def test_the_arm_is_scored_on_its_q4_0_through_stock_llama_cpp(tmp_path):
+    """The artifact kind is the export column's only evidence, so the pass has
+    to run on the GGUF and through the stock binary."""
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-cli").write_text("#!/bin/sh\n")
+    fake = FakeRetrieval()
+
+    record = score_retrieval_arm(ARM, _exported(tmp_path),
+                                 root=str(tmp_path / "retrieval"),
+                                 llama_cpp_dir=str(llama_cpp),
+                                 runner=fake.runner)
+
+    assert record["scored"] is True
+    assert record["tasks"] == sorted(RETRIEVAL_GATE_TASKS)
+    command = fake.calls[0]
+    assert command[command.index("--gguf") + 1].endswith("model-q4_0.gguf")
+    assert command[command.index("--llama-cli") + 1].endswith("llama-cli")
+    # And what it wrote is what `export_check` reads as a stock-llama.cpp load.
+    scored = read_retrieval(ARM, root=str(tmp_path / "retrieval"))
+    assert export_check(scored)["status"] == "pass"
+
+
+def test_an_arm_the_converter_refused_is_not_a_retrieval_failure(tmp_path):
+    """One cause, recorded once: the export column already says this shape has
+    no artifact."""
+    record = score_retrieval_arm(ARM, {"arm": ARM.name, "quantized": False},
+                                 root=str(tmp_path / "retrieval"),
+                                 llama_cpp_dir=str(_llama_cpp(tmp_path)),
+                                 runner=lambda *a: pytest.fail("ran anyway"))
+
+    assert record["skipped"] == "no-gguf"
+    assert record["scored"] is False
+
+
+def test_a_missing_llama_cli_is_recorded_rather_than_run(tmp_path):
+    record = score_retrieval_arm(ARM, _exported(tmp_path),
+                                 root=str(tmp_path / "retrieval"),
+                                 llama_cpp_dir=str(_llama_cpp(tmp_path)),
+                                 runner=lambda *a: pytest.fail("ran anyway"))
+
+    assert record["skipped"] == "no-llama-cli"
+    assert record["scored"] is False
+
+
+def test_a_partial_pass_is_not_recorded_as_scored(tmp_path):
+    """A pass that scored passkey and died before mqar leaves a directory that
+    looks scored; the gate would read one task and call the other unmeasured."""
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-cli").write_text("#!/bin/sh\n")
+    fake = FakeRetrieval(returncode=1, tasks=("passkey",))
+
+    record = score_retrieval_arm(ARM, _exported(tmp_path),
+                                 root=str(tmp_path / "retrieval"),
+                                 llama_cpp_dir=str(llama_cpp),
+                                 runner=fake.runner)
+
+    assert record["scored"] is False
+    assert record["tasks"] == ["passkey"]
+    assert record["tail"] == ["retrieval output"]
+
+
+def test_a_scored_arm_is_skipped_but_a_re_exported_one_is_not(tmp_path):
+    """Keyed on the artifact digest: a re-exported arm writes a new GGUF to the
+    same path, and the old curve must not survive under the new artifact."""
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-cli").write_text("#!/bin/sh\n")
+    root = str(tmp_path / "retrieval")
+    fake = FakeRetrieval()
+    score_retrieval_arm(ARM, _exported(tmp_path), root=root,
+                        llama_cpp_dir=str(llama_cpp), runner=fake.runner)
+
+    again = score_retrieval_arm(ARM, _exported(tmp_path), root=root,
+                                llama_cpp_dir=str(llama_cpp),
+                                runner=lambda *a: pytest.fail("re-scored"))
+    assert again["skipped"] == "already-scored"
+
+    rebuilt = FakeRetrieval(sha="d" * 64)
+    after = score_retrieval_arm(ARM, _exported(tmp_path, sha="d" * 64),
+                                root=root, llama_cpp_dir=str(llama_cpp),
+                                runner=rebuilt.runner)
+    assert "skipped" not in after and after["scored"] is True
+    assert retrieval_scored_from(ARM, tag="stagea", root=root,
+                                 artifact_sha="d" * 64)
+    assert not retrieval_scored_from(ARM, tag="stagea", root=root,
+                                     artifact_sha="c" * 64)
+
+
+def test_refresh_rescores_an_arm_already_scored_from_this_gguf(tmp_path):
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-cli").write_text("#!/bin/sh\n")
+    root = str(tmp_path / "retrieval")
+    fake = FakeRetrieval()
+    score_retrieval_arm(ARM, _exported(tmp_path), root=root,
+                        llama_cpp_dir=str(llama_cpp), runner=fake.runner)
+
+    again = score_retrieval_arm(ARM, _exported(tmp_path), root=root,
+                                llama_cpp_dir=str(llama_cpp),
+                                runner=fake.runner, refresh=True)
+
+    assert "skipped" not in again
+    assert len(fake.calls) == 2
+
+
+def test_the_retrieval_sweep_reads_the_export_manifest_and_summarizes(tmp_path):
+    """The GGUF an arm is scored on is the one the manifest says came from its
+    checkpoint, so a curve can be traced back to the weights behind it."""
+    run_root, evidence_root = tmp_path / "runs", tmp_path / "evidence"
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-cli").write_text("#!/bin/sh\n")
+    for arm in (CONTROL, ARM):
+        _checkpoint(run_root, arm)
+    tools = FakeToolchain()
+    export_arms([CONTROL, ARM], run_root=str(run_root), root=str(evidence_root),
+                llama_cpp_dir=str(llama_cpp), export_fn=tools.export_fn,
+                runner=tools.runner)
+
+    fake = FakeRetrieval()
+    report = score_retrieval_arms([CONTROL, ARM], evidence_root=str(evidence_root),
+                                  root=str(tmp_path / "retrieval"),
+                                  llama_cpp_dir=str(llama_cpp),
+                                  runner=fake.runner)
+
+    assert summarize_retrieval(report["arms"])["scored"] == sorted(
+        [CONTROL.name, ARM.name])
+    scored_paths = {call[call.index("--gguf") + 1] for call in fake.calls}
+    assert scored_paths == {
+        str(gguf_paths(arm, root=str(evidence_root))[1])
+        for arm in (CONTROL, ARM)}
+    written = json.loads(Path(report["summary"]).read_text())
+    assert sorted(written["arms"]) == sorted([CONTROL.name, ARM.name])
+
+
+def test_the_two_stages_do_not_share_a_retrieval_directory():
+    assert retrieval_out_dir(ARM, "stagea") != retrieval_out_dir(ARM, "stageb")
+
+
+def test_cli_retrieval_scores_the_arms_the_export_manifest_names(
+        tmp_path, capsys, monkeypatch):
+    run_root, evidence_root = tmp_path / "runs", tmp_path / "evidence"
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-cli").write_text("#!/bin/sh\n")
+    _checkpoint(run_root, CONTROL)
+    tools = FakeToolchain()
+    export_arms([CONTROL], run_root=str(run_root), root=str(evidence_root),
+                llama_cpp_dir=str(llama_cpp), export_fn=tools.export_fn,
+                runner=tools.runner)
+    fake = FakeRetrieval()
+    monkeypatch.setattr(evidence, "_run", fake.runner)
+
+    code = evidence_main(["--run-root", str(run_root),
+                          "--evidence-root", str(evidence_root),
+                          "retrieval", "--arms", CONTROL.name,
+                          "--retrieval-root", str(tmp_path / "retrieval"),
+                          "--llama-cpp-dir", str(llama_cpp)])
+
+    assert code == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["scored"] == [CONTROL.name]
+    assert printed["n_scored"] == 1
 
 
 def test_cli_export_writes_the_manifest_and_summarizes(tmp_path, capsys,
