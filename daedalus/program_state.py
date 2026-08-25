@@ -41,13 +41,31 @@ class ProgramStateStore:
                             else self.state_path.with_name("events.jsonl"))
 
     def append_event(self, event: dict) -> None:
-        """Append one durable, machine-parsable entry to the phase timeline."""
+        """Append one durable, machine-parsable entry to the phase timeline.
+
+        One `os.write` on an `O_APPEND` descriptor, rather than a buffered
+        `write` that may be split into several. The timeline has more than one
+        writer whenever work happens beside a long phase -- the detached
+        controller driving that phase, and whatever records a decision alongside
+        it -- and a record split across two `write` calls can be interleaved with
+        another process's, producing two lines that are each half a JSON object
+        and a timeline that no longer parses.
+
+        Linux takes the inode lock for a write to a regular file and resolves
+        `O_APPEND`'s offset under it, so one `write` cannot interleave with
+        another's or land on top of it. That property is what makes a lock
+        unnecessary here, and it is why this is a single call rather than a
+        convenient loop.
+        """
 
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.events_path.open("a") as handle:
-            handle.write(json.dumps(event, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        line = (json.dumps(event, sort_keys=True) + "\n").encode()
+        fd = os.open(self.events_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, line)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
     def _append_event(self, event: dict) -> None:
         """Retained for callers written before the helper became part of the API."""

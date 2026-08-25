@@ -218,6 +218,84 @@ def test_cli_transition_preserves_base_sha_and_started_at(tmp_path):
     assert updated["details"] == {"reason": "operator-migration"}
 
 
+def test_a_note_records_a_decision_while_a_phase_owns_the_lease(tmp_path):
+    """The lease's subject is the state snapshot and the transitions that
+    rewrite it. A note writes neither, and making it wait would silence the
+    record for exactly as long as a phase runs -- phase 5's escalation held the
+    lease for 8.6 hours, which is when the work beside it was done.
+    """
+    from scripts.vast_program import VastProgramController, main
+
+    state = tmp_path / "state.json"
+    lease = tmp_path / "controller.lock"
+    holder = VastProgramController(state_path=state, lease_path=lease,
+                                   now=lambda: NOW)
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    holder.acquire_lease()
+
+    assert main(["--state", str(state), "--lease", str(lease), "note",
+                 "--phase", "phase6-stagea-scoring",
+                 "--details-json", '{"decision": "read, not retyped"}']) == 0
+
+    events = [json.loads(line) for line in
+              (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert events[-1]["kind"] == "decision"
+    assert events[-1]["phase"] == "phase6-stagea-scoring"
+    assert events[-1]["details"] == {"decision": "read, not retyped"}
+    # The lease is untouched: the note neither took it nor released someone
+    # else's, so the phase that owns it is unaffected.
+    assert json.loads(lease.read_text())["pid"] == os.getpid()
+
+
+def test_a_note_leaves_the_phase_and_status_alone(tmp_path):
+    """A note is a record, not a transition. One that moved `phase` would let a
+    comment reassign what the program believes it is doing."""
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    before = json.loads(state.read_text())
+
+    assert main(["--state", str(state), "note", "--phase", "somewhere-else",
+                 "--kind", "limitation", "--details-json", '{"note": "x"}']) == 0
+
+    assert json.loads(state.read_text()) == before
+
+
+def test_a_halted_program_can_still_be_annotated(tmp_path):
+    """Why a run halted is the record most worth keeping, and it can only be
+    written after the halt."""
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    assert main(["--state", str(state), "transition", "--phase", "p",
+                 "--status", "halted"]) == 0
+
+    assert main(["--state", str(state), "note", "--phase", "p",
+                 "--details-json", '{"why": "credentials"}']) == 0
+
+    events = [json.loads(line) for line in
+              (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert events[-1]["details"] == {"why": "credentials"}
+
+
+def test_a_malformed_note_is_refused_rather_than_recorded_empty(tmp_path):
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+
+    for bad in ("{not json", '"a string"'):
+        with pytest.raises(SystemExit):
+            main(["--state", str(state), "note", "--phase", "p",
+                  "--details-json", bad])
+
+    kinds = [json.loads(line)["kind"] for line in
+             (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert "decision" not in kinds, "a refused note must leave no record"
+
+
 def test_detached_phase_argv_round_trips_every_option(tmp_path):
     """The detached controller must be handed the same phase, verbatim."""
 

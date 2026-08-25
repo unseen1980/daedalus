@@ -222,6 +222,34 @@ class VastProgramController:
         self._lease = None
         return True
 
+    def note(self, *, phase: str, kind: str = "decision",
+             details: Optional[dict] = None) -> dict:
+        """Append one record to the timeline without taking the lease.
+
+        The lease exists so that two controllers cannot drive phases at once:
+        its subject is the state snapshot and the transitions that rewrite it.
+        A note writes neither. It is an append to a timeline that is append-only
+        by construction, and `ProgramStateStore.append_event` makes that append
+        atomic against the controller writing to the same file.
+
+        Making a note wait for the lease would be the wrong reading of what the
+        lease protects, and an expensive one. A long phase holds it for hours --
+        phase 5's paired escalation held it for 8.6 -- and those hours are
+        exactly when engineering work happens beside the run. Under a
+        lease-taking note, every decision made in that window is unrecordable
+        until the training finishes, which is how a decision ends up documented
+        only in a commit message, or appended to `events.jsonl` out of band by
+        something that is not the controller. Both happened during phase 5.
+
+        A terminal program is *not* refused: why a run halted is the record most
+        worth keeping, and it can only be written after the halt.
+        """
+
+        record = {"kind": kind, "at": _timestamp(self.now()), "phase": phase,
+                  "pid": os.getpid(), "details": dict(details or {})}
+        self.store.append_event(record)
+        return record
+
     def _load_state_or_raise(self) -> dict:
         state = self.store.load()
         status = state.get("status")
@@ -402,6 +430,17 @@ def detach_phase(
     return {"pid": process.pid, "log": str(log_path), "argv": argv}
 
 
+def _details(raw: str) -> dict:
+    """`--details-json`, or a refusal naming what was wrong with it."""
+    try:
+        details = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"invalid --details-json: {exc}") from exc
+    if not isinstance(details, dict):
+        raise SystemExit("--details-json must decode to an object")
+    return details
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", default="runs/vast-program/state.json")
@@ -420,6 +459,13 @@ def main(argv=None) -> int:
     transition.add_argument("--phase", required=True)
     transition.add_argument("--status", required=True)
     transition.add_argument("--details-json", default="{}")
+
+    note = sub.add_parser(
+        "note", help="append a record to the timeline without the lease, so a "
+                     "decision made beside a running phase is still recorded")
+    note.add_argument("--phase", required=True)
+    note.add_argument("--kind", default="decision")
+    note.add_argument("--details-json", default="{}")
 
     run = sub.add_parser("run-phase")
     run.add_argument("--phase", required=True)
@@ -451,15 +497,18 @@ def main(argv=None) -> int:
             controller.release_lease()
         return 0
 
+    if args.command == "note":
+        # No lease and no state read: the timeline is append-only and a note is
+        # an append. Deliberately usable while a detached phase owns the lease,
+        # which is when most notes are written.
+        controller.note(phase=args.phase, kind=args.kind,
+                        details=_details(args.details_json))
+        return 0
+
     if args.command == "transition":
         if not Path(args.state).exists():
             raise SystemExit(f"state file does not exist: {args.state}")
-        try:
-            details = json.loads(args.details_json)
-        except json.JSONDecodeError as exc:
-            raise SystemExit(f"invalid --details-json: {exc}") from exc
-        if not isinstance(details, dict):
-            raise SystemExit("--details-json must decode to an object")
+        details = _details(args.details_json)
         controller.acquire_lease()
         try:
             controller.store.transition(phase=args.phase, status=args.status, now=controller.now(), details=details)
