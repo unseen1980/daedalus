@@ -310,6 +310,73 @@ for _blocks in ARCH_PROBE_ATTENTION_BLOCKS:
 del _blocks, _kv
 
 
+# ------------------------------------------ Phase 6 architecture Stage B ------
+# The same fifteen grid points at the scale a recommendation is allowed to rest
+# on: ~150M parameters rather than ~105M. Stage A ranks shapes cheaply; stage B
+# re-runs the survivors where the plan asks for them.
+#
+# **Depth 24 and head_dim 64 are carried over, not re-chosen.** KV cache is
+# `2 * kv_heads * head_dim * attention_layers * 2` bytes per context token -- it
+# depends on exactly those three fields and on nothing else this preset varies.
+# Holding them means every stage-B arm costs the identical cache to the stage-A
+# arm it re-runs, so the KV column the stage-A screen selected on is still the
+# KV column stage B is measured on. A stage B at a different depth would re-rank
+# candidates whose cache cost had moved underneath the screen that chose them,
+# and the saving is the entire reason to run a hybrid.
+#
+# **Width 768 is forced rather than picked.** `num_attention_heads` is
+# `hidden_size / head_dim` and every KV-head count in the grid has to divide it:
+# 640 gives ten heads and 4 does not divide 10, and 1024 overshoots badly (its
+# conv block alone is 5.25M against 768's 2.36M). 768 is the only 256-aligned
+# width between stage A's 512 and that overshoot, and it is the shipped model's
+# own width.
+#
+# **`block_ff_dim` 1280 puts the control at 158.9M against the shipped model's
+# 160.5M** -- 0.97% low, inside `arch_space.PARAM_MATCH_TOLERANCE` -- at a
+# 1.67x FFN ratio, inside the validity band. The next step up (1536) lands at
+# 173.1M, 7.9% high.
+#
+# **The FFN is held fixed across arms, and the residual is worse here than at
+# stage A rather than better.** One `block_ff_dim` step is
+# `3 * 768 * 24 * 256` = 14.16M parameters, 8.8% of the model, so solving per
+# arm would snap arms up to 4.4% apart to correct a spread of 4.5% -- the same
+# trade stage A refused, and no better at this width. Holding it leaves the grid
+# 2.2% either side of its midpoint against stage A's 1.5%, because widening
+# raises the conv-block premium (2.36M against an attention block's 1.28M-1.57M)
+# faster than it raises the model. So the parameter discount the scoring applies
+# is *more* load-bearing at stage B, not less; `parameter_spread` is written
+# into every stage-B artifact for that reason.
+ARCH_STAGEB_HIDDEN = 768
+ARCH_STAGEB_FF_DIM = 1280
+
+
+def arch_stageb_config(num_attention_blocks: int,
+                       num_key_value_heads: int) -> DaedalusConfig:
+    """One stage-B arm: a stage-A grid point at ~150M parameters."""
+    return DaedalusConfig(
+        hidden_size=ARCH_STAGEB_HIDDEN,
+        num_hidden_layers=ARCH_PROBE_DEPTH,
+        num_attention_heads=ARCH_STAGEB_HIDDEN // ARCH_PROBE_HEAD_DIM,
+        num_key_value_heads=num_key_value_heads,
+        head_dim=ARCH_PROBE_HEAD_DIM,
+        block_ff_dim=ARCH_STAGEB_FF_DIM,
+        num_attention_blocks=num_attention_blocks,
+        max_position_embeddings=2048,
+    )
+
+
+def arch_stageb_preset_name(num_attention_blocks: int,
+                            num_key_value_heads: int) -> str:
+    return f"arch-b-a{num_attention_blocks}-kv{num_key_value_heads}"
+
+
+for _blocks in ARCH_PROBE_ATTENTION_BLOCKS:
+    for _kv in ARCH_PROBE_KV_HEADS:
+        PRESETS[arch_stageb_preset_name(_blocks, _kv)] = arch_stageb_config(
+            _blocks, _kv)
+del _blocks, _kv
+
+
 if __name__ == "__main__":
     for name, cfg in PRESETS.items():
         p = cfg.param_count()

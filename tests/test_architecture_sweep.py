@@ -16,10 +16,12 @@ from daedalus.arch_space import (MAX_KV_BYTES_PER_CONTEXT_TOKEN,
                                  validation_failures)
 from daedalus.config import (ARCH_PROBE_ATTENTION_BLOCKS, ARCH_PROBE_CONTROL,
                              ARCH_PROBE_DEPTH, ARCH_PROBE_HIDDEN,
-                             ARCH_PROBE_KV_HEADS, PRESETS,
-                             arch_probe_preset_name)
-from scripts.architecture_sweep import (ARMS, ARMS_BY_NAME, CONTROL, STAGE_A,
-                                        arm_checkpoint_path, arm_run_name,
+                             ARCH_PROBE_KV_HEADS, ARCH_STAGEB_HIDDEN, PRESETS,
+                             arch_probe_preset_name, arch_stageb_config,
+                             arch_stageb_preset_name)
+from scripts.architecture_sweep import (ARMS, ARMS_BY_NAME, CONTROL, SHAPES,
+                                        STAGE_A, STAGE_B, arm_checkpoint_path,
+                                        arm_run_name, arms_for,
                                         parameter_spread, run_arm,
                                         selected_arms, train_command)
 
@@ -465,6 +467,300 @@ def test_refresh_retrains_a_finished_arm_deliberately(tmp_path, monkeypatch):
 
     report = run_arm(arm, data_dir="d", run_root=str(tmp_path), device="cpu",
                      total_tokens=2 * STAGE_A.batch_tokens, refresh=True)
+
+    assert seen.get("ran") is True
+    assert "skipped" not in report
+
+
+# ================================================================== stage B ====
+# Stage B re-runs the stage-A survivors at ~150M over 250M tokens. What has to
+# hold is that it is the *same experiment at another scale*: the same grid
+# points, the same cache costs, the same schedule shape -- and that the two
+# stages cannot land in each other's run directories.
+
+STAGE_B_ARMS = arms_for(STAGE_B)
+STAGE_B_BY_NAME = {arm.name: arm for arm in STAGE_B_ARMS}
+
+
+def test_stage_b_re_runs_the_same_grid_points_under_the_same_names():
+    """Stage A's decision is a list of arm names. If stage B named its points
+    differently, handing that decision on would need a translation table, and a
+    translation table is somewhere for `a4-kv2` to become `a4-kv1`."""
+    assert [arm.name for arm in STAGE_B_ARMS] == [arm.name for arm in ARMS]
+    for arm in STAGE_B_ARMS:
+        assert arm.config == arch_stageb_preset_name(arm.num_attention_blocks,
+                                                     arm.num_key_value_heads)
+        assert arm.config != ARMS_BY_NAME[arm.name].config
+
+
+def test_stage_b_arms_cost_exactly_the_cache_their_stage_a_twins_did():
+    """The KV column is what the stage-A screen selected on, and it is
+    `2 * kv * head_dim * attention_layers * 2` -- depth and head_dim and nothing
+    else stage B widens. Holding them means stage B re-runs the shapes that were
+    chosen rather than shapes whose saving moved underneath the choice."""
+    for arm in STAGE_B_ARMS:
+        twin = ARMS_BY_NAME[arm.name]
+        assert arm.kv_bytes_per_context_token == twin.kv_bytes_per_context_token
+        assert (PRESETS[arm.config].layer_types
+                == PRESETS[twin.config].layer_types)
+
+
+def test_stage_b_lands_on_the_shipped_models_parameter_count():
+    """"150M candidates" is the plan's wording, and the shipped 160.5M model is
+    what it means. A stage B that quietly ran at 130M would be a third stage of
+    proxy rather than the scale a recommendation rests on."""
+    control = PRESETS[STAGE_B_BY_NAME[CONTROL.name].config].param_count()["total"]
+    shipped = CONTROL_PRESET.param_count()["total"]
+
+    drift = abs(control - shipped) / shipped
+    assert drift < PARAM_MATCH_TOLERANCE, f"{control:,} vs {shipped:,}"
+    # ...and materially bigger than the stage-A proxy it is scaling up from.
+    stage_a = PRESETS[CONTROL.config].param_count()["total"]
+    assert control > 1.4 * stage_a
+
+
+def test_the_documented_stage_b_arithmetic_is_the_arithmetic():
+    """The preset comment justifies 768/1280 with specific numbers, and those
+    numbers are the whole argument for the shape. Pinned so prose and model
+    cannot drift apart -- a comment claiming a 0.97% miss beside a preset that
+    misses by 8% is worse than no comment."""
+    control = PRESETS[STAGE_B_BY_NAME[CONTROL.name].config]
+    total = control.param_count()["total"]
+    shipped = CONTROL_PRESET.param_count()["total"]
+
+    assert total == pytest.approx(158.9e6, abs=0.05e6)
+    assert 100.0 * (total - shipped) / shipped == pytest.approx(-0.97, abs=0.01)
+    assert control.block_ff_dim / control.hidden_size == pytest.approx(1.67,
+                                                                      abs=0.01)
+    # The next FFN step up overshoots, which is why 1280 is the choice.
+    over = arch_stageb_config(CONTROL.num_attention_blocks,
+                              CONTROL.num_key_value_heads)
+    over.block_ff_dim += QUANT_BLOCK
+    assert (100.0 * (over.param_count()["total"] - shipped) / shipped
+            == pytest.approx(7.9, abs=0.1))
+
+    spreads = (parameter_spread(ARMS)["max_drift_from_midpoint"],
+               parameter_spread(STAGE_B_ARMS)["max_drift_from_midpoint"])
+    assert spreads[0] == pytest.approx(0.015, abs=0.001)
+    assert spreads[1] == pytest.approx(0.022, abs=0.001)
+
+
+def test_stage_b_width_is_the_only_one_the_grid_can_use():
+    """768 is forced, not preferred: `num_attention_heads` is `hidden/head_dim`
+    and every KV-head count has to divide it. 640 gives ten heads and 4 does not
+    divide 10, which would drop a third of the grid."""
+    heads = ARCH_STAGEB_HIDDEN // PRESETS[CONTROL.config].head_dim
+    for kv in ARCH_PROBE_KV_HEADS:
+        assert heads % kv == 0
+    assert 640 % PRESETS[CONTROL.config].head_dim == 0
+    assert any(640 // PRESETS[CONTROL.config].head_dim % kv
+               for kv in ARCH_PROBE_KV_HEADS)
+
+
+def test_every_stage_b_arm_is_a_shape_the_screen_would_accept():
+    """Same bar stage A is held to: a shape `validation_failures` refuses is not
+    a candidate that lost, it is GPU time spent on an invalid comparison. The
+    control is over the KV ceiling for the same structural reason it is at stage
+    A -- depth 24 at the shipped attention *fraction* costs 8,192 bytes."""
+    for arm in STAGE_B_ARMS:
+        candidate = candidate_from_config(arm.name, PRESETS[arm.config])
+        failures = validation_failures(candidate)
+        if arm.is_control:
+            assert len(failures) == 1 and "KV cache" in failures[0]
+        else:
+            assert failures == [], f"{arm.name}: {failures}"
+
+
+def test_only_attention_count_and_kv_heads_differ_between_stage_b_arms():
+    varying = {"num_attention_blocks", "num_key_value_heads", "layer_types"}
+    reference = PRESETS[STAGE_B_BY_NAME[CONTROL.name].config]
+    for arm in STAGE_B_ARMS:
+        cfg = PRESETS[arm.config]
+        assert cfg.n_attn_layers == arm.num_attention_blocks, arm.name
+        for field in vars(reference):
+            if field in varying:
+                continue
+            assert getattr(cfg, field) == getattr(reference, field), \
+                f"{arm.name} differs in {field}"
+
+
+def test_solving_the_ffn_per_arm_is_no_better_at_stage_b_than_at_stage_a():
+    """The reason stage B holds the FFN fixed too.
+
+    One `block_ff_dim` step is `3 * hidden * layers * 256`, and widening to 768
+    makes it *larger* relative to the model, not smaller. Snapping each arm to
+    its nearest solved FFN would therefore still move arms further apart than
+    leaving the FFN alone does.
+    """
+    spread = parameter_spread(STAGE_B_ARMS)
+    ff_step = 3 * ARCH_STAGEB_HIDDEN * ARCH_PROBE_DEPTH * QUANT_BLOCK
+
+    assert ff_step / spread["midpoint"] > PARAM_MATCH_TOLERANCE
+    assert 0.5 * ff_step / spread["midpoint"] > spread["max_drift_from_midpoint"]
+
+
+def test_stage_bs_residual_parameter_spread_is_worse_than_stage_as():
+    """Recorded because the scoring depends on it and the intuition is
+    backwards: a bigger model is not a better-matched grid here. Widening raises
+    the conv-block premium over an attention block faster than it raises the
+    model, so the fixed-FFN grid spreads *further* at 768 than at 512 -- which
+    makes `credited_bpb_delta_pct` more load-bearing at stage B, not less."""
+    stage_a = parameter_spread(ARMS)
+    stage_b = parameter_spread(STAGE_B_ARMS)
+
+    assert stage_b["max_drift_from_midpoint"] > stage_a["max_drift_from_midpoint"]
+    # Still the same direction, so the discount still points the same way.
+    assert (STAGE_B_BY_NAME[stage_b["max_arm"]].num_attention_blocks
+            == min(ARCH_PROBE_ATTENTION_BLOCKS))
+
+
+# ------------------------------------------------------------ stage B shape ----
+
+def test_stage_b_is_stage_as_schedule_run_two_and_a_half_times_as_long():
+    """Tokens per step, context, and both learning rates are identical, so the
+    stages differ in how long the schedule runs and not in what a step is. A
+    re-tuned LR between stages would move the comparison the scale-up exists to
+    make."""
+    assert STAGE_B.batch_tokens == STAGE_A.batch_tokens
+    assert STAGE_B.seq_len == STAGE_A.seq_len
+    assert STAGE_B.muon_lr == STAGE_A.muon_lr
+    assert STAGE_B.adam_lr == STAGE_A.adam_lr
+    assert STAGE_B.decay_frac == STAGE_A.decay_frac
+    assert STAGE_B.steps == 2.5 * STAGE_A.steps
+    assert STAGE_B.total_tokens >= 250_000_000
+
+
+def test_the_stage_b_shape_divides_into_whole_steps_and_decays_fully():
+    assert STAGE_B.total_tokens % STAGE_B.batch_tokens == 0
+    assert STAGE_B.batch_tokens % (STAGE_B.micro_batch * STAGE_B.seq_len) == 0
+    assert STAGE_B.steps == STAGE_B.total_tokens // STAGE_B.batch_tokens
+    assert STAGE_B.warmup_steps < 0.1 * STAGE_B.steps
+    assert (STAGE_B.warmup_steps + STAGE_B.decay_frac * STAGE_B.steps
+            <= STAGE_B.steps)
+    # The warmup is the same fraction of the run stage A's was, so the WSD curve
+    # has one shape across both stages.
+    assert (STAGE_B.warmup_steps / STAGE_B.steps
+            == pytest.approx(STAGE_A.warmup_steps / STAGE_A.steps, abs=0.005))
+
+
+def test_the_stage_b_micro_batch_stays_under_the_known_good_activation_size():
+    """Peak activation memory scales with `micro_batch * hidden_size`. Stage A
+    is measured to fit at 8 x 512 on this card; stage B must not be the run that
+    discovers 4 x 768 does not, two hours into a seven-hour sweep."""
+    assert (STAGE_B.micro_batch * ARCH_STAGEB_HIDDEN
+            <= STAGE_A.micro_batch * ARCH_PROBE_HIDDEN)
+    assert STAGE_B.grad_accum == STAGE_B.batch_tokens // (
+        STAGE_B.micro_batch * STAGE_B.seq_len)
+
+
+def test_a_stage_b_command_parses_and_carries_the_stage_b_shape():
+    import train as train_mod
+
+    for arm in STAGE_B_ARMS:
+        command = train_command(arm, data_dir="d",
+                                run_name=arm_run_name(arm, STAGE_B.tag),
+                                total_tokens=STAGE_B.total_tokens, device="cpu",
+                                shape=STAGE_B)
+        args = train_mod.parse_args(command[2:])
+
+        assert args.config == arm.config
+        assert args.micro_batch == STAGE_B.micro_batch
+        assert args.total_tokens == STAGE_B.total_tokens
+        assert args.warmup_steps == STAGE_B.warmup_steps
+        assert args.seq_start == args.seq_end == STAGE_B.seq_len
+        assert str(arm_checkpoint_path(arm, STAGE_B.tag)) == \
+            train_mod.checkpoint_path_for(args)
+
+
+# ------------------------------------------------- keeping the stages apart ----
+
+def test_each_shape_owns_a_distinct_tag_and_preset_family():
+    tags = [shape.tag for shape in SHAPES.values()]
+    families = [shape.preset_family for shape in SHAPES.values()]
+
+    assert len(set(tags)) == len(tags)
+    assert len(set(families)) == len(families)
+
+
+def test_a_stage_b_run_defaults_into_its_own_run_directory(tmp_path, monkeypatch):
+    """The tag comes from the shape rather than from a CLI default, so a stage-B
+    sweep launched without `--tag` cannot land in `runs/arch-stagea-*`."""
+    import daedalus.supervise as supervise
+
+    seen = {}
+    monkeypatch.setattr(supervise, "run_with_resume",
+                        lambda cmd, ckpt_path, **kw: seen.update(ckpt=ckpt_path)
+                        or {"attempts": 1, "resumed": False, "returncodes": [0]})
+    monkeypatch.setattr(supervise, "start_watchdog", lambda *a, **k: None)
+    monkeypatch.setattr(supervise, "stop_watchdog", lambda *a, **k: None)
+
+    arm = STAGE_B_BY_NAME["a4-kv2"]
+    report = run_arm(arm, data_dir="d", run_root=str(tmp_path), device="cpu",
+                     shape=STAGE_B, total_tokens=2 * STAGE_B.batch_tokens)
+
+    assert report["run"] == "arch-stageb-a4-kv2"
+    assert "arch-stagea-" not in seen["ckpt"]
+
+
+def test_a_stage_b_arm_refuses_to_train_over_a_stage_a_run_directory(
+        tmp_path, monkeypatch):
+    """The failure a shared arm vocabulary creates, and the one guard that
+    catches it.
+
+    `finished_run` cannot: it compares whole commands, and a differing command
+    is exactly what it must let through so that a changed budget re-runs. So a
+    mistyped `--tag stagea` on a stage-B sweep would find the stage-A marker,
+    decline to skip, and train a 159M arm from step 0 over a finished 105M one
+    -- destroying a scored stage-A result with nothing in the log naming it.
+    """
+    _no_trainer(monkeypatch)
+    stage_a_arm = ARMS_BY_NAME["a4-kv2"]
+    ckpt = _close_a_finished_run(stage_a_arm, tmp_path)
+
+    with pytest.raises(SystemExit) as excinfo:
+        run_arm(STAGE_B_BY_NAME["a4-kv2"], data_dir="d",
+                run_root=str(tmp_path), device="cpu", tag="stagea",
+                shape=STAGE_B, total_tokens=2 * STAGE_B.batch_tokens)
+
+    assert stage_a_arm.config in str(excinfo.value)
+    assert ckpt.read_bytes() == b"the stage-A result"
+
+
+def test_refresh_does_not_override_the_foreign_run_guard(tmp_path, monkeypatch):
+    """`--refresh` means "retrain this arm", not "clobber whatever is there".
+    Which of two experiments owns a directory is not a question a launcher gets
+    to answer by guessing."""
+    _no_trainer(monkeypatch)
+    ckpt = _close_a_finished_run(ARMS_BY_NAME["a4-kv2"], tmp_path)
+
+    with pytest.raises(SystemExit):
+        run_arm(STAGE_B_BY_NAME["a4-kv2"], data_dir="d",
+                run_root=str(tmp_path), device="cpu", tag="stagea",
+                shape=STAGE_B, total_tokens=2 * STAGE_B.batch_tokens,
+                refresh=True)
+
+    assert ckpt.read_bytes() == b"the stage-A result"
+
+
+def test_a_changed_budget_on_the_same_preset_is_still_a_rerun(tmp_path,
+                                                              monkeypatch):
+    """The guard has to separate "another experiment's directory" from "the same
+    experiment at a new budget". Only the first is refused; catching the second
+    would make every budget change a manual cleanup."""
+    import daedalus.supervise as supervise
+
+    seen = {}
+    monkeypatch.setattr(supervise, "run_with_resume",
+                        lambda cmd, ckpt_path, **kw: seen.update(ran=True)
+                        or {"attempts": 1, "resumed": False, "returncodes": [0]})
+    monkeypatch.setattr(supervise, "start_watchdog", lambda *a, **k: None)
+    monkeypatch.setattr(supervise, "stop_watchdog", lambda *a, **k: None)
+
+    arm = ARMS_BY_NAME["a4-kv2"]
+    _close_a_finished_run(arm, tmp_path, total_tokens=STAGE_A.batch_tokens)
+
+    report = run_arm(arm, data_dir="d", run_root=str(tmp_path), device="cpu",
+                     total_tokens=2 * STAGE_A.batch_tokens)
 
     assert seen.get("ran") is True
     assert "skipped" not in report

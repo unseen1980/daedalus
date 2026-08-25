@@ -1,4 +1,4 @@
-"""Phase 6 stage A: what do attention layers and KV heads actually buy?
+"""Phase 6 stages A and B: what do attention layers and KV heads actually buy?
 
 `daedalus/arch_space.py` answered the free half of this phase -- which shapes
 are stock-LFM2-compatible, parameter-matched and inside the KV budget. It cannot
@@ -45,10 +45,18 @@ exactly the direction a phase looking for KV savings would like to find, so a
 stage-A quality win inside that margin is not a win. Every arm's exact parameter
 count is in its sweep record for that reason.
 
-Scoring is deliberately not in this module yet. Stage A takes hours per sweep and
-the metrics it is read on -- full-pass BPB, retrieval by depth, artifact size,
-GGUF load -- are the phase's own evaluation slice; assembling them belongs beside
-those evaluators, not inside the launcher.
+**Stage B is the same grid at 150M over 250M tokens, and it is a `--shape`
+rather than a second module.** What the two stages share is the whole
+experiment: the arm names, the interleaved layout, the context, the tokens per
+step, the learning rates and the schedule shape. What differs is width, FFN and
+budget. Expressing that as one more `StageShape` plus one more preset family
+keeps the shared half literally shared, so stage B cannot drift in a field
+nobody re-reads -- which is the failure the generated presets exist to prevent.
+The cost is that one arm name now maps to two run directories, and
+`foreign_run` is what stops a mistyped `--tag` from resolving that ambiguity by
+overwriting a finished arm.
+
+Scoring lives in `architecture_report.py`, next to the evaluators it reads.
 
 Subcommands: `arms`, `shapes`, `run`, `sweep`.
 """
@@ -69,7 +77,7 @@ from daedalus.arch_space import (candidate_from_config,
                                  kv_bytes_per_context_token)
 from daedalus.config import (ARCH_PROBE_ATTENTION_BLOCKS, ARCH_PROBE_CONTROL,
                              ARCH_PROBE_KV_HEADS, PRESETS,
-                             arch_probe_preset_name)
+                             arch_probe_preset_name, arch_stageb_preset_name)
 
 #: Where `train.py` puts a run, and therefore the only place a supervisor may
 #: look for its checkpoint. Asked of the trainer rather than composed here --
@@ -99,6 +107,14 @@ class StageShape:
     decay_frac: float
     muon_lr: float
     adam_lr: float
+    #: Which family of presets this stage's arms name. The grid points are the
+    #: same two knobs at both stages; the preset behind a point is not.
+    preset_family: str
+    #: The run-directory prefix this stage owns. Derived from the shape rather
+    #: than defaulted on the CLI so that `--shape stage-b` cannot land in
+    #: `runs/arch-stagea-*` because a `--tag` was forgotten -- which would train
+    #: a 159M arm on top of a finished 105M one.
+    tag: str
     note: str = ""
 
     @property
@@ -133,10 +149,58 @@ STAGE_A = StageShape(
     decay_frac=0.8,
     muon_lr=0.02,
     adam_lr=3e-4,
+    preset_family="stage-a",
+    tag="stagea",
     note="the fifteen-point attention x KV-head screen at ~105M parameters",
 )
 
-SHAPES = {shape.name: shape for shape in (STAGE_A,)}
+#: Stage B, preregistered: the survivors re-run at the scale the plan allows a
+#: recommendation to rest on.
+#:
+#: **250M tokens, as 3,840 whole steps of 65,536.** Exactly 2.5x stage A's
+#: budget at the identical tokens per step, so the two stages differ in how long
+#: the schedule runs and not in what a step is. A round 250,000,000 would leave
+#: a truncated final batch and make the step count a rounding artefact.
+#:
+#: **Warmup scales with the run, decay does not.** 250 steps is stage A's 6.5%
+#: of a 2.5x longer run, and `decay_frac` is unchanged, so the WSD curve has the
+#: same shape at both stages -- a schedule that meant something different early
+#: and late would confound the scale-up it is supposed to measure.
+#:
+#: **The learning rates are stage A's, which are also the shipped model's.** The
+#: hero run trained this parameter count at `--muon-lr 0.02`, and stage A ran
+#: its probes there too. Re-tuning between stages would be an unpreregistered
+#: decision that moves the comparison, and there is no evidence asking for one.
+#:
+#: **The micro-batch halves to 4 and the accumulation doubles to 8.** Tokens per
+#: step are unchanged; what changes is peak activation memory, which scales with
+#: `micro_batch * hidden_size`. Stage A is known to fit at 8 x 512; 4 x 768 is
+#: 25% *under* that known-good point, so a 24GB card holds the wider model with
+#: headroom. Discovering otherwise costs an OOM two hours into a seven-hour
+#: sweep, which is the expensive way to learn it.
+STAGE_B = StageShape(
+    name="stage-b",
+    seq_len=2048,
+    micro_batch=4,
+    batch_tokens=65_536,
+    total_tokens=251_658_240,
+    warmup_steps=250,
+    decay_frac=0.8,
+    muon_lr=0.02,
+    adam_lr=3e-4,
+    preset_family="stage-b",
+    tag="stageb",
+    note="the stage-A survivors re-run at ~159M parameters over 250M tokens",
+)
+
+SHAPES = {shape.name: shape for shape in (STAGE_A, STAGE_B)}
+
+#: How a grid point names its preset in each family. The two knobs are the same
+#: at both stages; the width, FFN and therefore the preset are not.
+PRESET_NAMERS = {
+    "stage-a": arch_probe_preset_name,
+    "stage-b": arch_stageb_preset_name,
+}
 
 
 @dataclass(frozen=True)
@@ -173,17 +237,23 @@ class ArchArm:
         return record
 
 
-def _build_arms() -> List[ArchArm]:
+def _build_arms(preset_family: str = "stage-a") -> List[ArchArm]:
     """The grid, control first and then descending KV cost.
 
     Ordering is not cosmetic. A sweep the deadline cuts short leaves whatever
     ran, and descending cost means that prefix is a contiguous walk down from
     the shipped ratio -- readable as a curve -- rather than an arbitrary subset
     whose gaps have to be explained.
+
+    An arm's `name` is its grid point and is the same in every family, so
+    `--arms a4-kv2` selects the same *shape* at either stage while `config`
+    resolves to that stage's preset. The two stages then share one vocabulary of
+    arm names, which is what lets stage A's decision be handed to stage B.
     """
+    namer = PRESET_NAMERS[preset_family]
     arms = [
         ArchArm(name=f"a{blocks}-kv{kv}",
-                config=arch_probe_preset_name(blocks, kv),
+                config=namer(blocks, kv),
                 num_attention_blocks=blocks, num_key_value_heads=kv)
         for blocks in ARCH_PROBE_ATTENTION_BLOCKS
         for kv in ARCH_PROBE_KV_HEADS
@@ -194,9 +264,19 @@ def _build_arms() -> List[ArchArm]:
     return [control] + rest
 
 
-ARMS: Sequence[ArchArm] = tuple(_build_arms())
+ARMS_BY_FAMILY = {family: tuple(_build_arms(family))
+                  for family in PRESET_NAMERS}
+
+#: Stage A's grid stays the module-level default: it is what every existing
+#: caller, artifact and scorecard means by "the arms".
+ARMS: Sequence[ArchArm] = ARMS_BY_FAMILY["stage-a"]
 ARMS_BY_NAME = {arm.name: arm for arm in ARMS}
 CONTROL = ARMS[0]
+
+
+def arms_for(shape: "StageShape") -> Sequence[ArchArm]:
+    """The grid at this stage's scale, control first."""
+    return ARMS_BY_FAMILY[shape.preset_family]
 
 
 def parameter_spread(arms: Sequence[ArchArm] = ARMS) -> dict:
@@ -338,8 +418,49 @@ def finished_run(command: Sequence[str], ckpt) -> Optional[dict]:
     return marker if ckpt.exists() else None
 
 
+def _preset_in(command: Sequence[str]) -> Optional[str]:
+    """The `--config` a recorded command names, or None."""
+    parts = list(command)
+    for index, part in enumerate(parts[:-1]):
+        if part == "--config":
+            return parts[index + 1]
+    return None
+
+
+def foreign_run(command: Sequence[str], ckpt) -> Optional[str]:
+    """The preset a marker in this run directory names, if it is not ours.
+
+    Two stages share one vocabulary of arm names, so `a4-kv2` is a stage-A run
+    directory and a stage-B one depending only on the tag -- and a tag is a
+    string on a command line. Get it wrong and the sweep does not fail: it finds
+    a marker whose command differs (a different `--config`), correctly declines
+    to treat it as a finished run of *this* experiment, and trains a 159M arm
+    from step 0 straight over a finished 105M one. The stage-A result would be
+    gone with nothing in any log to say which arm it had been.
+
+    `finished_run` cannot catch it, because differing commands is exactly what
+    that guard is built to let through -- a changed budget or schedule is a new
+    experiment and must run. What separates the two cases is *which* argument
+    changed: a different budget in the same run directory is a rerun, a
+    different preset is another experiment's directory. Only the second is
+    refused, and it is refused rather than worked around, because guessing which
+    of two experiments owns a directory is not a decision a launcher should make.
+    """
+    from daedalus.supervise import INFLIGHT_SCHEMA, read_inflight
+
+    ckpt = Path(ckpt)
+    marker = read_inflight(str(ckpt.parent))
+    if marker is None or marker.get("schema") != INFLIGHT_SCHEMA:
+        return None
+    recorded = _preset_in(marker.get("cmd") or ())
+    ours = _preset_in(command)
+    if recorded is None or ours is None or recorded == ours:
+        return None
+    return recorded
+
+
 def run_arm(arm: ArchArm, *, data_dir: str, run_root: str = RUN_ROOT,
-            device: str = "cuda", tag: str = "stagea",
+            device: str = "cuda", tag: Optional[str] = None,
             shape: StageShape = STAGE_A, total_tokens: Optional[int] = None,
             val_dir: Optional[str] = None, max_attempts: int = 3,
             stall_min: float = 20.0, refresh: bool = False) -> dict:
@@ -361,6 +482,7 @@ def run_arm(arm: ArchArm, *, data_dir: str, run_root: str = RUN_ROOT,
     """
     from daedalus.supervise import run_with_resume, start_watchdog, stop_watchdog
 
+    tag = shape.tag if tag is None else tag
     name = arm_run_name(arm, tag)
     budget = int(shape.total_tokens if total_tokens is None else total_tokens)
     command = train_command(arm, data_dir=data_dir, run_name=name,
@@ -375,6 +497,13 @@ def run_arm(arm: ArchArm, *, data_dir: str, run_root: str = RUN_ROOT,
               "run_dir": str(run_dir), "shape": shape.name,
               "total_tokens": budget, "steps": budget // shape.batch_tokens,
               "command": list(command)}
+    occupant = foreign_run(command, ckpt)
+    if occupant is not None:
+        raise SystemExit(
+            f"{run_dir} already holds a run of preset {occupant!r}, but arm "
+            f"{arm.name} at shape {shape.name!r} is preset {arm.config!r}. "
+            f"Training here would overwrite another experiment's checkpoint; "
+            f"pass the --tag that stage owns instead.")
     if not refresh and finished_run(command, ckpt) is not None:
         # Recorded, not omitted: an artifact that drops a skipped arm and one
         # that never ran it look identical to a reader.
@@ -401,15 +530,18 @@ def run_arm(arm: ArchArm, *, data_dir: str, run_root: str = RUN_ROOT,
 
 def sweep(*, data_dir: str, run_root: str = RUN_ROOT,
           report_root: str = REPORT_ROOT, device: str = "cuda",
-          tag: str = "stagea", shape: StageShape = STAGE_A,
+          tag: Optional[str] = None, shape: StageShape = STAGE_A,
           total_tokens: Optional[int] = None, val_dir: Optional[str] = None,
-          arms: Sequence[ArchArm] = ARMS, refresh: bool = False) -> dict:
+          arms: Optional[Sequence[ArchArm]] = None,
+          refresh: bool = False) -> dict:
     """Every arm in order, control first.
 
     Re-entrant by design: arms that already finished are returned from their
     closed markers, so relaunching a sweep the deadline or a dead session cut
     short costs only the arms that have not run.
     """
+    tag = shape.tag if tag is None else tag
+    arms = arms_for(shape) if arms is None else arms
     results = []
     for arm in arms:
         results.append(run_arm(arm, data_dir=data_dir, run_root=run_root,
@@ -437,7 +569,10 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-root", default=RUN_ROOT)
     parser.add_argument("--report-root", default=REPORT_ROOT)
-    parser.add_argument("--tag", default="stagea")
+    parser.add_argument("--tag", default=None,
+                        help="run-directory prefix; defaults to the one the "
+                             "--shape owns, which is what keeps two stages out "
+                             "of each other's checkpoints")
     parser.add_argument("--shape", default=STAGE_A.name, choices=list(SHAPES))
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -465,7 +600,7 @@ def main(argv=None) -> int:
     shape = SHAPES[args.shape]
 
     if args.command == "arms":
-        for arm in ARMS:
+        for arm in arms_for(shape):
             print(json.dumps(arm.describe(), sort_keys=True))
         return 0
 
@@ -477,7 +612,8 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "run":
-        report = run_arm(ARMS_BY_NAME[args.arm], data_dir=args.data_dir,
+        chosen = {arm.name: arm for arm in arms_for(shape)}[args.arm]
+        report = run_arm(chosen, data_dir=args.data_dir,
                          run_root=args.run_root, device=args.device,
                          tag=args.tag, shape=shape,
                          total_tokens=args.total_tokens, val_dir=args.val_dir,
@@ -490,7 +626,8 @@ def main(argv=None) -> int:
                        report_root=args.report_root, device=args.device,
                        tag=args.tag, shape=shape,
                        total_tokens=args.total_tokens, val_dir=args.val_dir,
-                       arms=selected_arms(args.arms), refresh=args.refresh)
+                       arms=selected_arms(args.arms, arms_for(shape)),
+                       refresh=args.refresh)
         print(json.dumps({"arms": [a["arm"] for a in report["arms"]],
                           "skipped": [a["arm"] for a in report["arms"]
                                       if a.get("skipped")]}, indent=2))

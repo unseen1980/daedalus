@@ -45,8 +45,13 @@ arm to be called a winner. Conservative in the direction the bias runs.
 raw BPB is no worse than the control by more than 0.5% -- the number phase 6 was
 preregistered with, applied to the raw delta rather than the discounted one so
 that no threshold is invented here after the fact. The discount is reported, and
-carried into stage B, where 150M candidates can be matched more tightly than a
-single 256-wide FFN step allows at this scale.
+carried into stage B -- where, contrary to what this file assumed before the
+stage-B shape was worked out, the residual is *worse* rather than better. At
+768 wide the conv-block premium grows faster than the model does, so the same
+fixed-FFN grid lands 2.2% either side of its midpoint against stage A's 1.5%,
+and solving the FFN per arm is no more available there than here (one step is
+8.8% of a 159M model). The discount is therefore more load-bearing at stage B,
+not less; `scripts/architecture_sweep.py` carries the arithmetic.
 
 Among arms that clear the floor, what advances is the Pareto frontier on (KV
 bytes down, BPB down), cheapest cache first. The floor already says "does not
@@ -73,8 +78,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from daedalus.scorecard import (ArtifactRef, ScorecardError, load_scorecard,  # noqa: E402
                                 sha256_file)
 from scripts.architecture_sweep import (ARMS, CONTROL, REPORT_ROOT,  # noqa: E402
-                                        RUN_ROOT, STAGE_A, ArchArm, StageShape,
-                                        arm_checkpoint_path, arm_run_name,
+                                        RUN_ROOT, SHAPES, STAGE_A, ArchArm,
+                                        StageShape, arm_checkpoint_path,
+                                        arm_run_name, arms_for,
                                         parameter_spread, selected_arms)
 from scripts.bpb_eval import _git_short_sha, run_bpb_eval  # noqa: E402
 
@@ -424,7 +430,11 @@ def build_report(rows: Sequence[dict], *, tag: str = "stagea",
                   "total_tokens": shape.total_tokens, "steps": shape.steps},
         "control": control["arm"],
         "control_bpb": control["bpb"],
-        "parameter_spread": parameter_spread(),
+        # Read off the arms this shape actually trained. The two stages differ
+        # in width, and therefore in how far from parameter-matched the grid is
+        # -- reporting stage A's spread on a stage-B table would under-state the
+        # discount by a third.
+        "parameter_spread": parameter_spread(arms_for(shape)),
         "rows": ordered,
         "stage_b": select_stage_b(rows),
         "caveats": [
@@ -435,10 +445,11 @@ def build_report(rows: Sequence[dict], *, tag: str = "stagea",
             "0.34 exponent on N, which is an upper bound and therefore "
             "conservative against exactly the arms this phase hopes to "
             "advance.",
-            "A ranking measured on 105M-parameter proxies over 100M tokens is "
-            "a ranking at that scale. Stage B re-runs the survivors at 150M "
-            "over 250M tokens for that reason, and nothing here should be "
-            "quoted as a property of a larger successor.",
+            f"A ranking measured on "
+            f"{control['parameters'] / 1e6:.0f}M-parameter proxies over "
+            f"{shape.total_tokens / 1e6:.0f}M tokens is a ranking at that "
+            f"scale, and nothing here should be quoted as a property of a "
+            f"larger successor.",
             "BPB is the only measured column. Retrieval by depth, GGUF "
             "export/load and decode shape are preregistered stage-6 gates that "
             "this pass does not measure; no arm is recommended on BPB alone.",
@@ -453,7 +464,8 @@ def render_markdown(report: dict) -> str:
     """The table a human reads, with the discount column beside the raw one."""
 
     lines = [
-        f"# Phase 6 stage A: attention x KV-head screen ({report['tag']})",
+        f"# Phase 6 {report['shape']['name']}: attention x KV-head screen "
+        f"({report['tag']})",
         "",
         f"Full-pass held-out BPB on `{report['holdout_source']}`, "
         f"{report['shape']['total_tokens']:,} tokens at "
@@ -502,7 +514,11 @@ def main(argv=None) -> int:
     parser.add_argument("--run-root", default=RUN_ROOT)
     parser.add_argument("--report-root", default=REPORT_ROOT)
     parser.add_argument("--scorecard-root", default=SCORECARD_ROOT)
-    parser.add_argument("--tag", default="stagea")
+    parser.add_argument("--shape", default=STAGE_A.name, choices=list(SHAPES),
+                        help="which stage's arms and presets to read")
+    parser.add_argument("--tag", default=None,
+                        help="run-directory prefix; defaults to the one the "
+                             "--shape owns")
     parser.add_argument("--source", default=MATCHED_HOLDOUT_SOURCE)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -523,10 +539,13 @@ def main(argv=None) -> int:
     sub.add_parser("report")
 
     args = parser.parse_args(argv)
+    shape = SHAPES[args.shape]
+    tag = shape.tag if args.tag is None else args.tag
 
     if args.command == "score":
-        report = score_arms(selected_arms(args.arms), holdout_root=args.holdout_root,
-                            tag=args.tag, run_root=args.run_root,
+        report = score_arms(selected_arms(args.arms, arms_for(shape)),
+                            holdout_root=args.holdout_root,
+                            tag=tag, run_root=args.run_root,
                             out_dir=args.scorecard_root, source=args.source,
                             device=args.device, seq_len=args.seq_len,
                             batch_size=args.batch_size, seed=args.seed,
@@ -535,11 +554,11 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "report":
-        rows = read_rows(ARMS, tag=args.tag, out_dir=args.scorecard_root,
+        rows = read_rows(arms_for(shape), tag=tag, out_dir=args.scorecard_root,
                          source=args.source)
-        report = build_report(rows, tag=args.tag, source=args.source)
-        json_path = Path(args.report_root) / f"{args.tag}-report.json"
-        markdown_path = Path(args.report_root) / f"{args.tag}-report.md"
+        report = build_report(rows, tag=tag, shape=shape, source=args.source)
+        json_path = Path(args.report_root) / f"{tag}-report.json"
+        markdown_path = Path(args.report_root) / f"{tag}-report.md"
         _write_json(json_path, report)
         markdown_path.write_text(render_markdown(report))
         print(render_markdown(report))
