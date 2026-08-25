@@ -311,8 +311,8 @@ def test_phase_seven_prompt_targets_the_successor_budget():
 def test_phase_six_prompt_states_proxy_limits_and_the_target():
     prompt = (ROOT / "ops/vast/prompts/phase6-architecture.md").read_text()
 
-    assert "500M" in prompt
-    # A proxy at small scale cannot rank quality for a 500M successor.
+    # No successor size is decided; report a Pareto set, not one configuration.
+    assert "no successor size is decided" in prompt.lower()
     assert "not a configuration to copy" in prompt
     assert "KV bytes per context token" in prompt
     assert "/usr/local/bin/daedalus-approved" in prompt

@@ -2,22 +2,24 @@
 
 Run non-interactively with `--permission-mode dontAsk`, Opus, and xhigh effort.
 
-## Read this first: the target changed
+## Read this first: no successor size is decided
 
-The operator intends a successor at **500M parameters over 1T tokens**, against
-V1's 150M over 59.9B. Generate and score candidates around **500M**, keeping the
-shipped 18x768 / 6-attention / 4-KV configuration as the control so the
-comparison stays anchored to something measured.
+An operator discussion raised 500M parameters over 1T tokens, and that figure was
+later withdrawn as exploratory. Treat no successor size as chosen. Score
+candidates across the range the plan implies, keeping the shipped 18x768 /
+6-attention / 4-KV configuration as the control so the comparison stays anchored
+to something measured, and report a Pareto set that a decision can be read off
+once a size is picked.
 
 Be candid about what a proxy at this budget can and cannot say. Depth, attention
 fraction, and KV-head choices measured on small models do not extrapolate
-cleanly to 3.3x the parameters. The deliverable is a Pareto set to sanity-check
-a decision, not a configuration to copy. Say so in the report.
+cleanly to a materially larger successor. The deliverable is a Pareto set to
+sanity-check a decision, not a configuration to copy. Say so in the report.
 
 Two things transfer more reliably than quality ranking and deserve weight:
 parameter and byte accounting, which is arithmetic, and KV bytes per context
-token, which binds harder at 500M than at 150M and is a deployment constraint
-rather than a training one.
+token, which is a deployment constraint rather than a training one and binds
+harder as the model grows.
 
 ## Method
 
