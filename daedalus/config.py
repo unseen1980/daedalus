@@ -237,6 +237,79 @@ PRESETS["conv-probe"] = DaedalusConfig(
 )
 
 
+# ------------------------------------------ Phase 6 architecture Stage A ------
+# The stage-A screen: attention fraction crossed with KV heads, everything else
+# held. `daedalus/arch_space.py` decides which *shapes* are comparable at all;
+# this is the fifteen-point grid those rules leave once depth, width and FFN are
+# fixed, generated so the two knobs under test are the only fields that differ.
+#
+# **`block_ff_dim` is held fixed here, and that is the opposite of what
+# `arch_space.matched_candidate` does on purpose.** Parameter-matching by
+# solving the FFN width is right at the scale that module screens and wrong at
+# this one: one `block_ff_dim` step is `3 * hidden * layers * 256` parameters,
+# which here is 9.44M against a ~105M model -- 9.0%. Solving per arm would
+# therefore snap arms as much as 4.5% away from each other, while simply
+# holding the FFN fixed leaves the whole grid within 1.5% of its own midpoint,
+# because the only parameter difference left is a conv block costing 1.05M
+# where an attention block costs 0.59M-0.79M. The cheap knob is the accurate
+# one at proxy scale (`tests/test_architecture_sweep.py` asserts both halves).
+#
+# **Depth 24, not the shipped 18.** The grid spans attention fractions from the
+# shipped 1/3 down to 1/12, and 18 layers cannot express those as five distinct
+# counts -- 1/9 and 1/12 both round to 2. At 24 they are 8/6/4/3/2, so every
+# fraction in the plan's range is a different model.
+#
+# **Width 512 and the shipped 49,152 vocabulary and 2,048 context.** The
+# embedding lands at 24% of parameters against the shipped model's 25.1%, so
+# attention's share of the model is roughly what it is in the real artifact;
+# and KV cost is only meaningful against a context length the shipped model
+# also has, so the screen runs at the same 2,048.
+ARCH_PROBE_DEPTH = 24
+ARCH_PROBE_HIDDEN = 512
+ARCH_PROBE_HEAD_DIM = 64
+ARCH_PROBE_FF_DIM = 1536
+
+#: Attention layers out of 24: the plan's 1/3, 1/4, 1/6, 1/9 and 1/12.
+ARCH_PROBE_ATTENTION_BLOCKS = (8, 6, 4, 3, 2)
+
+#: GQA groups. Powers of two that divide the eight query heads; 8 (i.e. plain
+#: MHA) is left out because it only clears the KV ceiling at the sparsest
+#: attention counts, where it buys the same cache as a denser stack with fewer
+#: KV heads and is dominated by it on every other axis.
+ARCH_PROBE_KV_HEADS = (1, 2, 4)
+
+#: The shipped model's own point in this grid -- attention every third layer,
+#: four KV heads -- and therefore the control every other arm is read against.
+ARCH_PROBE_CONTROL = (8, 4)
+
+
+def arch_probe_config(num_attention_blocks: int,
+                      num_key_value_heads: int) -> DaedalusConfig:
+    """One stage-A arm. The two arguments are the only fields that vary."""
+    return DaedalusConfig(
+        hidden_size=ARCH_PROBE_HIDDEN,
+        num_hidden_layers=ARCH_PROBE_DEPTH,
+        num_attention_heads=ARCH_PROBE_HIDDEN // ARCH_PROBE_HEAD_DIM,
+        num_key_value_heads=num_key_value_heads,
+        head_dim=ARCH_PROBE_HEAD_DIM,
+        block_ff_dim=ARCH_PROBE_FF_DIM,
+        num_attention_blocks=num_attention_blocks,
+        max_position_embeddings=2048,
+    )
+
+
+def arch_probe_preset_name(num_attention_blocks: int,
+                           num_key_value_heads: int) -> str:
+    return f"arch-a{num_attention_blocks}-kv{num_key_value_heads}"
+
+
+for _blocks in ARCH_PROBE_ATTENTION_BLOCKS:
+    for _kv in ARCH_PROBE_KV_HEADS:
+        PRESETS[arch_probe_preset_name(_blocks, _kv)] = arch_probe_config(
+            _blocks, _kv)
+del _blocks, _kv
+
+
 if __name__ == "__main__":
     for name, cfg in PRESETS.items():
         p = cfg.param_count()
