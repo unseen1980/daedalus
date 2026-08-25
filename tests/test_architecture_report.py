@@ -13,20 +13,30 @@ independently of what the fifteen real arms happen to have scored.
 Run: python -m pytest tests/test_architecture_report.py -v
 """
 import json
+import math
+from pathlib import Path
 
 import pytest
 
 from daedalus.scorecard import (ArtifactRef, Provenance, Scorecard,
                                 ScorecardError, write_scorecard)
-from scripts.architecture_report import (MATCHED_HOLDOUT_SOURCE,
+from scripts.architecture_report import (GATE_COLUMNS, MATCHED_HOLDOUT_SOURCE,
                                          PARAM_SCALING_EXPONENT,
+                                         RETRIEVAL_GATE_TASKS,
+                                         RETRIEVAL_MAX_DROP_POINTS,
+                                         RETRIEVAL_MIN_ITEMS_PER_DEPTH,
                                          STAGE_B_FLOOR_PCT, STAGE_B_MAX_ARMS,
-                                         arm_bpb, build_report,
-                                         credited_bpb_delta_pct,
-                                         pareto_frontier, read_rows,
-                                         render_markdown, score_arm,
+                                         arm_bpb, build_recommendation,
+                                         build_report,
+                                         credited_bpb_delta_pct, decode_check,
+                                         export_check, gate_arm, gate_verdict,
+                                         kv_check, pareto_frontier, read_rows,
+                                         read_decode_passes, render_markdown,
+                                         render_recommendation_markdown,
+                                         retrieval_check, score_arm,
                                          scorecard_path, scored_from,
                                          select_stage_b)
+from scripts.architecture_report import main as architecture_report_main
 from scripts.architecture_sweep import ARMS_BY_NAME, CONTROL, arm_checkpoint_path
 
 
@@ -383,3 +393,442 @@ def test_score_arm_measures_a_full_pass_over_the_matched_source(tmp_path):
     assert card["details"]["sources_requested"] == [MATCHED_HOLDOUT_SOURCE]
     assert result["checkpoint_sha256"] == \
         card["provenance"]["artifact"]["sha256"]
+
+
+# =================================================== the recommendation gate ==
+# What fails here does not look like a failure. It looks like a table with one
+# strong column and four empty ones, read as a recommendation because the empty
+# ones did not object. Every test below pins a refusal.
+
+def _retrieval_card(path, *, task, depths, artifact_kind="gguf-q4_0",
+                    per_depth=100):
+    """A retrieval scorecard shaped as `daedalus.retrieval.summarize` writes."""
+    metrics = {"exact_match": sum(depths.values()) / len(depths),
+               "query_accuracy": 1.0, "n": float(per_depth * len(depths))}
+    for depth, score in depths.items():
+        metrics[f"exact_match_d{depth}"] = score
+        metrics[f"n_d{depth}"] = float(per_depth)
+    card = Scorecard(
+        kind="retrieval", name=f"retrieval-{task}",
+        provenance=Provenance(
+            artifact=ArtifactRef(path="m.gguf", sha256="b" * 64,
+                                 kind=artifact_kind),
+            tokenizer=ArtifactRef(path="tok", sha256="0" * 64, kind="tokenizer"),
+            seed=1, git_sha="deadbee", bpb_mode="not-applicable"),
+        metrics=metrics, created_at="2026-08-25T00:00:00Z", item_count=1)
+    return write_scorecard(path, card)
+
+
+def _write_retrieval(root, arm_run, *, depths, artifact_kind="gguf-q4_0",
+                     per_depth=100):
+    for task in RETRIEVAL_GATE_TASKS:
+        _retrieval_card(Path(root) / arm_run / f"retrieval-{task}.json",
+                        task=task, depths=depths, artifact_kind=artifact_kind,
+                        per_depth=per_depth)
+
+
+def _scored(depths, *, items=100, artifact_kind="gguf-q4_0"):
+    """The in-memory shape `read_retrieval` returns, for the pure-rule tests."""
+    return {task: {"depths": {depth: {"exact_match": score, "n": items}
+                              for depth, score in depths.items()},
+                   "artifact_kind": artifact_kind}
+            for task in RETRIEVAL_GATE_TASKS}
+
+
+def _decode_report(path, *, models, file_mb=None, depths=(0, 2048)):
+    """A decode_bench report with every model alternating inside each pass."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    passes = []
+    for depth in depths:
+        passes.append({
+            "threads": 8, "n_gen": 128, "depth": depth, "rounds": 3,
+            "models": {
+                name: {"path": f"{name}.gguf",
+                       "file_mb": (file_mb or {}).get(name),
+                       "samples": [by_depth[depth]], "mean": by_depth[depth],
+                       "stdev": None}
+                for name, by_depth in models.items()}})
+    path.write_text(json.dumps({"passes": passes, "note": None}))
+    return path
+
+
+def _gate_rows():
+    """Control first, then one arm that clears BPB and cache on its own.
+
+    The arm wins both measurable-for-free columns deliberately: these tests are
+    about what happens to a shape that looks good on the evidence that exists,
+    which is the only shape a missing column can mislead anyone about."""
+    return _with_deltas([_row("a8-kv4", bpb=1.20, kv=4096, is_control=True),
+                         _row("a4-kv1", bpb=1.19, kv=1024)])
+
+
+# ------------------------------------------------- an unmeasured column ------
+
+def test_a_strong_bpb_row_alone_is_not_a_recommendation():
+    """The failure this gate exists for. An arm that clears the only column
+    anyone measured must come out `unproven`, naming what is missing, rather
+    than `recommended`."""
+    control, arm = _gate_rows()
+
+    entry = gate_arm(arm, control, retrieval={}, control_retrieval={},
+                     decode_passes={}, arm_names=("a4-kv1",),
+                     control_names=("a8-kv4",))
+
+    assert entry["verdict"] == "unproven"
+    assert entry["checks"]["bpb"]["status"] == "pass"
+    assert set(entry["unproven"]) == {"retrieval", "export", "decode"}
+
+
+def test_every_gate_column_is_required():
+    """No column is optional. A rule satisfied by a majority would recommend a
+    shape nobody had measured for export."""
+    assert set(GATE_COLUMNS) == {"bpb", "retrieval", "kv", "export", "decode"}
+    checks = {name: {"status": "pass"} for name in GATE_COLUMNS}
+    assert gate_verdict(checks)["verdict"] == "recommended"
+    for name in GATE_COLUMNS:
+        partial = dict(checks, **{name: {"status": "unmeasured"}})
+        assert gate_verdict(partial)["verdict"] == "unproven", name
+
+
+def test_a_powerless_column_is_not_a_pass():
+    """Measured-without-power is its own outcome: the instrument could not have
+    detected the failure the column screens for."""
+    checks = {name: {"status": "pass"} for name in GATE_COLUMNS}
+    checks["retrieval"] = {"status": "no-power"}
+
+    assert gate_verdict(checks)["verdict"] == "unproven"
+
+
+def test_a_measured_failure_outranks_an_unmeasured_column():
+    """`blocked` and `unproven` lead to different next actions -- closing a
+    candidate versus running an evaluation -- so a failure must not be softened
+    into merely unproven."""
+    checks = {name: {"status": "pass"} for name in GATE_COLUMNS}
+    checks["kv"] = {"status": "fail"}
+    checks["decode"] = {"status": "unmeasured"}
+
+    verdict = gate_verdict(checks)
+
+    assert verdict["verdict"] == "blocked"
+    assert verdict["failed"] == ["kv"]
+    assert verdict["unproven"] == ["decode"]
+
+
+# ------------------------------------------------------------- retrieval ----
+
+def test_the_item_floor_is_derived_from_the_threshold():
+    """Written as arithmetic on the threshold so the two cannot drift: one item
+    must be worth no more than the gate it is asked to resolve."""
+    assert RETRIEVAL_MIN_ITEMS_PER_DEPTH == \
+        math.ceil(100.0 / RETRIEVAL_MAX_DROP_POINTS)
+    assert 100.0 / RETRIEVAL_MIN_ITEMS_PER_DEPTH <= RETRIEVAL_MAX_DROP_POINTS
+
+
+def test_a_depth_with_too_few_items_has_no_power():
+    """With 20 items one item is 5 points against a 2-point gate, so the
+    threshold is finer than the instrument and every arm passes or fails by a
+    single item."""
+    check = retrieval_check(_scored({2048: 0.50}, items=20),
+                            _scored({2048: 0.55}, items=20))
+
+    assert check["status"] == "no-power"
+    cell = next(c for c in check["cells"] if c["depth"] == 2048)
+    assert cell["status"] == "no-power"
+    assert str(RETRIEVAL_MIN_ITEMS_PER_DEPTH) in cell["note"]
+
+
+def test_a_control_at_the_floor_cannot_host_a_two_point_drop():
+    """You cannot fall two points from one. Such a depth passes every arm,
+    including one that emits nothing, so it is reported as powerless."""
+    check = retrieval_check(_scored({2048: 0.0}), _scored({2048: 0.01}))
+
+    assert check["status"] == "no-power"
+
+
+def test_retrieval_fails_on_a_drop_past_the_gate_at_a_single_depth():
+    """'No worse at any trained depth' is read at the finest grain the
+    artifacts support: a strong shallow curve must not cover a deep regression."""
+    arm = _scored({256: 0.90, 2048: 0.50})
+    control = _scored({256: 0.88, 2048: 0.60})
+
+    check = retrieval_check(arm, control)
+
+    assert check["status"] == "fail"
+    assert "2048" in check["note"]
+
+
+def test_retrieval_is_evaluated_per_task_not_pooled():
+    """Pooling would need a weighting rule this phase never preregistered, and
+    would let a strong passkey curve cover an mqar regression."""
+    arm = _scored({2048: 0.80})
+    arm["mqar"]["depths"][2048]["exact_match"] = 0.50
+    control = _scored({2048: 0.60})
+
+    check = retrieval_check(arm, control)
+
+    assert check["status"] == "fail"
+    assert "mqar" in check["note"]
+
+
+def test_retrieval_passes_when_every_cell_is_within_the_gate():
+    depths = {256: 0.90, 512: 0.85, 1024: 0.80, 2048: 0.75}
+    arm = _scored({depth: score - 0.01 for depth, score in depths.items()})
+
+    check = retrieval_check(arm, _scored(depths))
+
+    assert check["status"] == "pass"
+    assert len(check["cells"]) == len(depths) * len(RETRIEVAL_GATE_TASKS)
+
+
+def test_a_depth_the_arm_never_ran_is_unmeasured_rather_than_dropped():
+    """Silently intersecting the depths would let an arm skip the deep end and
+    still read as having held retention everywhere."""
+    arm = _scored({256: 0.90})
+    control = _scored({256: 0.90, 2048: 0.70})
+
+    check = retrieval_check(arm, control)
+
+    assert check["status"] == "unmeasured"
+    assert any(cell["depth"] == 2048 and cell["status"] == "unmeasured"
+               for cell in check["cells"])
+
+
+# ---------------------------------------------------------------- export ----
+
+def test_a_pytorch_score_is_not_export_evidence():
+    """Scoring a checkpoint in PyTorch demonstrates nothing about whether stock
+    llama.cpp can convert or load the shape, which is what the plan gates on."""
+    check = export_check(_scored({2048: 0.8}, artifact_kind="checkpoint"))
+
+    assert check["status"] == "unmeasured"
+    assert "llama.cpp" in check["note"]
+
+
+def test_a_gguf_backed_score_is_export_evidence():
+    """A retrieval card whose artifact is a GGUF exists only because llama.cpp
+    loaded that file and generated from it -- evidence, not a claim."""
+    assert export_check(_scored({2048: 0.8}))["status"] == "pass"
+
+
+# ---------------------------------------------------------------- decode ----
+
+def test_decode_refuses_two_models_measured_in_separate_passes(tmp_path):
+    """decode_bench alternates models within a pass precisely because absolutes
+    move with box load. Reading across passes would manufacture a speedup that
+    is a report about the box."""
+    report = tmp_path / "decode.json"
+    report.write_text(json.dumps({"passes": [
+        {"threads": 8, "n_gen": 128, "depth": 0, "rounds": 3,
+         "models": {"a4-kv1": {"path": "a.gguf", "file_mb": 60.0,
+                               "samples": [30.0], "mean": 30.0,
+                               "stdev": None}}},
+        {"threads": 8, "n_gen": 128, "depth": 0, "rounds": 3,
+         "models": {"a8-kv4": {"path": "c.gguf", "file_mb": 60.0,
+                               "samples": [20.0], "mean": 20.0,
+                               "stdev": None}}},
+    ]}))
+    control, arm = _gate_rows()
+
+    check = decode_check(arm, control, read_decode_passes(report),
+                         ("a4-kv1",), ("a8-kv4",))
+
+    assert check["status"] == "unmeasured"
+    assert "comparable" in check["note"]
+
+
+def test_decode_fails_an_arm_slower_at_depth_zero(tmp_path):
+    """The plan names depth zero because it is where a conv hybrid has least to
+    gain: an arm slower on an empty context is slower for most chat turns no
+    matter what its cache costs."""
+    report = _decode_report(tmp_path / "decode.json", models={
+        "a4-kv1": {0: 18.0, 2048: 19.0}, "a8-kv4": {0: 20.0, 2048: 15.0}})
+    control, arm = _gate_rows()
+
+    check = decode_check(arm, control, read_decode_passes(report),
+                         ("a4-kv1",), ("a8-kv4",))
+
+    assert check["status"] == "fail"
+    assert check["depths"][0]["delta_pct"] == pytest.approx(-10.0)
+
+
+def test_decode_reports_the_long_context_advantage_without_gating_on_it(tmp_path):
+    """'Does not erase the benefit' is not 'must be faster', so the ratio's
+    movement with depth is reported as the phase's finding rather than turned
+    into a bound the plan never set."""
+    report = _decode_report(tmp_path / "decode.json", models={
+        "a4-kv1": {0: 20.0, 2048: 18.0}, "a8-kv4": {0: 20.0, 2048: 12.0}})
+    control, arm = _gate_rows()
+
+    check = decode_check(arm, control, read_decode_passes(report),
+                         ("a4-kv1",), ("a8-kv4",))
+
+    assert check["status"] == "pass"
+    assert check["long_context_advantage_pct"] == pytest.approx(50.0)
+
+
+def test_decode_is_found_under_the_run_name_as_well_as_the_grid_point(tmp_path):
+    """The names in a decode report are whatever the operator typed at
+    `--models`; rejecting a real measurement over a naming convention would
+    throw the measurement away."""
+    report = _decode_report(tmp_path / "decode.json", models={
+        "arch-stagea-a4-kv1": {0: 20.0, 2048: 20.0},
+        "arch-stagea-a8-kv4": {0: 20.0, 2048: 20.0}})
+    control, arm = _gate_rows()
+
+    check = decode_check(arm, control, read_decode_passes(report),
+                         ("a4-kv1", "arch-stagea-a4-kv1"),
+                         ("a8-kv4", "arch-stagea-a8-kv4"))
+
+    assert check["status"] == "pass"
+
+
+def test_a_decode_row_that_never_produced_a_number_is_not_a_measurement(tmp_path):
+    """`decode_bench` writes `mean: null` when every round of a model failed or
+    timed out. Reading that as present would compare an arm against nothing."""
+    report = tmp_path / "decode.json"
+    report.write_text(json.dumps({"passes": [
+        {"threads": 8, "n_gen": 128, "depth": depth, "rounds": 3,
+         "models": {"a4-kv1": {"path": "a.gguf", "file_mb": 60.0,
+                               "samples": [], "mean": None, "stdev": None},
+                    "a8-kv4": {"path": "c.gguf", "file_mb": 60.0,
+                               "samples": [20.0], "mean": 20.0,
+                               "stdev": None}}}
+        for depth in (0, 2048)]}))
+    control, arm = _gate_rows()
+
+    check = decode_check(arm, control, read_decode_passes(report),
+                         ("a4-kv1",), ("a8-kv4",))
+
+    assert check["status"] == "unmeasured"
+
+
+def test_an_oversized_artifact_erases_the_benefit(tmp_path):
+    """Q4_0 bytes track parameters exactly, so a shape that buys its cache
+    saving with a materially larger file has not bought anything."""
+    report = _decode_report(
+        tmp_path / "decode.json",
+        models={"a4-kv1": {0: 20.0, 2048: 20.0},
+                "a8-kv4": {0: 20.0, 2048: 20.0}},
+        file_mb={"a4-kv1": 70.0, "a8-kv4": 60.0})
+    control, arm = _gate_rows()
+
+    check = decode_check(arm, control, read_decode_passes(report),
+                         ("a4-kv1",), ("a8-kv4",))
+
+    assert check["status"] == "fail"
+    assert check["artifact_source"] == "measured"
+    assert check["artifact_growth_pct"] == pytest.approx(100.0 * 10 / 60)
+
+
+def test_the_artifact_column_says_whether_it_was_measured_or_computed():
+    """A size column that silently switches between a file on disk and a
+    parameter count is worse than one that has only ever been arithmetic."""
+    control, arm = _gate_rows()
+
+    check = decode_check(arm, control, {}, ("a4-kv1",), ("a8-kv4",))
+
+    assert check["artifact_source"] == "analytic"
+    assert check["artifact_MB"] == arm["q4_0_MB"]
+
+
+# -------------------------------------------------------------------- kv ----
+
+def test_kv_is_an_absolute_ceiling_not_a_delta():
+    """The ceiling is what a deployment can afford, so a proxy control at a
+    different depth can be over it while remaining the reference every other
+    column is read against."""
+    check = kv_check(_row("deep", bpb=1.2, kv=8192))
+
+    assert check["status"] == "fail"
+    assert check["at_or_under_preferred"] is False
+    assert kv_check(_row("cheap", bpb=1.2, kv=4096))["at_or_under_preferred"]
+
+
+# --------------------------------------------------------- the deliverable ---
+
+def test_the_deliverable_excludes_an_unproven_arm_from_the_pareto_set(tmp_path):
+    """A shape reaches the set only by clearing every column. An arm with a
+    cheaper cache and better BPB that nobody measured must not displace one
+    that was measured."""
+    rows = _with_deltas([_row("a8-kv4", bpb=1.20, kv=4096, is_control=True),
+                         _row("a4-kv1", bpb=1.19, kv=1024),
+                         _row("a2-kv1", bpb=1.18, kv=512)])
+    arms = [ARMS_BY_NAME[name] for name in ("a8-kv4", "a4-kv1", "a2-kv1")]
+    for name in ("a8-kv4", "a4-kv1"):               # a2-kv1 goes unmeasured
+        _write_retrieval(tmp_path / "retrieval", f"arch-stagea-{name}",
+                         depths={256: 0.90, 2048: 0.80})
+    report = _decode_report(
+        tmp_path / "decode.json",
+        models={name: {0: 20.0, 2048: 20.0}
+                for name in ("a8-kv4", "a4-kv1", "a2-kv1")},
+        file_mb={name: 60.0 for name in ("a8-kv4", "a4-kv1", "a2-kv1")})
+
+    built = build_recommendation(rows, arms,
+                                 retrieval_root=str(tmp_path / "retrieval"),
+                                 decode_report=str(report))
+
+    assert built["pareto_set"] == ["a4-kv1"]
+    assert built["unproven"] == ["a2-kv1"]
+    assert built["verdict"] == "recommend"
+
+
+def test_no_recommendation_is_a_statement_about_the_evidence(tmp_path):
+    """With nothing measured beyond BPB the phase recommends nothing, and says
+    that this is about the evidence rather than about the shapes."""
+    arms = [ARMS_BY_NAME["a8-kv4"], ARMS_BY_NAME["a4-kv1"]]
+
+    built = build_recommendation(_gate_rows(), arms,
+                                 retrieval_root=str(tmp_path / "missing"),
+                                 decode_report=str(tmp_path / "missing.json"))
+
+    assert built["pareto_set"] == []
+    assert built["verdict"] == "no-recommendation"
+    assert "evidence" in built["note"]
+
+
+def test_the_markdown_names_every_column_for_every_arm(tmp_path):
+    """A reader must see which column stopped an arm without opening the JSON,
+    and must be told that a blank cell is not a pass."""
+    arms = [ARMS_BY_NAME["a8-kv4"], ARMS_BY_NAME["a4-kv1"]]
+    built = build_recommendation(_gate_rows(), arms,
+                                 retrieval_root=str(tmp_path / "missing"),
+                                 decode_report=str(tmp_path / "missing.json"))
+
+    markdown = render_recommendation_markdown(built)
+
+    for column in GATE_COLUMNS:
+        assert f"- {column}: " in markdown
+    assert "Neither is a pass" in markdown
+    assert "Apple Silicon decode is pending" in markdown
+
+
+def test_the_recommend_subcommand_writes_both_artifacts(tmp_path):
+    """End to end through the CLI the controller launches, because a rule that
+    is only ever called from a test is a rule the phase cannot run."""
+    cards = tmp_path / "cards"
+    for arm, bpb in (("a8-kv4", 1.20), ("a4-kv1", 1.19)):
+        _write_card(cards / f"arch-stagea-{arm}-bpb.json",
+                    name=f"arch-stagea-{arm}-bpb", bpb=bpb,
+                    config=ARMS_BY_NAME[arm].config)
+    for arm in ("a8-kv4", "a4-kv1"):
+        _write_retrieval(tmp_path / "retrieval", f"arch-stagea-{arm}",
+                         depths={256: 0.90, 2048: 0.80})
+    decode = _decode_report(
+        tmp_path / "decode.json",
+        models={arm: {0: 20.0, 2048: 20.0} for arm in ("a8-kv4", "a4-kv1")},
+        file_mb={arm: 60.0 for arm in ("a8-kv4", "a4-kv1")})
+
+    assert architecture_report_main([
+        "--report-root", str(tmp_path / "out"),
+        "--scorecard-root", str(cards),
+        "recommend",
+        "--retrieval-root", str(tmp_path / "retrieval"),
+        "--decode", str(decode)]) == 0
+
+    report = json.loads(
+        (tmp_path / "out" / "stagea-recommendation.json").read_text())
+    assert report["pareto_set"] == ["a4-kv1"]
+    assert report["gate"]["columns"] == list(GATE_COLUMNS)
+    assert "recommendation gate" in \
+        (tmp_path / "out" / "stagea-recommendation.md").read_text()
