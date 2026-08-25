@@ -301,9 +301,9 @@ def test_phase_five_prompt_requires_functional_ablation():
 def test_phase_seven_prompt_targets_the_successor_budget():
     prompt = (ROOT / "ops/vast/prompts/phase7-corpus.md").read_text()
 
-    # Unique data, not compute, is the binding constraint at 1T tokens.
-    assert "1T" in prompt
-    assert "500M parameters" in prompt
+    # A single assumed budget would be wrong; report a curve instead.
+    assert "curve across budgets" in prompt
+    assert "200B" in prompt
     assert "shortfall" in prompt
     assert "/usr/local/bin/daedalus-approved" in prompt
 

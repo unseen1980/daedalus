@@ -2,22 +2,22 @@
 
 Run non-interactively with `--permission-mode dontAsk`, Opus, and xhigh effort.
 
-## Read this first: the target changed
+## Read this first: report a curve, not a single budget
 
-The operator intends a successor at **500M parameters over 1T tokens**, against
-V1's 150M over 59.9B. Timing is undecided; the analysis does not depend on it.
+The operator trains on a single RTX 5090 and has not fixed a successor size.
+Measured throughput makes the reachable envelope roughly 60B to 200B tokens in a
+month, depending on parameter count, so a single assumed budget would be wrong
+almost however it is chosen.
 
-That makes **unique data, not compute, the likely binding constraint**, and it
-makes this phase the most valuable one remaining. V1's corpus of roughly 60B
-tokens implies about **17 epochs** to reach 1T, against the plan's bar of no
-source exceeding four. Clearing that bar needs on the order of **250B unique
-tokens**, roughly four times what exists today.
+Report unique-token headroom as a **curve across budgets** -- at least 30B, 60B,
+100B, 200B, and 500B -- so any target can be read off later without re-running
+this phase. State, for each budget, the implied epoch count per source and the
+shortfall against the four-epoch bar.
 
-So the headline deliverable is not a mixture. It is an honest answer to: how
-many unique tokens can this pipeline actually produce, and what is the shortfall
-against 1T at four epochs? Report the number even if it is unwelcome. Discovering
-a shortfall here costs nothing; discovering it partway through a rented
-multi-GPU run costs thousands.
+This is the phase's headline deliverable. Unique data, not compute, is what
+limits a successor once the budget passes a few tens of billions of tokens, and
+a shortfall found here is free while the same shortfall found partway through a
+month of training is not. Report the numbers even when unwelcome.
 
 ## Required work
 
