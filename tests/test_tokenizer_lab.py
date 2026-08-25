@@ -503,6 +503,77 @@ def test_the_report_states_the_rule_and_never_quotes_perplexity(tmp_path):
     assert "235/256" in report
 
 
+def _conversion_fixture(tmp_path, *, selected_converts: bool):
+    """A measured lab directory whose selected candidate does or does not
+    convert under stock llama.cpp."""
+    reading = {
+        "vocab_size": 32768,
+        "fertility": {d: {"bytes_per_token": 4.2}
+                      for d in ("general", "math", "technical", "dialogue",
+                                "code", "__all__")},
+        "embedding": {"q6_k_bytes": 100.0, "parameters": 32768 * 768},
+        "kv": {"kv_bytes_per_context_token": 6144},
+        "round_trip": {"passed": True, "byte_alphabet": {"covered": 256}},
+    }
+    incumbent = dict(reading, vocab_size=49152,
+                     embedding={"q6_k_bytes": 150.0, "parameters": 49152 * 768})
+    (tmp_path / "measurements.json").write_text(json.dumps({
+        "32768": reading, "49152-smollm2": incumbent}))
+    (tmp_path / "scored").mkdir()
+    (tmp_path / "verdict.json").write_text(json.dumps({
+        "selected": 32768, "negative_result": False,
+        "reason": "32768 cleared every clause",
+        "candidates": [{"vocab_size": 32768, "selectable": True, "failed": []}],
+    }))
+    (tmp_path / "gguf-check.json").write_text(json.dumps({
+        "32768": {"label": "32768", "ran": True,
+                  "converted": selected_converts,
+                  "pre_tokenizer_unrecognized": not selected_converts},
+        "49152-matched": {"label": "49152-matched", "ran": True,
+                          "converted": False,
+                          "pre_tokenizer_unrecognized": True},
+        "49152-smollm2": {"label": "49152-smollm2", "ran": True,
+                          "converted": True,
+                          "pre_tokenizer_unrecognized": False},
+    }))
+
+
+def test_a_selected_vocabulary_stock_llama_cpp_refuses_is_reported_as_blocked(tmp_path):
+    """The measured result: stock llama.cpp converts the incumbent and refuses
+    every newly trained vocabulary, the selected one included.
+
+    Two sections of this report disagreed and nothing joined them -- a
+    conversion table saying "no" above a verdict saying "Selected: 32768", which
+    reads as actionable and is not. Unmodified stock llama.cpp is a fixed
+    program decision, so the verdict has to carry the constraint that decides
+    whether it can be acted on.
+    """
+    from scripts.tokenizer_lab import write_report
+
+    _conversion_fixture(tmp_path, selected_converts=False)
+    report = write_report(tmp_path, sample_root=tmp_path / "no-sample").read_text()
+
+    verdict = report.split("## Verdict", 1)[1]
+    assert "Selected: 32768" in verdict
+    assert "stock llama.cpp" in verdict, "the blocker is not stated where the selection is"
+    # The size-matched control fails identically, which is what makes the
+    # diagnosis "newly trained" rather than "smaller": a report that omits it
+    # invites the wrong fix, which is picking a different size.
+    assert "49152-matched" in verdict
+
+
+def test_a_convertible_selection_is_not_reported_as_blocked(tmp_path):
+    """The blocker paragraph is driven by the measurement, not printed always."""
+    from scripts.tokenizer_lab import write_report
+
+    _conversion_fixture(tmp_path, selected_converts=True)
+    report = write_report(tmp_path, sample_root=tmp_path / "no-sample").read_text()
+
+    verdict = report.split("## Verdict", 1)[1]
+    assert "Selected: 32768" in verdict
+    assert "Not actionable" not in verdict
+
+
 def test_the_sweep_runs_the_rule_deciding_arms_first(tmp_path):
     """At ~37 minutes an arm, order is not an academic distinction: an
     interrupted sweep has to have answered the question it was run for."""

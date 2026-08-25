@@ -1578,6 +1578,50 @@ def _fertility_table(measurements: dict, reference: str) -> List[str]:
     return rows
 
 
+def _conversion_blocker(verdict: dict, gguf: dict) -> List[str]:
+    """Say, next to the selection, whether stock llama.cpp will convert it.
+
+    The rule does not read conversion -- it was preregistered before any of this
+    was measured, and adding a clause now to match an outcome is the change the
+    plan forbids. But a verdict reading "Selected: 32768" above a table reading
+    "converts: no" is two true statements arranged into a false one, and the
+    selection is the line a reader carries into the V2 recommendation. So the
+    constraint is reported where the decision is, and the rule's output is left
+    exactly as the rule produced it.
+    """
+    selected = verdict.get("selected")
+    if selected is None:
+        return []
+    record = gguf.get(str(selected)) or {}
+    if not record.get("ran") or record.get("converted") is not False:
+        return []
+
+    # The size-matched control is what makes the diagnosis specific. It is the
+    # incumbent's own vocabulary size, newly trained, and it fails identically
+    # -- so the blocker is that the tokenizer is new, not that it is smaller,
+    # and picking a different size cannot route around it.
+    control = gguf.get(MATCHED_CONTROL_KEY) or {}
+    control_note = ""
+    if control.get("ran") and control.get("converted") is False:
+        control_note = (
+            f" `{MATCHED_CONTROL_KEY}` -- the incumbent's own vocabulary size, "
+            f"retrained on this sample -- fails identically, so the blocker is "
+            f"that the vocabulary is newly trained, not that it is smaller; "
+            f"choosing a different size cannot route around it.")
+    return [
+        "",
+        f"**Not actionable as it stands.** Stock llama.cpp will not convert a "
+        f"model carrying {selected}: its BPE pre-tokenizer hash is not in the "
+        f"converter's hard-coded list, and unmodified stock llama.cpp is a "
+        f"fixed program decision.{control_note} Adopting any new vocabulary for "
+        f"V2 therefore depends on that hash being registered upstream and "
+        f"reaching a release, which is outside this program, or on keeping "
+        f"SmolLM2's vocabulary and its measured costs. The fertility and BPB "
+        f"results above are unaffected -- they are what the rule read, and the "
+        f"rule's output is unchanged -- but they do not clear this constraint.",
+    ]
+
+
 def write_report(root, sample_root="data/tokenizer-lab/sample") -> Path:
     """The migration report: what was measured, against what, and what it means."""
     root = Path(root)
@@ -1721,6 +1765,9 @@ def write_report(root, sample_root="data/tokenizer-lab/sample") -> Path:
             "", "## Verdict", "",
             f"**Selected: {verdict.get('selected') or 'none'}.** "
             f"{verdict.get('reason', '')}",
+        ]
+        lines += _conversion_blocker(verdict, gguf)
+        lines += [
             "",
             "| candidate | selectable | failed clauses |", "|---|---|---|",
         ]
