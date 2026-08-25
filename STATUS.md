@@ -1,11 +1,11 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-25T03:40:33.100081Z`
-- Phase: `phase5-conv-health-instrument`
+- Heartbeat: `2026-08-25T03:45:34.471790Z`
+- Phase: `phase5-scheduled-conv-decay`
 - Status: `passed`
-- Source: `vast/daedalus-improvements-20260824` at `5dfe2f1156e6`
-- Elapsed: `16.93h` of `144.0h`
-- Finalization window opens in: `119.07h`
+- Source: `vast/daedalus-improvements-20260824` at `57b74043112e`
+- Elapsed: `17.02h` of `144.0h`
+- Finalization window opens in: `118.98h`
 - Deadline stage: `active`
 
 ## Latest Metrics
@@ -19,7 +19,7 @@
 ```json
 {
   "memory_total_mb": 24564,
-  "memory_used_mb": 280,
+  "memory_used_mb": 9,
   "utilization_pct": 0
 }
 ```
