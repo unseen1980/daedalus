@@ -51,6 +51,48 @@ def test_discover_sources_refuses_a_manifest_without_a_token_count(tmp_path):
         discover_sources(tmp_path)
 
 
+def test_discover_sources_can_be_narrowed_to_a_named_subset(tmp_path):
+    """Phase 6's arms trained on one source; the box's holdout root has three.
+
+    Scoring an arm over sources it never trained on answers a different
+    question than the screen asks, and costs three times the GPU hours to get
+    the wrong answer.
+    """
+    from scripts.bpb_eval import discover_sources
+
+    _make_holdout(tmp_path, {"fineweb-edu": 100, "dclm-baseline": 50,
+                             "stack-edu-python": 25})
+
+    assert discover_sources(tmp_path, ["fineweb-edu"]) == {"fineweb-edu": 100}
+
+
+def test_discover_sources_refuses_a_subset_naming_an_absent_source(tmp_path):
+    """A scorecard that quietly measured two of the three sources it was asked
+    for describes a holdout that does not exist."""
+    from scripts.bpb_eval import discover_sources
+
+    _make_holdout(tmp_path, {"python": 100})
+
+    with pytest.raises(ValueError, match="rust"):
+        discover_sources(tmp_path, ["python", "rust"])
+
+
+def test_evaluate_sources_only_measures_the_requested_subset(tmp_path):
+    """The filter must reach the measurement, not just the reported table --
+    a filter applied after `bpb_fn` ran would have already spent the hours."""
+    from scripts.bpb_eval import evaluate_sources
+
+    _make_holdout(tmp_path, {"fineweb-edu": 100, "dclm-baseline": 50})
+    measured = []
+
+    records = evaluate_sources(
+        tmp_path, sources=["fineweb-edu"],
+        bpb_fn=lambda path: (measured.append(path.name), 1.25)[1])
+
+    assert measured == ["fineweb-edu"]
+    assert [record["id"] for record in records] == ["fineweb-edu"]
+
+
 # --------------------------------------------------------------- evaluation ---
 
 def test_evaluate_sources_records_one_item_per_language(tmp_path):

@@ -32,7 +32,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -45,11 +45,22 @@ from daedalus.scorecard import (  # noqa: E402
 )
 
 
-def discover_sources(root) -> Dict[str, int]:
-    """Every manifest-backed subdirectory of `root`, with its token count."""
+def discover_sources(root, sources: Optional[Sequence[str]] = None) -> Dict[str, int]:
+    """Every manifest-backed subdirectory of `root`, with its token count.
+
+    `sources` narrows the scan to a named subset. Phase 6 needs that: its stage-A
+    arms trained on one source, and the box's holdout root carries three, so
+    scoring an arm over all of them would answer a question the screen never
+    asked and cost three times the GPU hours to get it wrong.
+
+    A requested name that is not present raises rather than being skipped. A
+    scorecard that quietly measured two of the three sources it was asked for
+    describes a holdout that does not exist -- the same failure mode
+    `summarize_bpb` already refuses for weights naming absent sources.
+    """
 
     root = Path(root)
-    sources: Dict[str, int] = {}
+    found: Dict[str, int] = {}
     for entry in sorted(root.iterdir()):
         manifest = entry / "manifest.json"
         if not (entry.is_dir() and manifest.exists()):
@@ -59,19 +70,28 @@ def discover_sources(root) -> Dict[str, int]:
             raise ValueError(
                 f"{manifest} has no total_tokens; a source without a token "
                 "count cannot be weighted or reported")
-        sources[entry.name] = int(payload["total_tokens"])
-    if not sources:
+        found[entry.name] = int(payload["total_tokens"])
+    if not found:
         raise ValueError(
             f"no source under {root} has a manifest.json; expected one "
             "subdirectory per language (or per replay source)")
-    return sources
+    if sources is None:
+        return found
+    wanted = list(dict.fromkeys(sources))
+    missing = [name for name in wanted if name not in found]
+    if missing:
+        raise ValueError(
+            f"requested source(s) {missing} are not under {root}; "
+            f"it has {sorted(found)}")
+    return {name: found[name] for name in sorted(wanted)}
 
 
-def evaluate_sources(root, *, bpb_fn: Callable[[Path], float]) -> List[dict]:
+def evaluate_sources(root, *, bpb_fn: Callable[[Path], float],
+                     sources: Optional[Sequence[str]] = None) -> List[dict]:
     """Measure BPB for each source, keeping it as its own pairable item."""
 
     records = []
-    for name, tokens in discover_sources(root).items():
+    for name, tokens in discover_sources(root, sources).items():
         value = float(bpb_fn(Path(root) / name))
         if not math.isfinite(value):
             raise ValueError(
@@ -261,11 +281,12 @@ def run_bpb_eval(*, name: str, holdout_root, out_dir, artifact: ArtifactRef,
                  bpb_fn: Callable[[Path], float],
                  max_batches: Optional[int] = None,
                  weights: Optional[Dict[str, float]] = None,
+                 sources: Optional[Sequence[str]] = None,
                  runtime: Optional[dict] = None,
                  details_extra: Optional[dict] = None) -> Dict[str, Path]:
     """Score one holdout root and write its scorecard."""
 
-    records = evaluate_sources(holdout_root, bpb_fn=bpb_fn)
+    records = evaluate_sources(holdout_root, bpb_fn=bpb_fn, sources=sources)
     card = Scorecard(
         kind="bpb",
         name=name,
@@ -282,6 +303,10 @@ def run_bpb_eval(*, name: str, holdout_root, out_dir, artifact: ArtifactRef,
             "holdout_root": str(holdout_root),
             "weighting": "explicit" if weights else "equal",
             "weights": dict(weights) if weights else None,
+            # Named even when it is None, so a reader can tell "every source
+            # under the root" from "the one source this arm trained on" without
+            # having to know what the root happened to contain that day.
+            "sources_requested": list(sources) if sources else None,
             **(details_extra or {}),
         },
     )
@@ -334,6 +359,10 @@ def main(argv=None) -> int:
     parser.add_argument("--weight", action="append", default=[],
                         help="name=fraction; repeatable. Without any, the "
                              "headline bpb is equal-weighted across sources")
+    parser.add_argument("--source", action="append", default=[],
+                        help="score only this holdout source; repeatable. "
+                             "Without any, every manifest-backed source under "
+                             "--holdout-root is scored")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=20260824)
     parser.add_argument("--out-dir", default="runs/eval/bpb")
@@ -387,7 +416,7 @@ def main(argv=None) -> int:
                              kind="checkpoint", config=args.config),
         tokenizer_ref=tokenizer_ref, seed=args.seed, git_sha=_git_short_sha(),
         bpb_fn=bpb_fn, max_batches=max_batches,
-        weights=weights,
+        weights=weights, sources=args.source or None,
         runtime={"device": args.device, "seq_len": args.seq_len,
                  "batch_size": args.batch_size},
         details_extra=details_extra or None)
