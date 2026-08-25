@@ -71,6 +71,90 @@ REPORT_ROOT = "runs/conv-health"
 
 
 @dataclass(frozen=True)
+class ProbeShape:
+    """The run shape an arm sweep is measured at. Shared by every arm in it.
+
+    Two are preregistered. The probe screens the four schedules cheaply at a
+    toy width and an accelerant learning rate; the paired escalation re-runs
+    the survivors at the shipped 150M shape, which is the only place a result
+    about *this model's* channels can be established.
+
+    What has to carry over between them is not the learning rate but the decay
+    budget. Muon decays as `w *= (1 - lr*wd)` once per optimizer step, so what
+    a channel actually experiences is `sum(lr_t) * wd` -- tokens do not appear.
+    `decay_clock` below is that sum, and it is why `batch_tokens` is a declared
+    field rather than a throughput knob: at hero's 512k tokens/step, 500M
+    tokens is 954 steps and a clock of 29, which would very likely kill nothing
+    and waste the run.
+    """
+
+    name: str
+    config: str
+    muon_lr: float
+    seq_len: int
+    micro_batch: int
+    batch_tokens: int
+    total_tokens: int
+    warmup_steps: int
+    decay_frac: float
+    note: str = ""
+
+    @property
+    def steps(self) -> int:
+        return -(-int(self.total_tokens) // int(self.batch_tokens))
+
+    @property
+    def decay_clock(self) -> float:
+        """`sum(lr_t)` over the run, which multiplied by `wd` is the exponent.
+
+        Approximated from the WSD shape: flat through warmup's midpoint and the
+        stable phase, linear to zero across the decay tail. Reported so a shape
+        can be checked against hero's before it is run rather than after.
+        """
+        steps = self.steps
+        decay = self.decay_frac * steps
+        stable = steps - decay - self.warmup_steps
+        return self.muon_lr * (0.5 * self.warmup_steps + max(stable, 0.0)
+                               + 0.5 * decay)
+
+
+#: The screen. hidden 256 at lr 0.15 for 600 steps: the shape the 2026-08-11
+#: mechanism experiment established, where lr is the accelerant and `wd` is the
+#: variable.
+PROBE_SHAPE = ProbeShape(
+    name="probe", config="conv-probe", muon_lr=PROBE_MUON_LR,
+    seq_len=PROBE_SEQ_LEN, micro_batch=PROBE_MICRO_BATCH,
+    batch_tokens=PROBE_MICRO_BATCH * PROBE_SEQ_LEN,
+    total_tokens=PROBE_STEPS * PROBE_MICRO_BATCH * PROBE_SEQ_LEN,
+    warmup_steps=50, decay_frac=0.2,
+    note="the established positive control, at a toy width")
+
+#: The escalation the plan calls for: the shipped 150M shape, 500M tokens, Muon
+#: lr 0.04.
+#:
+#: `batch_tokens` is hero's `--tok-start`, held flat. That choice is the one
+#: that decides whether this run can answer anything: 500M tokens at 131,072
+#: per step is 3,815 steps and a decay clock of ~116, so the shipped arm's
+#: channels see `exp(-11.6)` of shrink against a dead threshold that needs
+#: ~`exp(-4.6)`. Hero's own clock was ~1,890 over 59.9B tokens, so this is 6% of
+#: it -- an acceleration, and an honest one, because the mechanism under test is
+#: the clock. Flat rather than ramped for the reason the probe is flat: a ramp
+#: makes `lr x steps` mean something different early and late, and that is the
+#: axis the arms are compared on.
+#:
+#: warmup and decay are `train.py`'s shipped defaults rather than the probe's,
+#: because the claim being escalated is about the regime the released model was
+#: trained in.
+PAIRED_SHAPE = ProbeShape(
+    name="paired", config="daedalus-150m", muon_lr=0.04,
+    seq_len=2048, micro_batch=8, batch_tokens=131_072,
+    total_tokens=500_000_000, warmup_steps=300, decay_frac=0.45,
+    note="the shipped 150M shape at the plan's 500M tokens and lr 0.04")
+
+SHAPES = {shape.name: shape for shape in (PROBE_SHAPE, PAIRED_SHAPE)}
+
+
+@dataclass(frozen=True)
 class ConvArm:
     """One preregistered decay schedule."""
 
@@ -116,8 +200,35 @@ def arm_run_name(arm: ConvArm, tag: str = "probe") -> str:
     return f"conv-{tag}-{arm.name}"
 
 
+def selected_arms(names: Optional[str],
+                  arms: Sequence[ConvArm] = ARMS) -> Sequence[ConvArm]:
+    """A named subset of the arms, always including the control, control first.
+
+    The escalation runs a subset -- the plan advances the top two schedules,
+    not all four -- and every selection criterion it is read against is stated
+    relative to the control: norms within 2x the control's *alive* channels,
+    held-out loss no worse than the control's by 0.5%, and a matched ablation
+    sized from the control's flagged set. A subset without it is not a cheaper
+    experiment, it is an unreadable one, so the control is added rather than
+    required of the caller and ordered first for the same reason `sweep` runs
+    it first.
+    """
+    if not names:
+        return arms
+    by_name = {arm.name: arm for arm in arms}
+    wanted = [name.strip() for name in names.split(",") if name.strip()]
+    unknown = [name for name in wanted if name not in by_name]
+    if unknown:
+        raise SystemExit(f"unknown arm(s) {unknown}; known: {sorted(by_name)}")
+    control = next(arm for arm in arms if arm.is_control)
+    chosen = [control] + [by_name[name] for name in wanted
+                          if name != control.name]
+    return chosen
+
+
 def arm_checkpoint_path(arm: ConvArm, tag: str = "probe",
-                        run_root: str = RUN_ROOT) -> Path:
+                        run_root: str = RUN_ROOT,
+                        config: str = PROBE_CONFIG) -> Path:
     """The checkpoint this arm writes, asked of `train.py` rather than guessed.
 
     `run_dir_for` is the trainer's own resolution, so the supervisor and the
@@ -125,7 +236,7 @@ def arm_checkpoint_path(arm: ConvArm, tag: str = "probe",
     """
     from train import TrainArgs, checkpoint_path_for
 
-    args = TrainArgs(run_name=arm_run_name(arm, tag), config=PROBE_CONFIG,
+    args = TrainArgs(run_name=arm_run_name(arm, tag), config=config,
                      data_dir="", run_dir=None)
     resolved = Path(checkpoint_path_for(args))
     if run_root != RUN_ROOT:                    # tests may relocate the tree
@@ -135,31 +246,36 @@ def arm_checkpoint_path(arm: ConvArm, tag: str = "probe",
 
 def probe_train_command(arm: ConvArm, *, data_dir: str, run_name: str,
                         total_tokens: int, device: str = "cuda",
-                        config: str = PROBE_CONFIG,
-                        muon_lr: float = PROBE_MUON_LR,
+                        config: Optional[str] = None,
+                        muon_lr: Optional[float] = None,
+                        shape: ProbeShape = PROBE_SHAPE,
                         val_dir: Optional[str] = None) -> List[str]:
     """The exact `train.py` invocation for one arm.
 
     Every field except the decay flags is shared, and the shared fields are
     built here rather than per arm so an arm cannot quietly differ in seed,
     data order, batch shape or schedule. That identity is the experiment.
+
+    `config` and `muon_lr` override the shape's, which is how the CLI's
+    per-invocation flags still work; everything else comes from the shape so
+    the probe and the escalation cannot drift apart in a field nobody re-reads.
     """
     command = [
         sys.executable, "train.py",
         "--run-name", run_name,
-        "--config", config,
+        "--config", config or shape.config,
         "--data-dir", data_dir,
         "--total-tokens", str(int(total_tokens)),
-        "--micro-batch", str(PROBE_MICRO_BATCH),
+        "--micro-batch", str(shape.micro_batch),
         # Flat sequence length and batch: the ramp exists to buy throughput on
         # a long run and would make `lr x steps` mean something different early
         # and late, which is the axis the arms are compared on.
-        "--seq-start", str(PROBE_SEQ_LEN), "--seq-end", str(PROBE_SEQ_LEN),
-        "--tok-start", str(PROBE_MICRO_BATCH * PROBE_SEQ_LEN),
-        "--tok-end", str(PROBE_MICRO_BATCH * PROBE_SEQ_LEN),
-        "--muon-lr", repr(muon_lr),
-        "--warmup-steps", "50",
-        "--decay-frac", "0.2",
+        "--seq-start", str(shape.seq_len), "--seq-end", str(shape.seq_len),
+        "--tok-start", str(shape.batch_tokens),
+        "--tok-end", str(shape.batch_tokens),
+        "--muon-lr", repr(shape.muon_lr if muon_lr is None else muon_lr),
+        "--warmup-steps", str(shape.warmup_steps),
+        "--decay-frac", repr(shape.decay_frac),
         "--device", device,
         "--hub-repo", "",
         "--no-wandb",
@@ -169,15 +285,17 @@ def probe_train_command(arm: ConvArm, *, data_dir: str, run_name: str,
     return command + arm.train_flags()
 
 
-def probe_total_tokens(steps: int = PROBE_STEPS) -> int:
-    return steps * PROBE_MICRO_BATCH * PROBE_SEQ_LEN
+def probe_total_tokens(steps: int = PROBE_STEPS,
+                       shape: ProbeShape = PROBE_SHAPE) -> int:
+    return steps * shape.batch_tokens
 
 
 # =================================================================== running ===
 
 def run_arm(arm: ConvArm, *, data_dir: str, run_root: str = RUN_ROOT,
-            device: str = "cuda", steps: int = PROBE_STEPS, tag: str = "probe",
-            config: str = PROBE_CONFIG, muon_lr: float = PROBE_MUON_LR,
+            device: str = "cuda", steps: Optional[int] = None,
+            tag: str = "probe", config: Optional[str] = None,
+            muon_lr: Optional[float] = None, shape: ProbeShape = PROBE_SHAPE,
             val_dir: Optional[str] = None, max_attempts: int = 3,
             stall_min: float = 20.0) -> dict:
     """Train one arm under the supervisor, so an interruption continues it.
@@ -186,16 +304,23 @@ def run_arm(arm: ConvArm, *, data_dir: str, run_root: str = RUN_ROOT,
     a relaunch after the launching session died continues from where the arm
     got to instead of restarting it -- which is how phase 4 lost 60.3M tokens
     next to a checkpoint it never opened.
+
+    `steps` overrides the shape's token budget, for smokes. Left None the shape
+    decides, which is what a preregistered run wants: the escalation's budget
+    is 500M tokens because the plan says so, not because a caller passed a
+    step count that happened to multiply out to it.
     """
     from daedalus.supervise import run_with_resume, start_watchdog, stop_watchdog
 
     name = arm_run_name(arm, tag)
-    total_tokens = probe_total_tokens(steps)
+    total_tokens = (shape.total_tokens if steps is None
+                    else probe_total_tokens(steps, shape))
     command = probe_train_command(
         arm, data_dir=data_dir, run_name=name, total_tokens=total_tokens,
-        device=device, config=config, muon_lr=muon_lr, val_dir=val_dir)
+        device=device, config=config, muon_lr=muon_lr, shape=shape,
+        val_dir=val_dir)
 
-    ckpt = arm_checkpoint_path(arm, tag, run_root)
+    ckpt = arm_checkpoint_path(arm, tag, run_root, config=config or shape.config)
     run_dir = ckpt.parent
     run_dir.mkdir(parents=True, exist_ok=True)
     watchdog = start_watchdog(name, str(run_dir), total_tokens,
@@ -205,19 +330,20 @@ def run_arm(arm: ConvArm, *, data_dir: str, run_root: str = RUN_ROOT,
             list(command), str(ckpt),
             max_attempts=max_attempts, halt_marker=str(run_dir / "HALTED"),
             inflight_extra={"phase": "phase5-conv-health", "arm": arm.name,
-                            "schedule": asdict(arm), "steps": steps})
+                            "schedule": asdict(arm), "shape": shape.name,
+                            "steps": total_tokens // shape.batch_tokens})
     finally:
         stop_watchdog(watchdog)
     return {"arm": arm.name, "run": name, "run_dir": str(run_dir),
-            "steps": steps, "total_tokens": total_tokens,
-            "command": list(command), **report}
+            "shape": shape.name, "steps": total_tokens // shape.batch_tokens,
+            "total_tokens": total_tokens, "command": list(command), **report}
 
 
 def sweep(*, data_dir: str, run_root: str = RUN_ROOT,
           report_root: str = REPORT_ROOT, device: str = "cuda",
-          steps: int = PROBE_STEPS, tag: str = "probe",
-          config: str = PROBE_CONFIG, muon_lr: float = PROBE_MUON_LR,
-          val_dir: Optional[str] = None,
+          steps: Optional[int] = None, tag: str = "probe",
+          config: Optional[str] = None, muon_lr: Optional[float] = None,
+          shape: ProbeShape = PROBE_SHAPE, val_dir: Optional[str] = None,
           arms: Sequence[ConvArm] = ARMS) -> dict:
     """Every arm in order, control first.
 
@@ -229,12 +355,15 @@ def sweep(*, data_dir: str, run_root: str = RUN_ROOT,
     for arm in arms:
         results.append(run_arm(arm, data_dir=data_dir, run_root=run_root,
                                device=device, steps=steps, tag=tag,
-                               config=config, muon_lr=muon_lr, val_dir=val_dir))
+                               config=config, muon_lr=muon_lr, shape=shape,
+                               val_dir=val_dir))
         # Rewritten after every arm, so a sweep cut short still leaves the
         # arms that finished.
         _write_json(Path(report_root) / f"sweep-{tag}.json",
-                    {"tag": tag, "steps": steps, "arms": results})
-    return {"tag": tag, "steps": steps, "arms": results}
+                    {"tag": tag, "steps": shape.steps if steps is None else steps,
+                     "shape": asdict(shape), "arms": results})
+    return {"tag": tag, "steps": shape.steps if steps is None else steps,
+            "shape": asdict(shape), "arms": results}
 
 
 # =================================================================== scoring ===
@@ -323,7 +452,8 @@ def matched_ablation_set(layers: Sequence["object"], sizes: Dict[int, int]):
 
 def score_arm(arm: ConvArm, *, run_root: str = RUN_ROOT, holdout_dir: str,
               device: str = "cuda", tag: str = "probe",
-              config: str = PROBE_CONFIG,
+              config: Optional[str] = None,
+              shape: ProbeShape = PROBE_SHAPE,
               matched_k: Optional[Dict[int, int]] = None,
               threshold: Optional[float] = None) -> dict:
     """Channel health, projection norms and the ablation pair for one arm.
@@ -343,16 +473,21 @@ def score_arm(arm: ConvArm, *, run_root: str = RUN_ROOT, holdout_dir: str,
     from daedalus.model import Daedalus
     from train import load_checkpoint
 
+    config = config or shape.config
     threshold = DEAD_THRESHOLD if threshold is None else threshold
     name = arm_run_name(arm, tag)
-    ckpt = arm_checkpoint_path(arm, tag, run_root)
+    ckpt = arm_checkpoint_path(arm, tag, run_root, config=config)
     if not ckpt.exists():
         raise FileNotFoundError(f"arm {arm.name} has no checkpoint at {ckpt}")
 
     model = Daedalus(PRESETS[config]).to(device)
     load_checkpoint(str(ckpt), model)
     health = model_health(model, threshold=threshold)
-    windows = holdout_windows(holdout_dir)
+    # Scored at the shape the arm trained at: a held-out loss read at a
+    # different sequence length is not the loss the run was optimising, and the
+    # ablation deltas are differences between passes over identical windows.
+    windows = holdout_windows(holdout_dir, seq_len=shape.seq_len,
+                              batch_size=shape.micro_batch)
 
     baseline_loss = held_out_loss(model, windows, device)
     flagged = {layer.layer_index: dead_channels(layer)
@@ -415,7 +550,7 @@ def score_arm(arm: ConvArm, *, run_root: str = RUN_ROOT, holdout_dir: str,
 
 def score_all(*, run_root: str = RUN_ROOT, report_root: str = REPORT_ROOT,
               holdout_dir: str, device: str = "cuda", tag: str = "probe",
-              config: str = PROBE_CONFIG,
+              config: Optional[str] = None, shape: ProbeShape = PROBE_SHAPE,
               arms: Sequence[ConvArm] = ARMS,
               threshold: Optional[float] = None) -> dict:
     """Score the control first, then every other arm at the control's k.
@@ -427,7 +562,7 @@ def score_all(*, run_root: str = RUN_ROOT, report_root: str = REPORT_ROOT,
     control = next(arm for arm in arms if arm.is_control)
     control_score = score_arm(control, run_root=run_root, device=device,
                               holdout_dir=holdout_dir, tag=tag, config=config,
-                              threshold=threshold)
+                              shape=shape, threshold=threshold)
     matched_k = {int(layer["layer_index"]): int(layer["dead_channels"])
                  for layer in control_score["health"]["per_layer"]}
 
@@ -437,9 +572,10 @@ def score_all(*, run_root: str = RUN_ROOT, report_root: str = REPORT_ROOT,
             continue
         scores.append(score_arm(arm, run_root=run_root, device=device,
                                 holdout_dir=holdout_dir, tag=tag,
-                                config=config, matched_k=matched_k,
-                                threshold=threshold))
+                                config=config, shape=shape,
+                                matched_k=matched_k, threshold=threshold))
     payload = {"tag": tag, "control": control.name, "matched_k": matched_k,
+               "shape": asdict(shape),
                "arms": scores}
     _write_json(Path(report_root) / f"scored-{tag}.json", payload)
     return payload
@@ -555,7 +691,10 @@ def main(argv=None) -> int:
     parser.add_argument("--run-root", default=RUN_ROOT)
     parser.add_argument("--report-root", default=REPORT_ROOT)
     parser.add_argument("--tag", default="probe")
-    parser.add_argument("--config", default=PROBE_CONFIG)
+    parser.add_argument("--config", default=None,
+                        help="override the shape's model preset")
+    parser.add_argument("--shape", default=PROBE_SHAPE.name, choices=list(SHAPES),
+                        help="which preregistered run shape to use")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("arms")
@@ -564,31 +703,47 @@ def main(argv=None) -> int:
         cmd = sub.add_parser(name)
         if name == "run":
             cmd.add_argument("--arm", required=True, choices=list(ARMS_BY_NAME))
+        else:
+            cmd.add_argument("--arms", default=None,
+                             help="comma-separated subset, control first; "
+                                  "default every preregistered arm")
         cmd.add_argument("--data-dir", required=True)
         cmd.add_argument("--val-dir", default=None)
         cmd.add_argument("--device", default="cuda")
-        cmd.add_argument("--steps", type=int, default=PROBE_STEPS)
-        cmd.add_argument("--muon-lr", type=float, default=PROBE_MUON_LR)
+        cmd.add_argument("--steps", type=int, default=None,
+                         help="override the shape's token budget (smokes only)")
+        cmd.add_argument("--muon-lr", type=float, default=None)
 
     score = sub.add_parser("score")
     score.add_argument("--holdout-dir", required=True)
     score.add_argument("--device", default="cuda")
     score.add_argument("--threshold", type=float, default=None)
+    score.add_argument("--arms", default=None,
+                       help="comma-separated subset; the control is required")
 
     sub.add_parser("report")
+    sub.add_parser("shapes")
 
     args = parser.parse_args(argv)
+    shape = SHAPES[getattr(args, "shape", PROBE_SHAPE.name)]
 
     if args.command == "arms":
         for arm in ARMS:
             print(json.dumps(asdict(arm)))
         return 0
 
+    if args.command == "shapes":
+        for name, candidate in SHAPES.items():
+            print(json.dumps({**asdict(candidate), "steps": candidate.steps,
+                              "decay_clock": candidate.decay_clock}))
+        return 0
+
     if args.command == "run":
         report = run_arm(ARMS_BY_NAME[args.arm], data_dir=args.data_dir,
                          run_root=args.run_root, device=args.device,
                          steps=args.steps, tag=args.tag, config=args.config,
-                         muon_lr=args.muon_lr, val_dir=args.val_dir)
+                         muon_lr=args.muon_lr, shape=shape,
+                         val_dir=args.val_dir)
         print(json.dumps(report, indent=2))
         return 0
 
@@ -596,7 +751,8 @@ def main(argv=None) -> int:
         report = sweep(data_dir=args.data_dir, run_root=args.run_root,
                        report_root=args.report_root, device=args.device,
                        steps=args.steps, tag=args.tag, config=args.config,
-                       muon_lr=args.muon_lr, val_dir=args.val_dir)
+                       muon_lr=args.muon_lr, shape=shape,
+                       val_dir=args.val_dir, arms=selected_arms(args.arms))
         print(json.dumps({"arms": [a["arm"] for a in report["arms"]]}, indent=2))
         return 0
 
@@ -605,6 +761,7 @@ def main(argv=None) -> int:
                            report_root=args.report_root,
                            holdout_dir=args.holdout_dir,
                            device=args.device, tag=args.tag, config=args.config,
+                           shape=shape, arms=selected_arms(args.arms),
                            threshold=args.threshold)
         decision = verdict(scored)
         _write_json(Path(args.report_root) / f"verdict-{args.tag}.json", decision)

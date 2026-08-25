@@ -20,12 +20,15 @@ from scripts.conv_health import (
     CONTROL_DEATH_FLOOR,
     MAX_DEAD_FRACTION,
     MAX_NORM_RATIO,
+    PAIRED_SHAPE,
+    PROBE_SHAPE,
     ConvArm,
     arm_checkpoint_path,
     arm_run_name,
     matched_ablation_set,
     probe_train_command,
     probe_total_tokens,
+    selected_arms,
     verdict,
 )
 
@@ -176,6 +179,143 @@ def test_arm_run_names_are_distinct_and_carry_the_tag():
     names = {arm_run_name(arm, "probe") for arm in ARMS}
     assert len(names) == len(ARMS)
     assert arm_run_name(CONTROL, "paired") != arm_run_name(CONTROL, "probe")
+
+
+# ------------------------------------------------------------------ shape -----
+
+def test_the_escalation_is_the_shipped_shape_at_the_plans_budget():
+    """Phase 5 step 6: a paired 150M-parameter, 500M-token run at lr 0.04. The
+    150M part is not incidental -- a claim about *this model's* channels cannot
+    be established at the probe's hidden 256."""
+    assert PAIRED_SHAPE.config == "daedalus-150m"
+    assert PRESETS[PAIRED_SHAPE.config].hidden_size == 768
+    assert PAIRED_SHAPE.total_tokens == 500_000_000
+    assert PAIRED_SHAPE.muon_lr == 0.04
+
+
+def test_the_escalation_batch_gives_the_decay_enough_steps_to_act():
+    """The thing that has to carry over from the probe is the decay clock, not
+    the learning rate: Muon decays once per *optimizer step*, so a batch large
+    enough would spend 500M tokens without the control losing a channel.
+
+    At hero's 512k tokens/step the clock is ~29 and `exp(-2.9)` of shrink would
+    not cross a threshold that needs ~`exp(-4.6)`. This asserts the shape that
+    was actually chosen clears it with room."""
+    assert PAIRED_SHAPE.batch_tokens == 131_072
+    assert PAIRED_SHAPE.steps == 3815
+    shrink_exponent = PAIRED_SHAPE.decay_clock * CONTROL.start
+    assert shrink_exponent > 4.6 * 2, (
+        f"the shipped arm's decay clock only reaches exp(-{shrink_exponent:.1f}); "
+        f"that may not produce material death in 500M tokens")
+
+
+def test_the_escalation_holds_batch_and_sequence_flat_like_the_probe():
+    command = probe_train_command(CONTROL, data_dir="d", run_name="r",
+                                  total_tokens=PAIRED_SHAPE.total_tokens,
+                                  device="cpu", shape=PAIRED_SHAPE)
+
+    assert command[command.index("--seq-start") + 1] == command[
+        command.index("--seq-end") + 1]
+    assert command[command.index("--tok-start") + 1] == command[
+        command.index("--tok-end") + 1]
+
+
+def test_only_the_decay_flags_differ_between_escalation_arms():
+    """The same identity property the probe has, asserted at the shape that
+    costs GPU-hours to get wrong."""
+    commands = {
+        arm.name: probe_train_command(arm, data_dir="d", run_name="r",
+                                      total_tokens=PAIRED_SHAPE.total_tokens,
+                                      device="cpu", shape=PAIRED_SHAPE)
+        for arm in ARMS}
+
+    def strip(command):
+        out, skip = [], False
+        for part in command:
+            if skip:
+                skip = False
+                continue
+            if part.startswith("--conv-proj-wd"):
+                skip = True
+                continue
+            out.append(part)
+        return out
+
+    reference = strip(commands[CONTROL.name])
+    for name, command in commands.items():
+        assert strip(command) == reference, f"{name} differs outside the decay"
+
+
+def test_the_escalation_command_parses_and_carries_its_own_shape():
+    import train as train_mod
+
+    command = probe_train_command(ARMS_BY_NAME["weak-then-0.1"], data_dir="d",
+                                  run_name="r", shape=PAIRED_SHAPE,
+                                  total_tokens=PAIRED_SHAPE.total_tokens,
+                                  device="cpu")
+    args = train_mod.parse_args(command[2:])
+
+    assert args.config == "daedalus-150m"
+    assert args.muon_lr == 0.04
+    assert args.total_tokens == 500_000_000
+    assert args.seq_start == args.seq_end == 2048
+    assert args.tok_start == args.tok_end == 131_072
+    assert args.micro_batch == 8
+    assert args.conv_proj_wd_ramp_frac == 0.3
+
+
+def test_the_supervisor_watches_the_escalation_checkpoint_too():
+    """The phase 4 failure, re-asserted at the other shape: the escalation runs
+    a different preset, and a checkpoint path that assumed the probe's would
+    hand `run_with_resume` a file that never appears."""
+    import train as train_mod
+
+    for arm in ARMS:
+        command = probe_train_command(
+            arm, data_dir="d", run_name=arm_run_name(arm, "paired"),
+            total_tokens=PAIRED_SHAPE.total_tokens, device="cpu",
+            shape=PAIRED_SHAPE)
+        parsed = train_mod.parse_args(command[2:])
+        assert str(arm_checkpoint_path(arm, "paired",
+                                       config=PAIRED_SHAPE.config)) == \
+            train_mod.checkpoint_path_for(parsed)
+
+
+def test_a_smoke_step_count_overrides_the_shapes_budget():
+    """`--steps` exists for smokes. It must not be able to silently shorten a
+    preregistered run, so the budget comes from the shape unless asked."""
+    assert probe_total_tokens(4, PAIRED_SHAPE) == 4 * 131_072
+    assert probe_total_tokens(600, PROBE_SHAPE) == PROBE_SHAPE.total_tokens
+
+
+# ------------------------------------------------------------ arm selection ---
+
+def test_a_subset_always_carries_the_control_and_carries_it_first():
+    """Every criterion an arm is read against is relative to the control -- 2x
+    its alive-channel norms, 0.5% of its held-out loss, its flagged set's size.
+    A subset without it is unreadable, not cheaper."""
+    chosen = selected_arms("weak-0.0133,weak-then-0.1")
+
+    assert [arm.name for arm in chosen] == [
+        CONTROL.name, "weak-0.0133", "weak-then-0.1"]
+
+
+def test_naming_the_control_does_not_duplicate_it():
+    chosen = selected_arms(f"{CONTROL.name},weak-0.0133")
+
+    assert [arm.name for arm in chosen] == [CONTROL.name, "weak-0.0133"]
+
+
+def test_no_subset_means_every_preregistered_arm():
+    assert list(selected_arms(None)) == list(ARMS)
+    assert list(selected_arms("")) == list(ARMS)
+
+
+def test_a_misspelled_arm_stops_the_run_rather_than_shrinking_it():
+    """Silently dropping an unknown name would run a two-arm escalation that
+    reports as the three-arm one it was asked for."""
+    with pytest.raises(SystemExit, match="weak-0.013"):
+        selected_arms("weak-0.013")
 
 
 # -------------------------------------------------------- matched ablation ----
