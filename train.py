@@ -51,7 +51,8 @@ from daedalus.config import PRESETS, DaedalusConfig
 from daedalus.model import Daedalus
 from daedalus import ckpt_uploader
 from daedalus import qat as qat_mod
-from daedalus.muon import build_optimizers, decay_start_step, momentum_warmup, wsd_lr
+from daedalus.muon import (build_optimizers, conv_proj_wd_schedule,
+                           decay_start_step, momentum_warmup, wsd_lr)
 from daedalus.wandb_logger import WandbLogger
 
 DEFAULT_COST_PER_HOUR = 0.449  # this box (RTX 5090 incl. storage); see COSTS.md
@@ -770,6 +771,12 @@ class TrainArgs:
     adam_lr: float = 3e-4
     # None = the shipped single-Muon-group split. See `build_optimizers`.
     conv_proj_wd: Optional[float] = None
+    # Phase 5's two varying arms. `conv_proj_wd_end=None` is a constant, which
+    # is what the shipped 0.1 and the weak-constant arm are, so leaving these
+    # alone reproduces the existing behaviour exactly.
+    conv_proj_wd_end: Optional[float] = None
+    conv_proj_wd_ramp_frac: float = 0.0
+    conv_proj_wd_hold_frac: float = 0.0
     warmup_steps: int = 300
     decay_frac: float = 0.45
     # Config knobs a *run* may override without editing the preset. Both default
@@ -854,6 +861,30 @@ class TrainArgs:
     # that has skipped this many in a row is not going to finish, and neither
     # of fit()'s break conditions can fire while it keeps skipping.
     max_consecutive_skips: int = 25
+
+    def __post_init__(self):
+        # A ramp without a group to ramp is the same silent no-op
+        # `build_optimizers` already refuses for `conv_proj_wd` itself: the run
+        # looks configured, trains the shipped schedule, and only the arm's
+        # result says otherwise -- by which point the GPU hours are spent.
+        if self.conv_proj_wd is None and (
+                self.conv_proj_wd_end is not None
+                or self.conv_proj_wd_ramp_frac
+                or self.conv_proj_wd_hold_frac):
+            raise ValueError(
+                "conv_proj_wd_end/ramp_frac/hold_frac need conv_proj_wd set: "
+                "without it there is no conv-projection group to schedule and "
+                "the ramp would silently do nothing")
+        if not 0.0 <= self.conv_proj_wd_hold_frac <= self.conv_proj_wd_ramp_frac <= 1.0:
+            raise ValueError(
+                f"conv-proj-wd ramp must satisfy 0 <= hold_frac "
+                f"({self.conv_proj_wd_hold_frac}) <= ramp_frac "
+                f"({self.conv_proj_wd_ramp_frac}) <= 1")
+        if self.conv_proj_wd_end is not None and self.conv_proj_wd_ramp_frac == 0.0:
+            raise ValueError(
+                "conv_proj_wd_end is set but conv_proj_wd_ramp_frac is 0, so "
+                "the decay would jump to the end value at step 0; pass a ramp "
+                "fraction, or drop --conv-proj-wd-end for a constant")
 
 
 class NonFiniteStall(RuntimeError):
@@ -1153,6 +1184,25 @@ class Trainer:
         return wsd_lr(self.step, total_steps, warmup=self.args.warmup_steps,
                      decay_frac=self.args.decay_frac)
 
+    def _conv_proj_wd(self, total_steps: int) -> Optional[float]:
+        """This step's conv-projection decay, or None when the group does not
+        exist.
+
+        Returning None rather than the shipped 0.1 matters: with
+        `--conv-proj-wd` unset there *is* no second Muon group, and writing a
+        decay into `param_groups[1]` would either raise or -- worse, if the
+        index ever moved -- retune the 76.9% of Muon's parameters this
+        experiment is supposed to hold fixed.
+        """
+        args = self.args
+        if getattr(args, "conv_proj_wd", None) is None:
+            return None
+        return conv_proj_wd_schedule(
+            self.step, total_steps, args.conv_proj_wd,
+            end=getattr(args, "conv_proj_wd_end", None),
+            ramp_frac=getattr(args, "conv_proj_wd_ramp_frac", 0.0),
+            hold_frac=getattr(args, "conv_proj_wd_hold_frac", 0.0))
+
     def _estimated_total_steps(self) -> int:
         return self.total_steps
 
@@ -1171,6 +1221,10 @@ class Trainer:
             g["momentum"] = momentum_warmup(self.step, warmup=args.warmup_steps)
         for g in self.adamw.param_groups:
             g["lr"] = args.adam_lr * mult
+        conv_wd = self._conv_proj_wd(total_steps)
+        if conv_wd is not None:
+            self.muon.param_groups[
+                self.opt_stats["conv_proj_group_index"]]["weight_decay"] = conv_wd
 
         self.muon.zero_grad(set_to_none=True)
         self.adamw.zero_grad(set_to_none=True)
@@ -1210,11 +1264,17 @@ class Trainer:
             self._peak_mem_seen = max(self._peak_mem_seen,
                                       torch.cuda.max_memory_allocated() / 1e9)
 
-        return {
+        metrics = {
             "step": self.step, "loss": loss_sum / accum, "skipped": False,
             "seq_len": seq_len, "accum": accum, "lr_mult": mult,
             "grad_norm": float(grad_norm),
         }
+        if conv_wd is not None:
+            # Logged because a schedule that silently failed to apply is
+            # indistinguishable from an arm that did not work, and phase 5
+            # decides between arms.
+            metrics["conv_proj_wd"] = conv_wd
+        return metrics
 
     def _elapsed_h(self) -> float:
         return (time.time() - self.start_time) / 3600
@@ -1867,6 +1927,16 @@ def parse_args(argv=None) -> TrainArgs:
                         "Default None = shipped single-group behaviour. "
                         "Changes the optimizer state_dict layout, so it cannot "
                         "be applied to a run already in progress.")
+    p.add_argument("--conv-proj-wd-end", type=float, default=None,
+                   help="ramp --conv-proj-wd to this value instead of holding "
+                        "it constant. Default None = constant, the shipped "
+                        "behaviour. Requires --conv-proj-wd.")
+    p.add_argument("--conv-proj-wd-ramp-frac", type=float, default=0.0,
+                   help="fraction of the run by which --conv-proj-wd-end is "
+                        "reached (0.1 = by 10%% of steps)")
+    p.add_argument("--conv-proj-wd-hold-frac", type=float, default=0.0,
+                   help="fraction of the run to hold --conv-proj-wd before the "
+                        "ramp begins; must be <= --conv-proj-wd-ramp-frac")
     p.add_argument("--device", default=None,
                    help="cuda/cpu; defaults to cuda when available. Mainly so "
                         "the end-to-end subprocess resume test can pin cpu "
@@ -1944,6 +2014,9 @@ def parse_args(argv=None) -> TrainArgs:
                   wandb_enabled=not a.no_wandb,
                   muon_lr=a.muon_lr, adam_lr=a.adam_lr,
                   conv_proj_wd=a.conv_proj_wd,
+                  conv_proj_wd_end=a.conv_proj_wd_end,
+                  conv_proj_wd_ramp_frac=a.conv_proj_wd_ramp_frac,
+                  conv_proj_wd_hold_frac=a.conv_proj_wd_hold_frac,
                   tags=a.tags.split(",") if a.tags else None,
                   val_dir=a.val_dir, val_every_steps=a.val_every_steps,
                   qat_frac=a.qat_frac, hub_repo=a.hub_repo or None,
