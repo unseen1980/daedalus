@@ -1,0 +1,1127 @@
+{
+  "arms": [
+    {
+      "ablate_flagged": {
+        "channels": 4964,
+        "delta": 2.9802322387695312e-08,
+        "loss": 3.311218112707138
+      },
+      "ablate_matched": {
+        "baseline_sized": false,
+        "channels": 3400,
+        "delta": 3.3344244956970215,
+        "loss": 6.645642578601837,
+        "per_layer_k": {
+          "0": 0,
+          "1": 373,
+          "10": 497,
+          "12": 512,
+          "14": 523,
+          "15": 531,
+          "17": 511,
+          "2": 364,
+          "3": 373,
+          "5": 401,
+          "6": 409,
+          "8": 470
+        },
+        "requested_channels": 4964,
+        "short_layers": {
+          "10": {
+            "delivered": 271,
+            "requested": 497
+          },
+          "12": {
+            "delivered": 256,
+            "requested": 512
+          },
+          "14": {
+            "delivered": 245,
+            "requested": 523
+          },
+          "15": {
+            "delivered": 237,
+            "requested": 531
+          },
+          "17": {
+            "delivered": 257,
+            "requested": 511
+          },
+          "5": {
+            "delivered": 367,
+            "requested": 401
+          },
+          "6": {
+            "delivered": 359,
+            "requested": 409
+          },
+          "8": {
+            "delivered": 298,
+            "requested": 470
+          }
+        }
+      },
+      "arm": "shipped-0.1",
+      "checkpoint": "runs/conv-paired-shipped-0.1/checkpoint.pt",
+      "health": {
+        "conv_layers": 12,
+        "dead_channels": 4964,
+        "dead_fraction": 0.5386284722222222,
+        "defined": true,
+        "per_layer": [
+          {
+            "dead_channels": 0,
+            "dead_fraction": 0.0,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.040659584200271104,
+              "gate_C": 0.04757744642117973,
+              "kernel": 0.0048188649132498524,
+              "out": 0.032032991128244,
+              "value_x": 0.04055449433094177
+            },
+            "hidden_size": 768,
+            "layer_index": 0,
+            "proxy_dead_channels": 0,
+            "proxy_dead_fraction": 0.0,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 373,
+            "dead_fraction": 0.4856770833333333,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.050985599879923224,
+              "gate_C": 0.05938566981753302,
+              "kernel": 0.041926920965003465,
+              "out": 0.034983944717119506,
+              "value_x": 0.05172127364734582
+            },
+            "hidden_size": 768,
+            "layer_index": 1,
+            "proxy_dead_channels": 373,
+            "proxy_dead_fraction": 0.4856770833333333,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 364,
+            "dead_fraction": 0.4739583333333333,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.05327565045644083,
+              "gate_C": 0.05813068128746011,
+              "kernel": 0.043198818806558834,
+              "out": 0.03670805803066912,
+              "value_x": 0.053697632136438495
+            },
+            "hidden_size": 768,
+            "layer_index": 2,
+            "proxy_dead_channels": 362,
+            "proxy_dead_fraction": 0.4713541666666667,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 373,
+            "dead_fraction": 0.4856770833333333,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.053126361157526246,
+              "gate_C": 0.05751714800840659,
+              "kernel": 0.04544163499958811,
+              "out": 0.03677083320196364,
+              "value_x": 0.05408872323203629
+            },
+            "hidden_size": 768,
+            "layer_index": 3,
+            "proxy_dead_channels": 372,
+            "proxy_dead_fraction": 0.484375,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 401,
+            "dead_fraction": 0.5221354166666666,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.05589724061826189,
+              "gate_C": 0.05647417755124187,
+              "kernel": 0.04709528827418882,
+              "out": 0.0372386287511187,
+              "value_x": 0.05625118139783404
+            },
+            "hidden_size": 768,
+            "layer_index": 5,
+            "proxy_dead_channels": 401,
+            "proxy_dead_fraction": 0.5221354166666666,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 409,
+            "dead_fraction": 0.5325520833333334,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.05613980825255851,
+              "gate_C": 0.056249113045294286,
+              "kernel": 0.04541826288526256,
+              "out": 0.03716780168471274,
+              "value_x": 0.05649892514451314
+            },
+            "hidden_size": 768,
+            "layer_index": 6,
+            "proxy_dead_channels": 409,
+            "proxy_dead_fraction": 0.5325520833333334,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 470,
+            "dead_fraction": 0.6119791666666666,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.05835802533597416,
+              "gate_C": 0.05628557467626844,
+              "kernel": 0.04794522741188605,
+              "out": 0.03699431124978716,
+              "value_x": 0.05771885682175105
+            },
+            "hidden_size": 768,
+            "layer_index": 8,
+            "proxy_dead_channels": 470,
+            "proxy_dead_fraction": 0.6119791666666666,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 497,
+            "dead_fraction": 0.6471354166666666,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.06088710282277934,
+              "gate_C": 0.05864060930615074,
+              "kernel": 0.04487632647311935,
+              "out": 0.037750922057365695,
+              "value_x": 0.06088222949304338
+            },
+            "hidden_size": 768,
+            "layer_index": 10,
+            "proxy_dead_channels": 497,
+            "proxy_dead_fraction": 0.6471354166666666,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 512,
+            "dead_fraction": 0.6666666666666666,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.06083817523951881,
+              "gate_C": 0.05836287230536261,
+              "kernel": 0.04749794372667868,
+              "out": 0.038388533330232615,
+              "value_x": 0.060817642588197406
+            },
+            "hidden_size": 768,
+            "layer_index": 12,
+            "proxy_dead_channels": 512,
+            "proxy_dead_fraction": 0.6666666666666666,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 523,
+            "dead_fraction": 0.6809895833333334,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.06172010829309944,
+              "gate_C": 0.06101139883266716,
+              "kernel": 0.054689956019865336,
+              "out": 0.03929773783437819,
+              "value_x": 0.06235701512424599
+            },
+            "hidden_size": 768,
+            "layer_index": 14,
+            "proxy_dead_channels": 523,
+            "proxy_dead_fraction": 0.6809895833333334,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 531,
+            "dead_fraction": 0.69140625,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.06195645911704872,
+              "gate_C": 0.0617991132184386,
+              "kernel": 0.05527447940160828,
+              "out": 0.03899299302466114,
+              "value_x": 0.06166288853196183
+            },
+            "hidden_size": 768,
+            "layer_index": 15,
+            "proxy_dead_channels": 531,
+            "proxy_dead_fraction": 0.69140625,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 511,
+            "dead_fraction": 0.6653645833333334,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.06085546115257803,
+              "gate_C": 0.061681293338473844,
+              "kernel": 0.056352258225282024,
+              "out": 0.03983350745970876,
+              "value_x": 0.06085005720627805
+            },
+            "hidden_size": 768,
+            "layer_index": 17,
+            "proxy_dead_channels": 511,
+            "proxy_dead_fraction": 0.6653645833333334,
+            "threshold": 0.01
+          }
+        ],
+        "proxy_dead_channels": 4961,
+        "proxy_dead_fraction": 0.5383029513888888,
+        "threshold": 0.01,
+        "total_channels": 9216
+      },
+      "held_out_loss": 3.3112180829048157,
+      "projection_norms": {
+        "alive_weighted": {
+          "alive_channels": 4252,
+          "in_proj": 0.048433833084486316,
+          "kernel": 0.015088005313688974,
+          "out_proj": 0.03355499972350493
+        },
+        "per_layer": {
+          "0": {
+            "alive_channels": 768,
+            "in_proj": 0.03365974534677062,
+            "kernel": 0.0028178479528005633,
+            "out_proj": 0.02537191917287837
+          },
+          "1": {
+            "alive_channels": 395,
+            "in_proj": 0.04501397523086933,
+            "kernel": 0.013101839146945918,
+            "out_proj": 0.032672357381599015
+          },
+          "10": {
+            "alive_channels": 271,
+            "in_proj": 0.05518370070367764,
+            "kernel": 0.016050708832565434,
+            "out_proj": 0.035373307994703486
+          },
+          "12": {
+            "alive_channels": 256,
+            "in_proj": 0.055903647837788235,
+            "kernel": 0.016192458883599176,
+            "out_proj": 0.036508988388063275
+          },
+          "14": {
+            "alive_channels": 245,
+            "in_proj": 0.057885134745630236,
+            "kernel": 0.01766615339496303,
+            "out_proj": 0.03707372710216579
+          },
+          "15": {
+            "alive_channels": 237,
+            "in_proj": 0.058005922598250076,
+            "kernel": 0.01716749523036939,
+            "out_proj": 0.03690055875448934
+          },
+          "17": {
+            "alive_channels": 257,
+            "in_proj": 0.05736543720114046,
+            "kernel": 0.019469978202736413,
+            "out_proj": 0.03766889846554514
+          },
+          "2": {
+            "alive_channels": 404,
+            "in_proj": 0.047433186541904836,
+            "kernel": 0.016248328233697328,
+            "out_proj": 0.03473480729643411
+          },
+          "3": {
+            "alive_channels": 395,
+            "in_proj": 0.0480589574022075,
+            "kernel": 0.017346076986904428,
+            "out_proj": 0.03476137528370829
+          },
+          "5": {
+            "alive_channels": 367,
+            "in_proj": 0.05039052442858862,
+            "kernel": 0.02110681192989601,
+            "out_proj": 0.035269505081895115
+          },
+          "6": {
+            "alive_channels": 359,
+            "in_proj": 0.05075226317240743,
+            "kernel": 0.021211314816766552,
+            "out_proj": 0.03525805461833387
+          },
+          "8": {
+            "alive_channels": 298,
+            "in_proj": 0.052051937534921475,
+            "kernel": 0.020610999905992196,
+            "out_proj": 0.03515979332745203
+          }
+        }
+      },
+      "run": "conv-paired-shipped-0.1",
+      "schedule": {
+        "end": null,
+        "hold_frac": 0.0,
+        "name": "shipped-0.1",
+        "note": "control: the decay the released model trained under, in its own group so the arms differ only in the decay value",
+        "ramp_frac": 0.0,
+        "start": 0.1
+      },
+      "threshold": 0.01
+    },
+    {
+      "ablate_flagged": {
+        "channels": 1338,
+        "delta": 0.5254384428262711,
+        "loss": 3.841352880001068
+      },
+      "ablate_matched": {
+        "baseline_sized": false,
+        "channels": 4855,
+        "delta": 3.953897014260292,
+        "loss": 7.269811451435089,
+        "per_layer_k": {
+          "0": 0,
+          "1": 373,
+          "10": 497,
+          "12": 512,
+          "14": 523,
+          "15": 531,
+          "17": 511,
+          "2": 364,
+          "3": 373,
+          "5": 401,
+          "6": 409,
+          "8": 470
+        },
+        "requested_channels": 4964,
+        "short_layers": {
+          "12": {
+            "delivered": 476,
+            "requested": 512
+          },
+          "14": {
+            "delivered": 512,
+            "requested": 523
+          },
+          "15": {
+            "delivered": 503,
+            "requested": 531
+          },
+          "17": {
+            "delivered": 477,
+            "requested": 511
+          }
+        }
+      },
+      "arm": "weak-0.0133",
+      "checkpoint": "runs/conv-paired-weak-0.0133/checkpoint.pt",
+      "health": {
+        "conv_layers": 12,
+        "dead_channels": 1338,
+        "dead_fraction": 0.14518229166666666,
+        "defined": true,
+        "per_layer": [
+          {
+            "dead_channels": 0,
+            "dead_fraction": 0.0,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.08070474384751891,
+              "gate_C": 0.08687995570443262,
+              "kernel": 0.0005668789743746552,
+              "out": 0.07716716723001013,
+              "value_x": 0.08032523516885455
+            },
+            "hidden_size": 768,
+            "layer_index": 0,
+            "proxy_dead_channels": 0,
+            "proxy_dead_fraction": 0.0,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 1,
+            "dead_fraction": 0.0013020833333333333,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.12312518496518976,
+              "gate_C": 0.18847317939451688,
+              "kernel": 0.054099552985280734,
+              "out": 0.1238941954986643,
+              "value_x": 0.122039076576346
+            },
+            "hidden_size": 768,
+            "layer_index": 1,
+            "proxy_dead_channels": 1,
+            "proxy_dead_fraction": 0.0013020833333333333,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 5,
+            "dead_fraction": 0.006510416666666667,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.1465746182701114,
+              "gate_C": 0.1930583654845861,
+              "kernel": 0.04793645283207297,
+              "out": 0.12920318434448363,
+              "value_x": 0.1479941309319012
+            },
+            "hidden_size": 768,
+            "layer_index": 2,
+            "proxy_dead_channels": 5,
+            "proxy_dead_fraction": 0.006510416666666667,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 0,
+            "dead_fraction": 0.0,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.15261983393857576,
+              "gate_C": 0.1780532861874967,
+              "kernel": 0.05956829950834313,
+              "out": 0.13056052138793744,
+              "value_x": 0.1552567565831471
+            },
+            "hidden_size": 768,
+            "layer_index": 3,
+            "proxy_dead_channels": 0,
+            "proxy_dead_fraction": 0.0,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 8,
+            "dead_fraction": 0.010416666666666666,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.1654920400973386,
+              "gate_C": 0.174859908563306,
+              "kernel": 0.07386680515483021,
+              "out": 0.12993296831288176,
+              "value_x": 0.16418019499800537
+            },
+            "hidden_size": 768,
+            "layer_index": 5,
+            "proxy_dead_channels": 8,
+            "proxy_dead_fraction": 0.010416666666666666,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 16,
+            "dead_fraction": 0.020833333333333332,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.16675636381681516,
+              "gate_C": 0.17854794193034423,
+              "kernel": 0.06877261872092882,
+              "out": 0.12955307980061453,
+              "value_x": 0.1653463740887332
+            },
+            "hidden_size": 768,
+            "layer_index": 6,
+            "proxy_dead_channels": 16,
+            "proxy_dead_fraction": 0.020833333333333332,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 39,
+            "dead_fraction": 0.05078125,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.17230369034145004,
+              "gate_C": 0.17658674329383453,
+              "kernel": 0.08860322926193472,
+              "out": 0.13176165194857956,
+              "value_x": 0.17495316819510737
+            },
+            "hidden_size": 768,
+            "layer_index": 8,
+            "proxy_dead_channels": 33,
+            "proxy_dead_fraction": 0.04296875,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 165,
+            "dead_fraction": 0.21484375,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.17081482264757447,
+              "gate_C": 0.16786788522219068,
+              "kernel": 0.12818712877730526,
+              "out": 0.12518995045672152,
+              "value_x": 0.1708445458971918
+            },
+            "hidden_size": 768,
+            "layer_index": 10,
+            "proxy_dead_channels": 14,
+            "proxy_dead_fraction": 0.018229166666666668,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 292,
+            "dead_fraction": 0.3802083333333333,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.1681752601962785,
+              "gate_C": 0.16376057840995864,
+              "kernel": 0.15395309813320635,
+              "out": 0.12598727812445387,
+              "value_x": 0.16934729551186173
+            },
+            "hidden_size": 768,
+            "layer_index": 12,
+            "proxy_dead_channels": 7,
+            "proxy_dead_fraction": 0.009114583333333334,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 256,
+            "dead_fraction": 0.3333333333333333,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.16585248155232551,
+              "gate_C": 0.16781652913999964,
+              "kernel": 0.17308736592531201,
+              "out": 0.12769299092425812,
+              "value_x": 0.16589051486598028
+            },
+            "hidden_size": 768,
+            "layer_index": 14,
+            "proxy_dead_channels": 7,
+            "proxy_dead_fraction": 0.009114583333333334,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 265,
+            "dead_fraction": 0.3450520833333333,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.16478815643240902,
+              "gate_C": 0.17056085166747673,
+              "kernel": 0.2045362355808417,
+              "out": 0.12829454544348046,
+              "value_x": 0.16372940143845272
+            },
+            "hidden_size": 768,
+            "layer_index": 15,
+            "proxy_dead_channels": 7,
+            "proxy_dead_fraction": 0.009114583333333334,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 291,
+            "dead_fraction": 0.37890625,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.15031689909799106,
+              "gate_C": 0.15624234770477158,
+              "kernel": 0.23414857039848957,
+              "out": 0.1295036651542271,
+              "value_x": 0.15479846054949933
+            },
+            "hidden_size": 768,
+            "layer_index": 17,
+            "proxy_dead_channels": 17,
+            "proxy_dead_fraction": 0.022135416666666668,
+            "threshold": 0.01
+          }
+        ],
+        "proxy_dead_channels": 115,
+        "proxy_dead_fraction": 0.012478298611111112,
+        "threshold": 0.01,
+        "total_channels": 9216
+      },
+      "held_out_loss": 3.315914437174797,
+      "projection_norms": {
+        "alive_weighted": {
+          "alive_channels": 7878,
+          "in_proj": 0.08832199777598268,
+          "kernel": 0.03212538952496188,
+          "out_proj": 0.07821428324023351
+        },
+        "per_layer": {
+          "0": {
+            "alive_channels": 768,
+            "in_proj": 0.0764149670838098,
+            "kernel": 0.0003723020157114478,
+            "out_proj": 0.07350209670974417
+          },
+          "1": {
+            "alive_channels": 767,
+            "in_proj": 0.09362096707586887,
+            "kernel": 0.008718349072150912,
+            "out_proj": 0.09159636216516774
+          },
+          "10": {
+            "alive_channels": 603,
+            "in_proj": 0.0826351616646866,
+            "kernel": 0.03899539411197193,
+            "out_proj": 0.07216118275309968
+          },
+          "12": {
+            "alive_channels": 476,
+            "in_proj": 0.061011844100929497,
+            "kernel": 0.06051113160323539,
+            "out_proj": 0.057117742895067915
+          },
+          "14": {
+            "alive_channels": 512,
+            "in_proj": 0.0696105876511679,
+            "kernel": 0.06528703105997809,
+            "out_proj": 0.0640799906895563
+          },
+          "15": {
+            "alive_channels": 503,
+            "in_proj": 0.06298834462612424,
+            "kernel": 0.07957580515543043,
+            "out_proj": 0.05726371832316518
+          },
+          "17": {
+            "alive_channels": 477,
+            "in_proj": 0.05705934615518695,
+            "kernel": 0.09220766067427506,
+            "out_proj": 0.051389872186600724
+          },
+          "2": {
+            "alive_channels": 763,
+            "in_proj": 0.10872425175069582,
+            "kernel": 0.013217548238135536,
+            "out_proj": 0.09639369283168962
+          },
+          "3": {
+            "alive_channels": 768,
+            "in_proj": 0.10888161071424912,
+            "kernel": 0.01679969567151149,
+            "out_proj": 0.09422994401222869
+          },
+          "5": {
+            "alive_channels": 760,
+            "in_proj": 0.10365940070605381,
+            "kernel": 0.022260831789131578,
+            "out_proj": 0.08695785864715269
+          },
+          "6": {
+            "alive_channels": 752,
+            "in_proj": 0.10411796307622033,
+            "kernel": 0.021462164238566526,
+            "out_proj": 0.08667855167170668
+          },
+          "8": {
+            "alive_channels": 729,
+            "in_proj": 0.09360697052288093,
+            "kernel": 0.027862573954053026,
+            "out_proj": 0.07606867194935145
+          }
+        }
+      },
+      "run": "conv-paired-weak-0.0133",
+      "schedule": {
+        "end": null,
+        "hold_frac": 0.0,
+        "name": "weak-0.0133",
+        "note": "7.5x weaker constant; its own mechanism predicts the death is postponed rather than prevented",
+        "ramp_frac": 0.0,
+        "start": 0.0133
+      },
+      "threshold": 0.01
+    },
+    {
+      "ablate_flagged": {
+        "channels": 3910,
+        "delta": 1.4901161193847656e-08,
+        "loss": 3.3009267151355743
+      },
+      "ablate_matched": {
+        "baseline_sized": false,
+        "channels": 4021,
+        "delta": 4.017013981938362,
+        "loss": 7.317940682172775,
+        "per_layer_k": {
+          "0": 0,
+          "1": 373,
+          "10": 497,
+          "12": 512,
+          "14": 523,
+          "15": 531,
+          "17": 511,
+          "2": 364,
+          "3": 373,
+          "5": 401,
+          "6": 409,
+          "8": 470
+        },
+        "requested_channels": 4964,
+        "short_layers": {
+          "10": {
+            "delivered": 361,
+            "requested": 497
+          },
+          "12": {
+            "delivered": 344,
+            "requested": 512
+          },
+          "14": {
+            "delivered": 339,
+            "requested": 523
+          },
+          "15": {
+            "delivered": 334,
+            "requested": 531
+          },
+          "17": {
+            "delivered": 335,
+            "requested": 511
+          },
+          "8": {
+            "delivered": 388,
+            "requested": 470
+          }
+        }
+      },
+      "arm": "weak-then-0.1",
+      "checkpoint": "runs/conv-paired-weak-then-0.1/checkpoint.pt",
+      "health": {
+        "conv_layers": 12,
+        "dead_channels": 3910,
+        "dead_fraction": 0.4242621527777778,
+        "defined": true,
+        "per_layer": [
+          {
+            "dead_channels": 0,
+            "dead_fraction": 0.0,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.04147465444429746,
+              "gate_C": 0.04811566537028658,
+              "kernel": 0.005414371184936801,
+              "out": 0.03161937599280169,
+              "value_x": 0.04127149058226204
+            },
+            "hidden_size": 768,
+            "layer_index": 0,
+            "proxy_dead_channels": 0,
+            "proxy_dead_fraction": 0.0,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 254,
+            "dead_fraction": 0.3307291666666667,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.05006022991236799,
+              "gate_C": 0.05852346761140268,
+              "kernel": 0.0503071406603946,
+              "out": 0.03425498190569792,
+              "value_x": 0.049010724529036515
+            },
+            "hidden_size": 768,
+            "layer_index": 1,
+            "proxy_dead_channels": 253,
+            "proxy_dead_fraction": 0.3294270833333333,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 262,
+            "dead_fraction": 0.3411458333333333,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.05112649603910703,
+              "gate_C": 0.05584996448070356,
+              "kernel": 0.0452599035265545,
+              "out": 0.036353184425508306,
+              "value_x": 0.05104806579591733
+            },
+            "hidden_size": 768,
+            "layer_index": 2,
+            "proxy_dead_channels": 262,
+            "proxy_dead_fraction": 0.3411458333333333,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 257,
+            "dead_fraction": 0.3346354166666667,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.051656158831818046,
+              "gate_C": 0.05527022446364474,
+              "kernel": 0.04837406997879346,
+              "out": 0.03633355331049349,
+              "value_x": 0.05048599841748521
+            },
+            "hidden_size": 768,
+            "layer_index": 3,
+            "proxy_dead_channels": 255,
+            "proxy_dead_fraction": 0.33203125,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 310,
+            "dead_fraction": 0.4036458333333333,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.05316668738289348,
+              "gate_C": 0.055039872403428794,
+              "kernel": 0.05122439193849762,
+              "out": 0.03650573767664292,
+              "value_x": 0.05356091401271682
+            },
+            "hidden_size": 768,
+            "layer_index": 5,
+            "proxy_dead_channels": 310,
+            "proxy_dead_fraction": 0.4036458333333333,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 320,
+            "dead_fraction": 0.4166666666666667,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.05414626154390553,
+              "gate_C": 0.05432067515635595,
+              "kernel": 0.05180957095387081,
+              "out": 0.03666916369509062,
+              "value_x": 0.05364512744325888
+            },
+            "hidden_size": 768,
+            "layer_index": 6,
+            "proxy_dead_channels": 320,
+            "proxy_dead_fraction": 0.4166666666666667,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 380,
+            "dead_fraction": 0.4947916666666667,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.055893657579272824,
+              "gate_C": 0.054249789623914066,
+              "kernel": 0.05264499535163243,
+              "out": 0.03689437526727547,
+              "value_x": 0.05655058621958133
+            },
+            "hidden_size": 768,
+            "layer_index": 8,
+            "proxy_dead_channels": 380,
+            "proxy_dead_fraction": 0.4947916666666667,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 407,
+            "dead_fraction": 0.5299479166666666,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.0573500522025812,
+              "gate_C": 0.055501573226335664,
+              "kernel": 0.06525025372393427,
+              "out": 0.03716331004521625,
+              "value_x": 0.057911204494103065
+            },
+            "hidden_size": 768,
+            "layer_index": 10,
+            "proxy_dead_channels": 407,
+            "proxy_dead_fraction": 0.5299479166666666,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 424,
+            "dead_fraction": 0.5520833333333334,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.057998665735999565,
+              "gate_C": 0.05592106808463247,
+              "kernel": 0.07237575917194286,
+              "out": 0.03809907827450421,
+              "value_x": 0.057464365445468006
+            },
+            "hidden_size": 768,
+            "layer_index": 12,
+            "proxy_dead_channels": 424,
+            "proxy_dead_fraction": 0.5520833333333334,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 429,
+            "dead_fraction": 0.55859375,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.058837531921321205,
+              "gate_C": 0.057324532934857564,
+              "kernel": 0.0813995652987311,
+              "out": 0.038654396394261006,
+              "value_x": 0.05783819379968973
+            },
+            "hidden_size": 768,
+            "layer_index": 14,
+            "proxy_dead_channels": 429,
+            "proxy_dead_fraction": 0.55859375,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 434,
+            "dead_fraction": 0.5651041666666666,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.058212421968548964,
+              "gate_C": 0.058605325288759495,
+              "kernel": 0.08389464123174543,
+              "out": 0.038790904062647506,
+              "value_x": 0.05831127358219164
+            },
+            "hidden_size": 768,
+            "layer_index": 15,
+            "proxy_dead_channels": 434,
+            "proxy_dead_fraction": 0.5651041666666666,
+            "threshold": 0.01
+          },
+          {
+            "dead_channels": 433,
+            "dead_fraction": 0.5638020833333334,
+            "defined": true,
+            "factor_p95": {
+              "gate_B": 0.056841807542174036,
+              "gate_C": 0.057643371256390685,
+              "kernel": 0.09635618335256972,
+              "out": 0.0389815195093675,
+              "value_x": 0.05713175425717812
+            },
+            "hidden_size": 768,
+            "layer_index": 17,
+            "proxy_dead_channels": 433,
+            "proxy_dead_fraction": 0.5638020833333334,
+            "threshold": 0.01
+          }
+        ],
+        "proxy_dead_channels": 3907,
+        "proxy_dead_fraction": 0.4239366319444444,
+        "threshold": 0.01,
+        "total_channels": 9216
+      },
+      "held_out_loss": 3.300926700234413,
+      "projection_norms": {
+        "alive_weighted": {
+          "alive_channels": 5306,
+          "in_proj": 0.04548130975803109,
+          "kernel": 0.018956648414315744,
+          "out_proj": 0.03325910211495513
+        },
+        "per_layer": {
+          "0": {
+            "alive_channels": 768,
+            "in_proj": 0.03367367382317418,
+            "kernel": 0.0029134425112441334,
+            "out_proj": 0.02455331763266246
+          },
+          "1": {
+            "alive_channels": 514,
+            "in_proj": 0.041019723705674006,
+            "kernel": 0.0163001698900096,
+            "out_proj": 0.03198101470441537
+          },
+          "10": {
+            "alive_channels": 361,
+            "in_proj": 0.05003447690596913,
+            "kernel": 0.021304052915562748,
+            "out_proj": 0.03479074303445017
+          },
+          "12": {
+            "alive_channels": 344,
+            "in_proj": 0.05140911671766476,
+            "kernel": 0.021117092155801733,
+            "out_proj": 0.03600178823952946
+          },
+          "14": {
+            "alive_channels": 339,
+            "in_proj": 0.05236146456348897,
+            "kernel": 0.02389298980363822,
+            "out_proj": 0.036549432700022186
+          },
+          "15": {
+            "alive_channels": 334,
+            "in_proj": 0.05261046377218452,
+            "kernel": 0.023800393234696113,
+            "out_proj": 0.03695186191421119
+          },
+          "17": {
+            "alive_channels": 335,
+            "in_proj": 0.05256104889835225,
+            "kernel": 0.025672409171225867,
+            "out_proj": 0.036602301400546954
+          },
+          "2": {
+            "alive_channels": 506,
+            "in_proj": 0.04380895794381378,
+            "kernel": 0.018264719526493806,
+            "out_proj": 0.03396682589103129
+          },
+          "3": {
+            "alive_channels": 511,
+            "in_proj": 0.04389404437903304,
+            "kernel": 0.020411415221083966,
+            "out_proj": 0.03387943972267295
+          },
+          "5": {
+            "alive_channels": 458,
+            "in_proj": 0.0466844887947355,
+            "kernel": 0.02364073970795694,
+            "out_proj": 0.03451780338075931
+          },
+          "6": {
+            "alive_channels": 448,
+            "in_proj": 0.046959823619554045,
+            "kernel": 0.02353314089951449,
+            "out_proj": 0.034507707201982124
+          },
+          "8": {
+            "alive_channels": 388,
+            "in_proj": 0.048154790635520854,
+            "kernel": 0.024024029346278074,
+            "out_proj": 0.034720020681191364
+          }
+        }
+      },
+      "run": "conv-paired-weak-then-0.1",
+      "schedule": {
+        "end": 0.1,
+        "hold_frac": 0.0,
+        "name": "weak-then-0.1",
+        "note": "weak early, shipped decay by 30% of the run",
+        "ramp_frac": 0.3,
+        "start": 0.0133
+      },
+      "threshold": 0.01
+    }
+  ],
+  "control": "shipped-0.1",
+  "matched_k": {
+    "0": 0,
+    "1": 373,
+    "2": 364,
+    "3": 373,
+    "5": 401,
+    "6": 409,
+    "8": 470,
+    "10": 497,
+    "12": 512,
+    "14": 523,
+    "15": 531,
+    "17": 511
+  },
+  "shape": {
+    "batch_tokens": 131072,
+    "config": "daedalus-150m",
+    "decay_frac": 0.45,
+    "micro_batch": 8,
+    "muon_lr": 0.04,
+    "name": "paired",
+    "note": "the shipped 150M shape at the plan's 500M tokens and lr 0.04",
+    "seq_len": 2048,
+    "total_tokens": 500000000,
+    "warmup_steps": 300
+  },
+  "tag": "paired"
+}

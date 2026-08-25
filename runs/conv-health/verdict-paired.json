@@ -1,0 +1,57 @@
+{
+  "arms": [
+    {
+      "arm": "weak-0.0133",
+      "checks": {
+        "dead_fraction_under_1pc": false,
+        "loss_not_worse": true,
+        "matched_ablation_bites": false,
+        "norms_within_2x": false
+      },
+      "dead_fraction": 0.14518229166666666,
+      "loss_regression": 0.0014183162064219693,
+      "matched_ablation_channels": 4855,
+      "matched_ablation_delta": 3.953897014260292,
+      "matched_ablation_requested": 4964,
+      "norm_ratio": {
+        "in_proj": 1.8235599404638658,
+        "kernel": 2.129200570721917,
+        "out_proj": 2.3309278463633905
+      },
+      "passes": false
+    },
+    {
+      "arm": "weak-then-0.1",
+      "checks": {
+        "dead_fraction_under_1pc": false,
+        "loss_not_worse": true,
+        "matched_ablation_bites": false,
+        "norms_within_2x": true
+      },
+      "dead_fraction": 0.4242621527777778,
+      "loss_regression": -0.0031080352947862188,
+      "matched_ablation_channels": 4021,
+      "matched_ablation_delta": 4.017013981938362,
+      "matched_ablation_requested": 4964,
+      "norm_ratio": {
+        "in_proj": 0.9390400647971646,
+        "kernel": 1.2564052053399561,
+        "out_proj": 0.991181713277067
+      },
+      "passes": false
+    }
+  ],
+  "passing": [],
+  "positive_control": {
+    "arm": "shipped-0.1",
+    "dead_fraction": 0.5386284722222222,
+    "exhibits_death": true,
+    "flagged_ablation_delta": 2.9802322387695312e-08
+  },
+  "thresholds": {
+    "max_dead_fraction": 0.01,
+    "max_loss_regression": 0.005,
+    "max_norm_ratio": 2.0
+  },
+  "valid": true
+}

@@ -25,11 +25,15 @@ from scripts.conv_health import (
     ConvArm,
     arm_checkpoint_path,
     arm_run_name,
+    load_stage,
     matched_ablation_set,
     probe_train_command,
     probe_total_tokens,
+    recommendation,
+    render_report,
     selected_arms,
     verdict,
+    write_report,
 )
 
 
@@ -569,3 +573,202 @@ def test_a_custom_arm_still_builds_a_valid_command():
     flags = arm.train_flags()
 
     assert flags[flags.index("--conv-proj-wd-hold-frac") + 1] == repr(0.1)
+
+
+# ----------------------------------------------------------------- report -----
+
+def _stage(tag, arms, *, control_dead=0.67, flagged_delta=1e-8, shape=None):
+    """A stage as `load_stage` returns one, built from the real `verdict`."""
+    scored = {"tag": tag, "control": CONTROL.name,
+              "arms": [_score(CONTROL.name, dead=control_dead,
+                              flagged_delta=flagged_delta)] + list(arms)}
+    return {"tag": tag, "verdict": verdict(scored),
+            "shape": shape or {"name": tag, "config": "conv-probe",
+                               "total_tokens": 1_228_800, "muon_lr": 0.15}}
+
+
+def _paired_like():
+    """The two stages as the escalation actually produced them.
+
+    Numbers from `runs/conv-health/verdict-{probe,paired}.json` so the renderer
+    is exercised on the shape of result it has to describe, rather than on a
+    clean case that never occurred.
+    """
+    probe = _stage("probe", [
+        _score("weak-0.0133", dead=0.0553, in_proj=0.1018, out_proj=0.0805,
+               kernel=0.0377, loss=5.0029, matched_delta=0.388,
+               matched={"channels": 1106, "requested_channels": 1112,
+                        "baseline_sized": False}),
+        _score("weak-then-0.1", dead=0.6888, in_proj=0.0764, out_proj=0.0479,
+               kernel=0.0496, loss=5.0012, matched_delta=1.631,
+               matched={"channels": 478, "requested_channels": 1112,
+                        "baseline_sized": False}),
+    ], control_dead=0.7240, flagged_delta=-8.94e-08)
+    paired = _stage("paired", [
+        _score("weak-0.0133", dead=0.1452, in_proj=0.1459, out_proj=0.1165,
+               kernel=0.1065, loss=5.0071, matched_delta=3.954,
+               matched={"channels": 4855, "requested_channels": 4964,
+                        "baseline_sized": False}),
+        _score("weak-then-0.1", dead=0.4243, in_proj=0.0751, out_proj=0.0496,
+               kernel=0.0628, loss=4.9845, matched_delta=4.017,
+               matched={"channels": 4021, "requested_channels": 4964,
+                        "baseline_sized": False}),
+    ], control_dead=0.5386, flagged_delta=2.98e-08,
+        shape={"name": "paired", "config": "daedalus-150m",
+               "total_tokens": 500_000_000, "muon_lr": 0.04})
+    return [probe, paired]
+
+
+def test_the_report_records_a_negative_result_when_no_arm_cleared_the_rule():
+    """The outcome the escalation actually produced. A report that renders a
+    table and stops leaves the reader to decide what it meant, which is the
+    point at which a bar gets relaxed to suit the numbers."""
+    verdicts = _paired_like()
+
+    advice = recommendation(verdicts)
+    text = render_report(verdicts)
+
+    assert advice["negative_result"] is True
+    assert advice["selected"] is None
+    assert advice["decisive_stage"] == "paired"
+    assert "negative result" in text.lower()
+
+
+def test_the_report_names_the_arm_when_one_actually_clears_the_rule():
+    verdicts = [_stage("paired", [
+        _score("weak-then-0.1", dead=0.0, in_proj=0.09, out_proj=0.06,
+               kernel=0.05, loss=4.95, matched_delta=0.6,
+               matched={"channels": 1112, "requested_channels": 1112,
+                        "baseline_sized": True})])]
+
+    advice = recommendation(verdicts)
+
+    assert advice["negative_result"] is False
+    assert advice["selected"] == "weak-then-0.1"
+    assert "weak-then-0.1" in render_report(verdicts)
+
+
+def test_a_stage_whose_control_did_not_die_is_reported_as_unreadable():
+    """`valid: false` means the sweep measured nothing, and an arm's 0% dead in
+    that stage is uninterpretable rather than a success. Rendering its table
+    without saying so is how a broken stage reads as a clean one."""
+    verdicts = [_stage("probe", [_score("weak-0.0133", dead=0.0)],
+                       control_dead=0.0)]
+
+    advice = recommendation(verdicts)
+    text = render_report(verdicts)
+
+    assert advice["decisive_stage"] is None
+    assert advice["negative_result"] is True
+    assert "unreadable" in text.lower()
+
+
+def test_the_report_shows_an_uncredited_ablation_as_short_not_as_its_delta():
+    """A 4.0-nat delta from 4,021 of a requested 4,964 channels is "every live
+    channel was removed", not "the arm's weakest baseline-sized set bites". The
+    delta alone reads as the check passing, so the size travels with it."""
+    text = render_report(_paired_like())
+
+    assert "4021/4964" in text
+    assert "uncredited" in text.lower()
+
+
+def test_the_report_shows_how_the_norm_cost_moved_between_the_two_shapes():
+    """The escalation's job. Weakening the decay cost 1.61x the control's
+    out_proj at the screen and 2.33x at the escalation, so the trade worsens
+    with the decay clock -- which is only visible with both stages side by
+    side, and is the reason a probe result was not enough."""
+    text = render_report(_paired_like())
+
+    assert "1.61" in text and "2.33" in text
+
+
+def test_the_report_states_that_it_cannot_revive_the_released_models_channels():
+    """Phase 5 step 8. The runs here are from-initialization arms at a proxy
+    shape; nothing in them touches V1's trained weights, and a reader carrying
+    "channel death fixed" into the release notes would be wrong."""
+    text = render_report(_paired_like())
+
+    assert "V2" in text
+    assert "revive" in text.lower() or "revived" in text.lower()
+
+
+def test_the_report_reads_the_control_ablation_as_the_instrument_working():
+    """The control flagged 53.9% of channels and removing all of them moved
+    held-out loss by 3e-08. That is the finding, not a footnote: the shipped
+    decay's dead channels were carrying nothing."""
+    text = render_report(_paired_like())
+
+    assert "53.86%" in text
+    assert "+2.98e-08 nats" in text
+    assert "positive control" in text.lower()
+
+
+def test_a_stage_that_was_never_scored_is_skipped_rather_than_invented(tmp_path):
+    (tmp_path / "verdict-paired.json").write_text(
+        __import__("json").dumps(_paired_like()[1]["verdict"]))
+
+    assert load_stage(tmp_path, "probe") is None
+    stage = load_stage(tmp_path, "paired")
+    assert stage["tag"] == "paired"
+    assert stage["shape"] == {}
+
+
+def test_the_cross_shape_table_carries_the_control_whose_own_death_moved():
+    """Every norm ratio is against the control *of its own stage*, and the
+    control's dead fraction fell 72.40% -> 53.86% between them. `weak-then-0.1`
+    fell 68.88% -> 42.43% over the same pair, which is following the baseline
+    down rather than improving on it -- unreadable without the control row."""
+    text = render_report(_paired_like())
+
+    assert f"`{CONTROL.name}` (control) | 72.40% -> 53.86%" in text
+
+
+def test_a_clause_no_arm_could_meet_is_reported_as_having_decided_nothing():
+    """All four matched ablations came back short, so the clause rejected every
+    arm without discriminating between any of them. A reader counting it as
+    evidence would overstate how much of the rule actually applied."""
+    verdicts = _paired_like()
+
+    advice = recommendation(verdicts)
+    text = render_report(verdicts)
+
+    kinds = [finding["kind"] for finding in advice["findings"]]
+    assert "ablation-clause-never-applied" in kinds
+    finding = next(f for f in advice["findings"]
+                   if f["kind"] == "ablation-clause-never-applied")
+    assert finding["decided_any_verdict"] == []
+    assert "decided no verdict" in text
+
+
+def test_an_arm_rejected_only_by_the_unmeetable_clause_is_flagged_for_re_reading():
+    """The case that would matter: an arm clearing dead fraction, norms and
+    loss, and failing only on a set that could not be baseline-sized. That is
+    a rejection resting on a measurement that was never taken."""
+    verdicts = [_stage("paired", [
+        _score("weak-then-0.1", dead=0.0, in_proj=0.09, out_proj=0.06,
+               kernel=0.05, loss=4.95, matched_delta=1.9,
+               matched={"channels": 400, "requested_channels": 1112,
+                        "baseline_sized": False})])]
+
+    advice = recommendation(verdicts)
+
+    finding = next(f for f in advice["findings"]
+                   if f["kind"] == "ablation-clause-never-applied")
+    assert finding["decided_any_verdict"] == ["weak-then-0.1"]
+    assert "re-read" in render_report(verdicts)
+
+
+def test_the_report_ends_without_a_blank_line_so_it_can_be_committed():
+    """`git diff --check` rejects a blank line at EOF, and the approved wrapper
+    runs it before every commit -- so a report that renders correctly and ends
+    in two newlines is a report the phase cannot push."""
+    text = render_report(_paired_like())
+
+    assert text.endswith("\n")
+    assert not text.endswith("\n\n")
+
+
+def test_write_report_refuses_when_nothing_was_ever_scored(tmp_path):
+    with pytest.raises(SystemExit, match="no verdict"):
+        write_report(tmp_path, tags=("probe", "paired"))

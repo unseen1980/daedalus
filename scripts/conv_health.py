@@ -684,6 +684,441 @@ def verdict(scored: dict) -> dict:
     }
 
 
+# =================================================================== report ====
+
+#: The phase deliverable. Written beside the verdicts it is assembled from,
+#: never inside a run directory, for the reason `REPORT_ROOT` exists.
+REPORT_NAME = "phase5-conv-decay.md"
+
+#: Both preregistered stages, in the order they were run. The screen is cheap
+#: and the escalation is the one a claim about this model can rest on, so a
+#: reader has to see which stage a number came from.
+STAGE_TITLES = {
+    "probe": "Screen -- hidden 256, Muon lr 0.15, 600 steps",
+    "paired": "Escalation -- the shipped 150M shape, 500M tokens, Muon lr 0.04",
+}
+
+#: Below this the flagged channels moved held-out loss by nothing a float can
+#: distinguish from zero, which is the reading that makes "dead" mean dead.
+FREE_ABLATION_NATS = 1e-4
+
+
+def load_stage(report_root, tag: str) -> Optional[dict]:
+    """One stage's verdict and the shape it was measured at, or None.
+
+    A stage that was never scored is absent rather than empty: the report is
+    assembled from artifacts on disk so that every number in it is the number
+    in the file it cites, and inventing a stage would break exactly that.
+    """
+    root = Path(report_root)
+    decision_path = root / f"verdict-{tag}.json"
+    if not decision_path.exists():
+        return None
+    scored_path = root / f"scored-{tag}.json"
+    shape = {}
+    if scored_path.exists():
+        shape = json.loads(scored_path.read_text()).get("shape") or {}
+    return {"tag": tag, "verdict": json.loads(decision_path.read_text()),
+            "shape": shape}
+
+
+def recommendation(stages: Sequence[dict]) -> dict:
+    """What the sweep licenses, derived from the verdicts rather than written.
+
+    The decisive stage is the *last valid* one, which is the escalation when it
+    ran: a screen at hidden 256 and lr 0.15 can rank schedules but cannot
+    establish anything about this model's channels, and a stage whose positive
+    control did not die measured nothing at all. If no stage is valid the
+    sweep has no finding, which is a different answer from "no arm passed" and
+    is reported as one.
+    """
+    valid = [stage for stage in stages if stage["verdict"].get("valid")]
+    if not valid:
+        return {
+            "decisive_stage": None,
+            "selected": None,
+            "negative_result": True,
+            "reason": ("no stage's positive control exhibited channel death, "
+                       "so no arm in this sweep is readable"),
+            "findings": [],
+        }
+
+    decisive = valid[-1]
+    decision = decisive["verdict"]
+    passing = decision.get("passing") or []
+    findings = []
+
+    control = decision["positive_control"]
+    delta = abs(float(control.get("flagged_ablation_delta") or 0.0))
+    if delta < FREE_ABLATION_NATS:
+        findings.append({
+            "kind": "control-death-is-free",
+            "stage": decisive["tag"],
+            "dead_fraction": control.get("dead_fraction"),
+            "flagged_ablation_delta": control.get("flagged_ablation_delta"),
+        })
+
+    arms = decision.get("arms") or []
+
+    # When no arm could supply the control's k anywhere, the ablation clause
+    # decided nothing, and a reader counting four failed clauses would
+    # overstate how much evidence the rule actually applied. Reported rather
+    # than repaired: every one of these arms fails on its dead fraction too, so
+    # crediting them changes no verdict, and rewriting a clause once it is
+    # known which arms it rejects is the move the plan forbids.
+    credited = [arm for arm in arms
+                if (arm.get("checks") or {}).get("matched_ablation_bites")]
+    if arms and not credited:
+        decisive_on_ablation = [
+            arm["arm"] for arm in arms
+            if all(passed for name, passed in (arm.get("checks") or {}).items()
+                   if name != "matched_ablation_bites")]
+        findings.append({
+            "kind": "ablation-clause-never-applied",
+            "stage": decisive["tag"],
+            "arms": [arm["arm"] for arm in arms],
+            "decided_any_verdict": decisive_on_ablation,
+        })
+
+    survivors = [arm for arm in arms if arm.get("dead_fraction") is not None]
+    if survivors and not passing:
+        best = min(survivors, key=lambda arm: arm["dead_fraction"])
+        findings.append({
+            "kind": "no-arm-approaches-the-bar",
+            "stage": decisive["tag"],
+            "arm": best["arm"],
+            "dead_fraction": best["dead_fraction"],
+            "bar": MAX_DEAD_FRACTION,
+        })
+
+    # The trade the escalation existed to price: an arm can buy fewer dead
+    # channels with projection growth, and growth is driven by the decay clock,
+    # so its cost is only visible once the same arm has been read at both
+    # shapes.
+    for arm in arms:
+        ratios = arm.get("norm_ratio") or {}
+        if not ratios or max(ratios.values()) <= MAX_NORM_RATIO:
+            continue
+        earlier = _arm_in_stages(stages[:-1] if len(stages) > 1 else [],
+                                 arm["arm"])
+        findings.append({
+            "kind": "death-traded-for-norm-growth",
+            "stage": decisive["tag"],
+            "arm": arm["arm"],
+            "norm_ratio": ratios,
+            "earlier_norm_ratio": (earlier or {}).get("norm_ratio"),
+            "limit": MAX_NORM_RATIO,
+        })
+
+    if passing:
+        return {
+            "decisive_stage": decisive["tag"],
+            "selected": passing[0],
+            "negative_result": False,
+            "reason": (f"{passing[0]} cleared every clause of the "
+                       f"preregistered rule at the {decisive['tag']} stage"),
+            "findings": findings,
+        }
+    return {
+        "decisive_stage": decisive["tag"],
+        "selected": None,
+        "negative_result": True,
+        "reason": ("no tested schedule cleared the preregistered rule; "
+                   "recording the negative result rather than relaxing a bar "
+                   "after seeing the numbers"),
+        "findings": findings,
+    }
+
+
+def _arm_in_stages(stages: Sequence[dict], name: str) -> Optional[dict]:
+    for stage in reversed(list(stages)):
+        for arm in stage["verdict"].get("arms") or []:
+            if arm.get("arm") == name:
+                return arm
+    return None
+
+
+def _pct(value: Optional[float], digits: int = 2) -> str:
+    return "n/a" if value is None else f"{100.0 * value:.{digits}f}%"
+
+
+def _check_mark(passed: bool) -> str:
+    return "pass" if passed else "FAIL"
+
+
+def _ablation_cell(arm: dict) -> str:
+    """The matched ablation's delta *and* the size that earns it a reading.
+
+    A big delta from a set that could not be baseline-sized means every live
+    channel was removed, which hurts by construction. Reporting the delta alone
+    is how that reads as the check passing.
+    """
+    delivered = arm.get("matched_ablation_channels")
+    requested = arm.get("matched_ablation_requested")
+    delta = arm.get("matched_ablation_delta")
+    size = ("n/a" if delivered is None or requested is None
+            else f"{delivered}/{requested}")
+    credited = (arm.get("checks") or {}).get("matched_ablation_bites")
+    note = "credited" if credited else "uncredited"
+    return f"{delta:+.3f} nats over {size} ({note})"
+
+
+def _stage_table(stage: dict) -> List[str]:
+    decision = stage["verdict"]
+    rows = [
+        "| arm | dead | in_proj | out_proj | kernel | held-out loss | "
+        "matched ablation | verdict |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for arm in decision.get("arms") or []:
+        ratios = arm.get("norm_ratio") or {}
+        rows.append(
+            f"| `{arm['arm']}` | {_pct(arm.get('dead_fraction'))} | "
+            f"{ratios.get('in_proj', float('nan')):.2f}x | "
+            f"{ratios.get('out_proj', float('nan')):.2f}x | "
+            f"{ratios.get('kernel', float('nan')):.2f}x | "
+            f"{_pct(arm.get('loss_regression'))} | "
+            f"{_ablation_cell(arm)} | "
+            f"{_check_mark(bool(arm.get('passes')))} |")
+    return rows
+
+
+def _stage_section(stage: dict) -> List[str]:
+    decision = stage["verdict"]
+    control = decision["positive_control"]
+    shape = stage.get("shape") or {}
+    title = STAGE_TITLES.get(stage["tag"], stage["tag"])
+    lines = [f"## {title}", ""]
+    if shape:
+        lines += [
+            f"`{shape.get('config', '?')}` at "
+            f"{int(shape.get('total_tokens', 0)):,} tokens, Muon lr "
+            f"{shape.get('muon_lr', '?')}.",
+            "",
+        ]
+
+    if not decision.get("valid"):
+        lines += [
+            f"**Unreadable.** The positive control `{control['arm']}` reached "
+            f"{_pct(control.get('dead_fraction'))} dead channels, below the "
+            f"{_pct(CONTROL_DEATH_FLOOR, 0)} floor this stage needs to show it "
+            f"can detect death at all. No arm below is interpretable: a 0% "
+            f"reading here is a metric that never fired, not channels that "
+            f"stayed alive.",
+            "",
+        ]
+        return lines + _stage_table(stage) + [""]
+
+    lines += [
+        f"Positive control `{control['arm']}` died at "
+        f"{_pct(control.get('dead_fraction'))}, and removing every channel it "
+        f"flagged moved held-out loss by "
+        f"{control.get('flagged_ablation_delta'):+.2e} nats. The stage is "
+        f"readable, and those channels were carrying nothing.",
+        "",
+        "Norm columns are the arm's alive-channel mean over the control's, "
+        "held-out loss is relative to the control, and negative is better.",
+        "",
+    ]
+    return lines + _stage_table(stage) + [""]
+
+
+def _cross_shape_section(stages: Sequence[dict]) -> List[str]:
+    """The same arm at both shapes, which is what the escalation bought.
+
+    The decay clock is `sum(lr_t) * wd`, so an arm's behaviour is a function of
+    the clock rather than of the learning rate, and a screen at 600 steps can
+    only rank schedules. Whether the ranking survives a 6x longer clock is the
+    question the escalation answers, and it is answered by this table.
+    """
+    if len(stages) < 2:
+        return []
+    names = [arm["arm"] for arm in stages[-1]["verdict"].get("arms") or []]
+    rows = ["| arm | dead | max norm ratio |", "|---|---|---|"]
+
+    # The control first, and it is not decoration. Every norm ratio in this
+    # table is *against the control of its own stage*, and the control's own
+    # dead fraction moved between the two shapes -- so an arm whose death fell
+    # from one stage to the next may only have followed its baseline down.
+    # Without this row the table invites reading that as the arm improving.
+    control_cells, control_name = [], "control"
+    for stage in stages:
+        control = stage["verdict"].get("positive_control") or {}
+        control_name = control.get("arm") or control_name
+        control_cells.append(_pct(control.get("dead_fraction")))
+    rows.append(f"| `{control_name}` (control) | "
+                f"{' -> '.join(control_cells)} | 1.00x by definition |")
+
+    for name in names:
+        cells = []
+        for stage in stages:
+            arm = _arm_in_stages([stage], name)
+            if arm is None:
+                cells.append(("n/a", "n/a"))
+                continue
+            ratios = (arm.get("norm_ratio") or {}).values()
+            cells.append((_pct(arm.get("dead_fraction")),
+                          f"{max(ratios):.2f}x" if ratios else "n/a"))
+        dead = " -> ".join(cell[0] for cell in cells)
+        norm = " -> ".join(cell[1] for cell in cells)
+        rows.append(f"| `{name}` | {dead} | {norm} |")
+    return [
+        "## The same arms at both shapes",
+        "",
+        "Left to right: " + " -> ".join(
+            f"`{stage['tag']}`" for stage in stages) + ". Muon decays once per "
+        "optimizer step, so what a channel experiences is `sum(lr_t) * wd` and "
+        "not tokens. The escalation runs a ~6x longer decay clock than the "
+        "screen, and an arm whose cost grows with the clock is an arm the "
+        "screen would have passed.",
+        "",
+    ] + rows + [""]
+
+
+def _findings_lines(advice: dict) -> List[str]:
+    lines = []
+    for finding in advice.get("findings") or []:
+        if finding["kind"] == "control-death-is-free":
+            lines.append(
+                f"- At the `{finding['stage']}` stage the shipped decay left "
+                f"{_pct(finding['dead_fraction'])} of conv channels dead and "
+                f"removing all of them cost "
+                f"{finding['flagged_ablation_delta']:+.2e} nats. The death is "
+                f"real and the channels were not being used, so this is a "
+                f"capacity-allocation result: a schedule that keeps them alive "
+                f"has to show they then *earn* their place, not merely that "
+                f"they are alive.")
+        elif finding["kind"] == "no-arm-approaches-the-bar":
+            lines.append(
+                f"- The lowest dead fraction any arm reached at the "
+                f"`{finding['stage']}` stage was {_pct(finding['dead_fraction'])} "
+                f"(`{finding['arm']}`), against a {_pct(finding['bar'])} bar. "
+                f"No tested schedule is close, so this is not a threshold that "
+                f"a slightly different ramp would have cleared.")
+        elif finding["kind"] == "ablation-clause-never-applied":
+            decided = finding["decided_any_verdict"]
+            consequence = (
+                f"It was decisive for {', '.join('`' + name + '`' for name in decided)}, "
+                f"which cleared every other clause -- so that rejection rests "
+                f"on a set that was never baseline-sized and should be re-read "
+                f"before it is relied on."
+                if decided else
+                "It decided no verdict: every arm it declined to credit also "
+                "failed on its dead fraction, so the rule's outcome would be "
+                "unchanged either way.")
+            lines.append(
+                f"- The matched-ablation clause could not be met by any arm at "
+                f"the `{finding['stage']}` stage. An arm needs the control's "
+                f"*per-layer* count of weakest-alive channels to spare, and a "
+                f"control that killed most of a layer requests more than any "
+                f"arm has left there. {consequence}")
+        elif finding["kind"] == "death-traded-for-norm-growth":
+            ratios = finding["norm_ratio"]
+            worst = max(ratios, key=lambda key: ratios[key])
+            earlier = finding.get("earlier_norm_ratio") or {}
+            trend = ""
+            if earlier.get(worst) is not None:
+                trend = (f" -- at the screen the same arm read "
+                         f"{earlier[worst]:.2f}x, so the cost grows with the "
+                         f"decay clock rather than staying put")
+            lines.append(
+                f"- `{finding['arm']}` bought its lower dead fraction with "
+                f"projection growth: {worst} reached {ratios[worst]:.2f}x the "
+                f"control's alive-channel baseline against a "
+                f"{finding['limit']:g}x limit{trend}. That is the equilibrium "
+                f"objection that kept a zero-decay arm out of this sweep, now "
+                f"measured on an arm that is in it.")
+    return lines
+
+
+def render_report(stages: Sequence[dict]) -> str:
+    """The phase 5 deliverable: what was measured, and what it does not license."""
+    advice = recommendation(stages)
+    lines = [
+        "# Phase 5: does a decay schedule stop ShortConv channel death?",
+        "",
+        "Four schedules for the conv projections, one variable between them, "
+        "read on the coupled `in_proj` x kernel x `out_proj` instrument rather "
+        "than on the shipped weight proxy. The fix under test *is* a change to "
+        "weight decay, so a magnitude metric can be satisfied by an arm where "
+        "nothing shrank as easily as by one where nothing died.",
+        "",
+        "**Scope: V2 only.** Every arm here is trained from initialization at "
+        "a proxy shape. Nothing in this phase touches the released V1 weights, "
+        "and no result below says a dead channel in the released model was "
+        "revived -- a channel that collapsed during a 59.9B-token run is not "
+        "brought back by choosing a different schedule for a future run.",
+        "",
+        "## The preregistered rule",
+        "",
+        f"> An arm is selected only when its dead fraction is under "
+        f"{_pct(MAX_DEAD_FRACTION, 0)}, its alive-channel projection norms "
+        f"stay within {MAX_NORM_RATIO:g}x the control's, its held-out loss is "
+        f"no worse than the control's by more than "
+        f"{_pct(MAX_LOSS_REGRESSION, 1)}, and removing its weakest "
+        f"*baseline-sized* channel set measurably costs held-out loss.",
+        "",
+        f"A stage is readable only if the control itself dies by at least "
+        f"{_pct(CONTROL_DEATH_FLOOR, 0)}. These four thresholds are constants "
+        f"in `verdict()`, and `runs/conv-health/verdict-probe.json` records the "
+        f"same values from before the escalation was launched, so none of them "
+        f"moved after the results landed.",
+        "",
+    ]
+
+    for stage in stages:
+        lines += _stage_section(stage)
+    lines += _cross_shape_section(stages)
+
+    lines += ["## Verdict", ""]
+    if advice["negative_result"]:
+        lines += [f"**Negative result.** {advice['reason'].capitalize()}.", ""]
+    else:
+        lines += [f"**Selected: `{advice['selected']}`.** "
+                  f"{advice['reason'].capitalize()}.", ""]
+    findings = _findings_lines(advice)
+    if findings:
+        lines += findings + [""]
+
+    lines += [
+        "## What this licenses for V2",
+        "",
+        "- The instrument works and the shipped schedule's death is real, so a "
+        "future from-scratch V2 can be measured on the same rule without "
+        "re-establishing the baseline.",
+        "- No schedule in this sweep is a recipe. A V2 candidate has to clear "
+        "the dead-fraction bar *and* the norm bar at a decay clock at least as "
+        "long as the escalation's; every arm here failed at least one.",
+        "- The dead channels cost nothing to remove, so the honest framing of "
+        "the opportunity is parameters that were paid for and not used, not "
+        "quality that was lost. Any claimed gain from reviving them has to be "
+        "shown as a held-out improvement, not as a higher alive count.",
+    ]
+    # Sections are built with their own trailing blank, so the document ends in
+    # however many the last one left. `git diff --check` rejects a blank line at
+    # EOF, which would make the report uncommittable by the approved wrapper.
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines) + "\n"
+
+
+def write_report(report_root=REPORT_ROOT, tags: Sequence[str] = ("probe", "paired"),
+                 out=None) -> Path:
+    """Assemble the report from whichever stages were scored."""
+    stages = [stage for stage in
+              (load_stage(report_root, tag) for tag in tags)
+              if stage is not None]
+    if not stages:
+        raise SystemExit(
+            f"no verdict for {list(tags)} under {report_root}; run `score` first")
+    path = Path(out) if out else Path(report_root) / REPORT_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(render_report(stages))
+    os.replace(temporary, path)
+    return path
+
+
 # ====================================================================== cli ====
 
 def main(argv=None) -> int:
@@ -721,7 +1156,14 @@ def main(argv=None) -> int:
     score.add_argument("--arms", default=None,
                        help="comma-separated subset; the control is required")
 
-    sub.add_parser("report")
+    report = sub.add_parser("report")
+    report.add_argument("--tags", default="probe,paired",
+                        help="stages to assemble, in order; missing ones are "
+                             "skipped rather than invented")
+    report.add_argument("--out", default=None)
+    report.add_argument("--json", action="store_true",
+                        help="print the single --tag verdict instead")
+
     sub.add_parser("shapes")
 
     args = parser.parse_args(argv)
@@ -769,10 +1211,16 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "report":
-        path = Path(args.report_root) / f"verdict-{args.tag}.json"
-        if not path.exists():
-            raise SystemExit(f"no verdict at {path}; run `score` first")
+        if args.json:
+            path = Path(args.report_root) / f"verdict-{args.tag}.json"
+            if not path.exists():
+                raise SystemExit(f"no verdict at {path}; run `score` first")
+            print(path.read_text())
+            return 0
+        tags = tuple(tag.strip() for tag in args.tags.split(",") if tag.strip())
+        path = write_report(args.report_root, tags=tags, out=args.out)
         print(path.read_text())
+        print(f"wrote {path}")
         return 0
 
     raise SystemExit(f"unhandled command {args.command}")
