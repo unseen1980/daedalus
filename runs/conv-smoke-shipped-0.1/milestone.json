@@ -1,0 +1,14 @@
+{
+  "revision": "conv-smoke-shipped-0.1-stable-end-step16",
+  "step": 16,
+  "tokens_seen": 32768,
+  "total_steps": 20,
+  "decay_frac": 0.2,
+  "lr_mult_at_branch": 0.32,
+  "muon_lr": 0.15,
+  "adam_lr": 0.0003,
+  "config": "conv-probe",
+  "repo": null,
+  "path_in_repo": "milestone/conv-smoke-shipped-0.1/checkpoint.pt",
+  "created_at": 1787629699.1912868
+}
