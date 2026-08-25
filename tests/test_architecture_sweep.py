@@ -322,3 +322,149 @@ def test_run_arm_supervises_the_checkpoint_and_records_the_arm(tmp_path, monkeyp
     assert extra["kv_bytes_per_context_token"] == arm.kv_bytes_per_context_token
     assert report["steps"] == 2
     assert report["total_tokens"] == 2 * STAGE_A.batch_tokens
+
+
+# --------------------------------------------------------------- re-entry ----
+
+def _close_a_finished_run(arm, tmp_path, **overrides):
+    """Leave behind exactly what a completed arm leaves: a checkpoint and the
+    marker `run_with_resume` closes over it.
+
+    Written through the real `write_inflight`/`mark_inflight_done` rather than
+    hand-built, so this pins the on-disk schema the guard reads against the one
+    the supervisor writes.
+    """
+    from daedalus.supervise import mark_inflight_done, write_inflight
+
+    kwargs = {"data_dir": "d", "run_name": arm_run_name(arm),
+              "total_tokens": 2 * STAGE_A.batch_tokens, "device": "cpu"}
+    kwargs.update(overrides)
+    command = train_command(arm, **kwargs)
+    ckpt = arm_checkpoint_path(arm, run_root=str(tmp_path))
+    ckpt.parent.mkdir(parents=True, exist_ok=True)
+    ckpt.write_bytes(b"the stage-A result")
+    write_inflight(str(ckpt.parent), list(command), str(ckpt))
+    mark_inflight_done(str(ckpt.parent), "completed")
+    return ckpt
+
+
+def _no_trainer(monkeypatch):
+    """Fail loudly if the supervisor is entered at all."""
+    import daedalus.supervise as supervise
+
+    def refuse(cmd, ckpt_path, **kw):
+        raise AssertionError(f"retrained a finished arm over {ckpt_path}")
+
+    monkeypatch.setattr(supervise, "run_with_resume", refuse)
+    monkeypatch.setattr(supervise, "start_watchdog", lambda *a, **k: None)
+    monkeypatch.setattr(supervise, "stop_watchdog", lambda *a, **k: None)
+
+
+def test_a_finished_arm_is_not_retrained_over_its_own_checkpoint(tmp_path,
+                                                                 monkeypatch):
+    """The checkpoint beside a closed marker *is* the stage-A result.
+
+    The supervisor cannot protect it: a completed run's marker is closed, so
+    `interrupted_marker` rightly declines to resume it, and `train.py` then
+    starts at step 0 and overwrites the checkpoint on its first save. A sweep
+    relaunched after a lost session would destroy all fifteen finished arms in
+    the course of reproducing them, and nothing in any log would say so.
+    """
+    _no_trainer(monkeypatch)
+    arm = ARMS_BY_NAME["a2-kv1"]
+    ckpt = _close_a_finished_run(arm, tmp_path)
+
+    report = run_arm(arm, data_dir="d", run_root=str(tmp_path), device="cpu",
+                     total_tokens=2 * STAGE_A.batch_tokens)
+
+    assert report["skipped"] == "already-completed"
+    assert report["returncodes"] == []
+    assert ckpt.read_bytes() == b"the stage-A result"
+
+
+def test_a_skipped_arm_is_recorded_rather_than_omitted(tmp_path, monkeypatch):
+    """A sweep artifact that drops a skipped arm and one that never ran it read
+    identically, and the second is a gap in the curve."""
+    _no_trainer(monkeypatch)
+    arm = ARMS_BY_NAME["a2-kv1"]
+    _close_a_finished_run(arm, tmp_path)
+
+    report = run_arm(arm, data_dir="d", run_root=str(tmp_path), device="cpu",
+                     total_tokens=2 * STAGE_A.batch_tokens)
+
+    assert report["arm"] == "a2-kv1"
+    assert report["preset"] == arm.config
+    assert report["steps"] == 2
+    assert report["command"] == train_command(
+        arm, data_dir="d", run_name=arm_run_name(arm),
+        total_tokens=2 * STAGE_A.batch_tokens, device="cpu")
+
+
+def test_a_finished_run_of_a_different_budget_is_not_reused(tmp_path,
+                                                            monkeypatch):
+    """A shorter smoke that happens to share a run directory is a different
+    experiment, and reusing it would report a 100M-token arm that trained on
+    2M."""
+    import daedalus.supervise as supervise
+
+    seen = {}
+    monkeypatch.setattr(supervise, "run_with_resume",
+                        lambda cmd, ckpt_path, **kw: seen.update(cmd=list(cmd))
+                        or {"attempts": 1, "resumed": False, "returncodes": [0]})
+    monkeypatch.setattr(supervise, "start_watchdog", lambda *a, **k: None)
+    monkeypatch.setattr(supervise, "stop_watchdog", lambda *a, **k: None)
+
+    arm = ARMS_BY_NAME["a2-kv1"]
+    _close_a_finished_run(arm, tmp_path, total_tokens=STAGE_A.batch_tokens)
+
+    report = run_arm(arm, data_dir="d", run_root=str(tmp_path), device="cpu",
+                     total_tokens=2 * STAGE_A.batch_tokens)
+
+    assert "skipped" not in report
+    assert "--total-tokens" in seen["cmd"]
+
+
+def test_a_halted_arm_is_not_mistaken_for_a_finished_one(tmp_path, monkeypatch):
+    """`mark_inflight_done` closes the marker for a watchdog halt too. Reading
+    `completed` rather than `outcome` would bank a diverged run as a result."""
+    from daedalus.supervise import mark_inflight_done
+
+    import daedalus.supervise as supervise
+    seen = {}
+    monkeypatch.setattr(supervise, "run_with_resume",
+                        lambda cmd, ckpt_path, **kw: seen.update(ran=True)
+                        or {"attempts": 1, "resumed": False, "returncodes": [0]})
+    monkeypatch.setattr(supervise, "start_watchdog", lambda *a, **k: None)
+    monkeypatch.setattr(supervise, "stop_watchdog", lambda *a, **k: None)
+
+    arm = ARMS_BY_NAME["a2-kv1"]
+    ckpt = _close_a_finished_run(arm, tmp_path)
+    mark_inflight_done(str(ckpt.parent), "halted:diverged")
+
+    report = run_arm(arm, data_dir="d", run_root=str(tmp_path), device="cpu",
+                     total_tokens=2 * STAGE_A.batch_tokens)
+
+    assert "skipped" not in report
+    assert seen.get("ran") is True
+
+
+def test_refresh_retrains_a_finished_arm_deliberately(tmp_path, monkeypatch):
+    """The guard protects against an accidental relaunch, not against an
+    operator who means it."""
+    import daedalus.supervise as supervise
+
+    seen = {}
+    monkeypatch.setattr(supervise, "run_with_resume",
+                        lambda cmd, ckpt_path, **kw: seen.update(ran=True)
+                        or {"attempts": 1, "resumed": False, "returncodes": [0]})
+    monkeypatch.setattr(supervise, "start_watchdog", lambda *a, **k: None)
+    monkeypatch.setattr(supervise, "stop_watchdog", lambda *a, **k: None)
+
+    arm = ARMS_BY_NAME["a2-kv1"]
+    _close_a_finished_run(arm, tmp_path)
+
+    report = run_arm(arm, data_dir="d", run_root=str(tmp_path), device="cpu",
+                     total_tokens=2 * STAGE_A.batch_tokens, refresh=True)
+
+    assert seen.get("ran") is True
+    assert "skipped" not in report

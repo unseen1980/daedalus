@@ -315,17 +315,49 @@ def _write_json(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
+def finished_run(command: Sequence[str], ckpt) -> Optional[dict]:
+    """The closed marker of an identical run that already finished, if any.
+
+    All four conditions matter. `outcome == "completed"` rather than
+    `completed is True`, because `mark_inflight_done` closes the marker for a
+    watchdog halt and for exhausted attempts too, and neither of those is a
+    result worth keeping. The command must match exactly, so a changed budget,
+    schedule or preset is a different experiment and runs. And the checkpoint
+    must actually be there, because the marker records what was *intended*.
+    """
+    from daedalus.supervise import INFLIGHT_SCHEMA, read_inflight
+
+    ckpt = Path(ckpt)
+    marker = read_inflight(str(ckpt.parent))
+    if marker is None or marker.get("schema") != INFLIGHT_SCHEMA:
+        return None
+    if marker.get("outcome") != "completed":
+        return None
+    if marker.get("cmd") != list(command):
+        return None
+    return marker if ckpt.exists() else None
+
+
 def run_arm(arm: ArchArm, *, data_dir: str, run_root: str = RUN_ROOT,
             device: str = "cuda", tag: str = "stagea",
             shape: StageShape = STAGE_A, total_tokens: Optional[int] = None,
             val_dir: Optional[str] = None, max_attempts: int = 3,
-            stall_min: float = 20.0) -> dict:
+            stall_min: float = 20.0, refresh: bool = False) -> dict:
     """Train one arm under the supervisor, so an interruption continues it.
 
     `run_with_resume` reads the open in-flight marker beside the checkpoint, so
     a relaunch after the launching session died continues from where the arm got
     to rather than restarting it -- which is how phase 4 lost 60.3M tokens next
     to a checkpoint it never opened.
+
+    A run that already *finished* needs the opposite guard, and does not get it
+    from the supervisor. Its marker is closed, so `interrupted_marker` correctly
+    declines to resume it -- and `train.py` then starts at step 0 and overwrites
+    the checkpoint on its first save. That is the same lost-work failure from
+    the other end: a relaunched sweep would destroy the fifteen finished arms
+    that *are* the stage-A result, silently, in the course of reproducing them.
+    So a completed identical run is returned rather than re-entered, unless
+    `refresh` asks for it deliberately.
     """
     from daedalus.supervise import run_with_resume, start_watchdog, stop_watchdog
 
@@ -338,6 +370,17 @@ def run_arm(arm: ArchArm, *, data_dir: str, run_root: str = RUN_ROOT,
     ckpt = arm_checkpoint_path(arm, tag, run_root)
     run_dir = ckpt.parent
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    common = {"arm": arm.name, "preset": arm.config, "run": name,
+              "run_dir": str(run_dir), "shape": shape.name,
+              "total_tokens": budget, "steps": budget // shape.batch_tokens,
+              "command": list(command)}
+    if not refresh and finished_run(command, ckpt) is not None:
+        # Recorded, not omitted: an artifact that drops a skipped arm and one
+        # that never ran it look identical to a reader.
+        return {**common, "skipped": "already-completed", "attempts": 0,
+                "resumed": False, "returncodes": []}
+
     watchdog = start_watchdog(name, str(run_dir), budget, stall_min=stall_min,
                               supervised=True)
     try:
@@ -353,23 +396,26 @@ def run_arm(arm: ArchArm, *, data_dir: str, run_root: str = RUN_ROOT,
                             "total_tokens": budget})
     finally:
         stop_watchdog(watchdog)
-    return {"arm": arm.name, "preset": arm.config, "run": name,
-            "run_dir": str(run_dir), "shape": shape.name,
-            "total_tokens": budget, "steps": budget // shape.batch_tokens,
-            "command": list(command), **report}
+    return {**common, **report}
 
 
 def sweep(*, data_dir: str, run_root: str = RUN_ROOT,
           report_root: str = REPORT_ROOT, device: str = "cuda",
           tag: str = "stagea", shape: StageShape = STAGE_A,
           total_tokens: Optional[int] = None, val_dir: Optional[str] = None,
-          arms: Sequence[ArchArm] = ARMS) -> dict:
-    """Every arm in order, control first."""
+          arms: Sequence[ArchArm] = ARMS, refresh: bool = False) -> dict:
+    """Every arm in order, control first.
+
+    Re-entrant by design: arms that already finished are returned from their
+    closed markers, so relaunching a sweep the deadline or a dead session cut
+    short costs only the arms that have not run.
+    """
     results = []
     for arm in arms:
         results.append(run_arm(arm, data_dir=data_dir, run_root=run_root,
                                device=device, tag=tag, shape=shape,
-                               total_tokens=total_tokens, val_dir=val_dir))
+                               total_tokens=total_tokens, val_dir=val_dir,
+                               refresh=refresh))
         # Rewritten after every arm, so a sweep cut short still leaves the arms
         # that finished, in the order they were run.
         _write_json(Path(report_root) / f"sweep-{tag}.json",
@@ -411,6 +457,9 @@ def main(argv=None) -> int:
         cmd.add_argument("--device", default="cuda")
         cmd.add_argument("--total-tokens", type=int, default=None,
                          help="override the shape's budget (smokes only)")
+        cmd.add_argument("--refresh", action="store_true",
+                         help="re-train arms that already completed, "
+                              "overwriting their checkpoints")
 
     args = parser.parse_args(argv)
     shape = SHAPES[args.shape]
@@ -431,7 +480,8 @@ def main(argv=None) -> int:
         report = run_arm(ARMS_BY_NAME[args.arm], data_dir=args.data_dir,
                          run_root=args.run_root, device=args.device,
                          tag=args.tag, shape=shape,
-                         total_tokens=args.total_tokens, val_dir=args.val_dir)
+                         total_tokens=args.total_tokens, val_dir=args.val_dir,
+                         refresh=args.refresh)
         print(json.dumps(report, indent=2))
         return 0
 
@@ -440,8 +490,10 @@ def main(argv=None) -> int:
                        report_root=args.report_root, device=args.device,
                        tag=args.tag, shape=shape,
                        total_tokens=args.total_tokens, val_dir=args.val_dir,
-                       arms=selected_arms(args.arms))
-        print(json.dumps({"arms": [a["arm"] for a in report["arms"]]}, indent=2))
+                       arms=selected_arms(args.arms), refresh=args.refresh)
+        print(json.dumps({"arms": [a["arm"] for a in report["arms"]],
+                          "skipped": [a["arm"] for a in report["arms"]
+                                      if a.get("skipped")]}, indent=2))
         return 0
 
     raise SystemExit(f"unhandled command {args.command}")
