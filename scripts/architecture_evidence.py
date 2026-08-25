@@ -36,6 +36,25 @@ bytes sitting in its run directory now. A `--refresh` that retrained an arm, or 
 stage-B run landing in a stage-A directory, must not leave the old shape's
 artifact behind wearing the new arm's name.
 
+**Which arms are measured is read, not retyped.** `--arms-from-report stagea`
+takes the list out of that screen's own report, exactly as stage B takes its
+training list. It matters most here because the retrieval column is the most
+expensive thing this phase runs: one `llama-cli` process per item, two tasks over
+four depths at `RETRIEVAL_PER_DEPTH` items, so ~400 stock invocations per arm --
+around half an hour of CPU each, or most of a day for the full grid, on a box
+that is training at the same time. Spending that on arms the screen has already
+put outside its quality floor buys nothing the gate will read: `bpb_check`
+blocks them whatever their retention turns out to be. Reading the list rather
+than typing it also means the arms measured here and the arms trained at stage B
+cannot silently differ.
+
+Unlike stage B, this pass may read the report of the shape it is measuring.
+Selecting stage A's arms from stage A's own *BPB* screen and then measuring their
+retrieval, export and decode is not circular -- the columns are different
+questions, and none of them chose the arms. What would be circular is a training
+stage taking its arm list from its own results, which is why `advanced_selection`
+keeps that refusal and this caller does not ask for it.
+
 **The intermediate HF directory is deleted once its Q4_0 exists.** Fifteen arms
 at ~105M parameters is ~3GB of safetensors that no later step reads, on a box
 that also holds fifteen checkpoints and a corpus. It is deleted only after a
@@ -65,7 +84,9 @@ from scripts.architecture_report import (DECODE_REPORT,  # noqa: E402
                                          RETRIEVAL_GATE_TASKS,
                                          RETRIEVAL_MIN_ITEMS_PER_DEPTH,
                                          RETRIEVAL_ROOT, TRAINED_CONTEXT,
-                                         read_decode_passes, read_retrieval)
+                                         advanced_selection,
+                                         read_decode_passes, read_retrieval,
+                                         selection_notes)
 from scripts.architecture_sweep import (ARMS, REPORT_ROOT, RUN_ROOT,  # noqa: E402
                                         SHAPES, STAGE_A, ArchArm, StageShape,
                                         arm_checkpoint_path, arm_run_name,
@@ -141,6 +162,34 @@ def _read_json(path: Path) -> dict:
 
 
 # =================================================================== layout ====
+
+def resolve_arms(args, shape: StageShape
+                 ) -> Tuple[Sequence[ArchArm], Optional[dict]]:
+    """The arms this pass measures, and the record of where the list came from.
+
+    `--arms` and `--arms-from-report` both name the arm list, and the point of
+    the second is that the first is not retyped, so naming both is refused rather
+    than resolved by precedence. `selected_arms` puts the control first either
+    way: every column here is read as a delta against it, and `decode_check` will
+    not read an arm and the control out of separate invocations at all.
+
+    No `for_shape`: see the module docstring. A stage selecting its own *training*
+    arms from its own results is circular; measuring a different column on the
+    arms a BPB screen advanced is the intended use.
+    """
+    if not getattr(args, "arms_from_report", None):
+        return selected_arms(args.arms, arms_for(shape)), None
+    if args.arms:
+        raise SystemExit(
+            "--arms and --arms-from-report both name the arm list, and the "
+            "point of the second is that the first is not retyped; pass one")
+    selection = advanced_selection(from_tag=args.arms_from_report,
+                                   report_root=args.report_root)
+    for note in selection_notes(selection):
+        print(note, file=sys.stderr)
+    return (selected_arms(",".join(selection["selected"]), arms_for(shape)),
+            selection)
+
 
 def arm_evidence_dir(arm: ArchArm, tag: str = "stagea",
                      root: str = EVIDENCE_ROOT) -> Path:
@@ -294,7 +343,7 @@ def export_arm(arm: ArchArm, *, tag: str = "stagea", run_root: str = RUN_ROOT,
 
 def export_arms(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
                 shape: StageShape = STAGE_A, root: str = EVIDENCE_ROOT,
-                **kwargs) -> dict:
+                selection: Optional[dict] = None, **kwargs) -> dict:
     """Every arm, control first, with the manifest rewritten after each one.
 
     Re-entrant like the sweep and the scoring pass: a session that ends partway
@@ -302,17 +351,26 @@ def export_arms(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
     arm name rather than listed, because this file is *merged* on every rerun --
     a list would need a de-duplication rule, and the one it would need is "keep
     the newest record per arm", which is what a dict already is.
+
+    `selection` is the report that chose these arms when one did. Written into
+    the manifest rather than left implicit: "these four arms" and "the four arms
+    this report advanced, on this rule" are different claims about a partial
+    manifest, and only the second can be checked later.
     """
     path = manifest_path(tag, root)
     manifest = _read_json(path)
     records = dict(manifest.get("arms") or {})
+    # Preserved across a rerun that did not read a report, for the same reason
+    # the records are: a narrower second pass must not erase where the first
+    # pass's arm list came from.
+    advanced_from = selection or manifest.get("advanced_from")
     for arm in arms:
         records[arm.name] = export_arm(arm, tag=tag, root=root,
                                        previous=records.get(arm.name), **kwargs)
         _write_json(path, {"tag": tag, "shape": shape.name, "at": _utcnow(),
-                           "arms": records})
+                           "advanced_from": advanced_from, "arms": records})
     return {"tag": tag, "shape": shape.name, "manifest": str(path),
-            "arms": records}
+            "advanced_from": advanced_from, "arms": records}
 
 
 def summarize_export(records: dict) -> dict:
@@ -453,7 +511,8 @@ def score_retrieval_arm(arm: ArchArm, record: Optional[dict], *,
 def score_retrieval_arms(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
                          shape: StageShape = STAGE_A,
                          evidence_root: str = EVIDENCE_ROOT,
-                         root: str = RETRIEVAL_ROOT, **kwargs) -> dict:
+                         root: str = RETRIEVAL_ROOT,
+                         selection: Optional[dict] = None, **kwargs) -> dict:
     """Every arm with an artifact, control first, summary rewritten as it goes.
 
     The export manifest is the input: an arm is scored on the GGUF that manifest
@@ -464,13 +523,15 @@ def score_retrieval_arms(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
     path = Path(evidence_root) / f"retrieval-{tag}.json"
     summary = _read_json(path)
     records = dict(summary.get("arms") or {})
+    advanced_from = selection or summary.get("advanced_from")
     for arm in arms:
         records[arm.name] = score_retrieval_arm(arm, exported.get(arm.name),
                                                 tag=tag, root=root, **kwargs)
         _write_json(path, {"tag": tag, "shape": shape.name, "at": _utcnow(),
-                           "retrieval_root": str(root), "arms": records})
+                           "retrieval_root": str(root),
+                           "advanced_from": advanced_from, "arms": records})
     return {"tag": tag, "shape": shape.name, "summary": str(path),
-            "arms": records}
+            "advanced_from": advanced_from, "arms": records}
 
 
 def summarize_retrieval(records: dict) -> dict:
@@ -554,7 +615,7 @@ def run_decode(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
                llama_cpp_dir: str = DEFAULT_LLAMA_CPP_DIR, threads: int = 8,
                rounds: int = DECODE_ROUNDS, n_gen: int = DECODE_N_GEN,
                depths: Sequence[int] = DECODE_DEPTHS, note: Optional[str] = None,
-               refresh: bool = False,
+               refresh: bool = False, selection: Optional[dict] = None,
                runner: Optional[Callable[[Sequence[str], float],
                                          Tuple[int, str]]] = None) -> dict:
     """Benchmark every exported arm against the control in one alternating pass."""
@@ -563,7 +624,8 @@ def run_decode(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
     models = decode_models(records, arms, tag)
     common = {"tag": tag, "shape": shape.name, "out": str(out),
               "models": models, "depths": [int(depth) for depth in depths],
-              "threads": int(threads), "at": _utcnow()}
+              "threads": int(threads), "advanced_from": selection,
+              "at": _utcnow()}
     if not models:
         return {**common, "skipped": "no-gguf", "measured": False,
                 "reason": "no arm in the export manifest has a Q4_0 GGUF yet"}
@@ -601,10 +663,20 @@ def run_decode(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
 
 # ====================================================================== cli ====
 
+#: One help string for all three passes: the flag means the same thing in each,
+#: and a subcommand whose description of it drifted would read as a different
+#: mechanism.
+ARMS_FROM_REPORT_HELP = ("take the arms from that tag's committed report "
+                         "instead, so the columns are measured on the arms the "
+                         "screen advanced rather than on a retyped list")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-root", default=RUN_ROOT)
     parser.add_argument("--evidence-root", default=EVIDENCE_ROOT)
+    parser.add_argument("--report-root", default=REPORT_ROOT,
+                        help="where --arms-from-report reads a committed report")
     parser.add_argument("--shape", default=STAGE_A.name, choices=list(SHAPES),
                         help="which stage's arms and presets to read")
     parser.add_argument("--tag", default=None,
@@ -616,6 +688,8 @@ def main(argv=None) -> int:
     export = sub.add_parser("export")
     export.add_argument("--arms", default=None,
                         help="comma-separated subset, control first")
+    export.add_argument("--arms-from-report", default=None, metavar="TAG",
+                        help=ARMS_FROM_REPORT_HELP)
     export.add_argument("--llama-cpp-dir", default=DEFAULT_LLAMA_CPP_DIR)
     export.add_argument("--keep-hf", action="store_true",
                         help="keep the intermediate HF directory that the "
@@ -627,6 +701,10 @@ def main(argv=None) -> int:
     retrieval = sub.add_parser("retrieval")
     retrieval.add_argument("--arms", default=None,
                            help="comma-separated subset, control first")
+    retrieval.add_argument("--arms-from-report", default=None, metavar="TAG",
+                           help=ARMS_FROM_REPORT_HELP + "; this is the pass "
+                                "where that matters most, at ~400 stock "
+                                "llama-cli invocations per arm")
     retrieval.add_argument("--llama-cpp-dir", default=DEFAULT_LLAMA_CPP_DIR)
     retrieval.add_argument("--retrieval-root", default=RETRIEVAL_ROOT,
                            help="where the gate reads one directory per arm run")
@@ -645,6 +723,8 @@ def main(argv=None) -> int:
     decode.add_argument("--arms", default=None,
                         help="comma-separated subset, control first; every arm "
                              "named here is measured in one alternating pass")
+    decode.add_argument("--arms-from-report", default=None, metavar="TAG",
+                        help=ARMS_FROM_REPORT_HELP)
     decode.add_argument("--llama-cpp-dir", default=DEFAULT_LLAMA_CPP_DIR)
     decode.add_argument("--out", default=DECODE_REPORT,
                         help="the single report the gate reads; arm and control "
@@ -665,19 +745,22 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     shape = SHAPES[args.shape]
     tag = shape.tag if args.tag is None else args.tag
+    arms, selection = resolve_arms(args, shape)
 
     if args.command == "export":
-        report = export_arms(selected_arms(args.arms, arms_for(shape)),
-                             tag=tag, shape=shape, root=args.evidence_root,
+        report = export_arms(arms, tag=tag, shape=shape,
+                             root=args.evidence_root,
                              run_root=args.run_root,
                              llama_cpp_dir=args.llama_cpp_dir,
-                             keep_hf=args.keep_hf, refresh=args.refresh)
+                             keep_hf=args.keep_hf, refresh=args.refresh,
+                             selection=selection)
         print(json.dumps({**summarize_export(report["arms"]),
+                          "advanced_from": (report["advanced_from"] or {}).get("report"),
                           "manifest": report["manifest"]}, indent=2))
         return 0
 
     if args.command == "retrieval":
-        report = score_retrieval_arms(selected_arms(args.arms, arms_for(shape)),
+        report = score_retrieval_arms(arms,
                                       tag=tag, shape=shape,
                                       evidence_root=args.evidence_root,
                                       root=args.retrieval_root,
@@ -685,19 +768,21 @@ def main(argv=None) -> int:
                                       per_depth=args.per_depth,
                                       threads=args.threads, n_ctx=args.n_ctx,
                                       seed=args.seed, depths=args.depths,
-                                      refresh=args.refresh)
+                                      refresh=args.refresh, selection=selection)
         print(json.dumps({**summarize_retrieval(report["arms"]),
+                          "advanced_from": (report["advanced_from"] or {}).get("report"),
                           "summary": report["summary"]}, indent=2))
         return 0
 
     if args.command == "decode":
-        report = run_decode(selected_arms(args.arms, arms_for(shape)),
+        report = run_decode(arms,
                             tag=tag, shape=shape,
                             evidence_root=args.evidence_root, out=args.out,
                             llama_cpp_dir=args.llama_cpp_dir,
                             threads=args.threads, rounds=args.rounds,
                             n_gen=args.n_gen, depths=args.depths,
-                            note=args.note, refresh=args.refresh)
+                            note=args.note, refresh=args.refresh,
+                            selection=selection)
         print(json.dumps(report, indent=2))
         # A refused or incomplete benchmark is a non-zero exit: the caller is a
         # phase, and a phase that "passed" without measuring is how an

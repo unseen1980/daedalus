@@ -604,6 +604,28 @@ def advanced_selection(*, from_tag: str = STAGE_A.tag,
     }
 
 
+def selection_notes(selection: dict) -> List[str]:
+    """What a launcher that took its arm list from a report should say.
+
+    Two facts, and a reader of the launched pass needs both: which report chose
+    these arms, and whether it chose them over the whole grid or over the part of
+    it that had been scored. Shared rather than restated at each call site
+    because a warning that only some launchers print is worse than none -- it
+    makes a partial basis look like a property of the launcher rather than of the
+    evidence. The truncated case warns and continues, per the degradation policy,
+    which prunes rather than blocks.
+    """
+    notes = []
+    screened = selection.get("screened") or {}
+    if not screened.get("complete"):
+        notes.append(f"[architecture] warning: {selection['report']} scored "
+                     f"{screened.get('scored')} of {screened.get('grid')} arms; "
+                     f"these arms are the frontier of a partial screen")
+    notes.append(f"[architecture] {selection['selected']} advanced by "
+                 f"{selection['report']}")
+    return notes
+
+
 def build_report(rows: Sequence[dict], *, tag: str = "stagea",
                  shape: StageShape = STAGE_A,
                  source: str = MATCHED_HOLDOUT_SOURCE) -> dict:

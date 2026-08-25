@@ -649,23 +649,18 @@ def main(argv=None) -> int:
                     "pass one")
             # Imported here rather than at module scope: the report module reads
             # this one, and the arrow only points that way at import time.
-            from scripts.architecture_report import advanced_selection
+            from scripts.architecture_report import (advanced_selection,
+                                                     selection_notes)
 
             selection = advanced_selection(from_tag=args.arms_from_report,
                                            report_root=args.report_root,
                                            for_shape=shape.name)
             names = ",".join(selection["selected"])
-            screened = selection["screened"]
-            if not screened["complete"]:
-                # Surfaced, never silent: a frontier over a truncated screen is
-                # still the best evidence available, but a reader of the stage-B
-                # result must know the choice was made over part of the grid.
-                print(f"[architecture] warning: {selection['report']} scored "
-                      f"{screened['scored']} of {screened['grid']} arms; these "
-                      f"arms are the frontier of a partial screen",
-                      file=sys.stderr)
-            print(f"[architecture] {selection['selected']} advanced by "
-                  f"{selection['report']}", file=sys.stderr)
+            # Surfaced, never silent: a frontier over a truncated screen is
+            # still the best evidence available, but a reader of the stage-B
+            # result must know the choice was made over part of the grid.
+            for note in selection_notes(selection):
+                print(note, file=sys.stderr)
 
         report = sweep(data_dir=args.data_dir, run_root=args.run_root,
                        report_root=args.report_root, device=args.device,

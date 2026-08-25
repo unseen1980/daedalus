@@ -823,3 +823,149 @@ def test_cli_export_writes_the_manifest_and_summarizes(tmp_path, capsys,
     printed = json.loads(capsys.readouterr().out)
     assert printed["quantized"] == [CONTROL.name]
     assert json.loads(Path(printed["manifest"]).read_text())["tag"] == "stagea"
+
+
+# ------------------------------------------ the decision reaches the columns ----
+# The retrieval column is one `llama-cli` process per item -- two tasks, four
+# depths, RETRIEVAL_PER_DEPTH items -- so measuring an arm the screen already put
+# outside its BPB floor spends about half an hour of a shared CPU on a cell the
+# gate will never read: `bpb_check` blocks that arm whatever its retention is.
+# The arm list therefore comes from the same committed report stage B trains
+# from, and both refusals that protects are exercised here.
+
+
+def _commit_stage_a_report(root, *, selected, verdict="advance", scored=None):
+    """The half of the stage-A report a launcher reads, where it reads it."""
+    from scripts.architecture_report import report_path
+    from scripts.architecture_sweep import ARMS, STAGE_A
+
+    path = report_path(STAGE_A.tag, str(root))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "tag": STAGE_A.tag, "created_at": "2026-08-25T00:00:00Z",
+        "control": CONTROL.name, "shape": {"name": STAGE_A.name},
+        "rows": [{"arm": arm.name} for arm in (ARMS if scored is None
+                                               else scored)],
+        "stage_b": {"verdict": verdict, "selected": list(selected),
+                    "frontier": list(selected), "eligible": list(selected),
+                    "dropped_from_frontier": [],
+                    "rule": {"floor_pct": 0.5, "max_arms": 3}},
+    }, indent=2) + "\n")
+    return path
+
+
+def test_the_retrieval_pass_measures_the_arms_the_report_advanced(
+        tmp_path, capsys, monkeypatch):
+    evidence_root = _exported_manifest(tmp_path, (CONTROL, ARM,
+                                                  ARMS_BY_NAME["a3-kv4"]))
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-cli").write_text("#!/bin/sh\n")
+    fake = FakeRetrieval()
+    monkeypatch.setattr(evidence, "_run", fake.runner)
+    _commit_stage_a_report(tmp_path / "reports", selected=[ARM.name])
+
+    code = evidence_main(["--evidence-root", str(evidence_root),
+                          "--report-root", str(tmp_path / "reports"),
+                          "retrieval", "--arms-from-report", "stagea",
+                          "--retrieval-root", str(tmp_path / "retrieval"),
+                          "--llama-cpp-dir", str(llama_cpp)])
+
+    assert code == 0
+    printed = json.loads(capsys.readouterr().out)
+    # The control is measured because every column is a delta against it; the
+    # arm the screen dropped is not, and that is the hour this buys back.
+    assert printed["scored"] == sorted([CONTROL.name, ARM.name])
+    assert printed["advanced_from"].endswith("stagea-report.json")
+    summary = json.loads(
+        (Path(evidence_root) / "retrieval-stagea.json").read_text())
+    assert summary["advanced_from"]["selected"] == [ARM.name]
+    assert sorted(summary["arms"]) == sorted([CONTROL.name, ARM.name])
+
+
+def test_export_records_which_report_chose_its_arms(tmp_path, monkeypatch):
+    """A manifest that lists three of fifteen arms is either a screen's
+    selection or an interrupted sweep, and the difference is not recoverable
+    from the arm count."""
+    run_root, root = tmp_path / "runs", tmp_path / "evidence"
+    _checkpoint(run_root, CONTROL)
+    _checkpoint(run_root, ARM)
+    tools = FakeToolchain()
+    monkeypatch.setattr(evidence, "_export_hf", tools.export_fn)
+    monkeypatch.setattr(evidence, "_run", tools.runner)
+    _commit_stage_a_report(tmp_path / "reports", selected=[ARM.name])
+
+    code = evidence_main(["--run-root", str(run_root),
+                          "--evidence-root", str(root),
+                          "--report-root", str(tmp_path / "reports"),
+                          "export", "--arms-from-report", "stagea",
+                          "--llama-cpp-dir", str(_llama_cpp(tmp_path))])
+
+    assert code == 0
+    manifest = json.loads(manifest_path(root=str(root)).read_text())
+    assert manifest["advanced_from"]["report"].endswith("stagea-report.json")
+    assert sorted(manifest["arms"]) == sorted([CONTROL.name, ARM.name])
+
+
+def test_a_second_pass_keeps_where_the_first_pass_arms_came_from(tmp_path,
+                                                                 monkeypatch):
+    """A rerun without the flag must not turn a recorded selection into an
+    unattributed list; nothing about the manifest would show the loss."""
+    run_root, root = tmp_path / "runs", tmp_path / "evidence"
+    _checkpoint(run_root, CONTROL)
+    tools = FakeToolchain()
+    monkeypatch.setattr(evidence, "_export_hf", tools.export_fn)
+    monkeypatch.setattr(evidence, "_run", tools.runner)
+    _commit_stage_a_report(tmp_path / "reports", selected=[CONTROL.name])
+    common = ["--run-root", str(run_root), "--evidence-root", str(root),
+              "--report-root", str(tmp_path / "reports"), "export",
+              "--llama-cpp-dir", str(_llama_cpp(tmp_path))]
+
+    evidence_main(common + ["--arms-from-report", "stagea"])
+    evidence_main(common + ["--arms", CONTROL.name])
+
+    manifest = json.loads(manifest_path(root=str(root)).read_text())
+    assert manifest["advanced_from"]["report"].endswith("stagea-report.json")
+
+
+def test_naming_the_evidence_arms_twice_is_refused(tmp_path, monkeypatch):
+    """Two sources of truth for the arm list is the failure this closes, so
+    neither silently wins."""
+    monkeypatch.setattr(evidence, "_run",
+                        lambda *a: pytest.fail("measured an unresolved list"))
+    _commit_stage_a_report(tmp_path / "reports", selected=[ARM.name])
+
+    with pytest.raises(SystemExit):
+        evidence_main(["--evidence-root", str(tmp_path / "evidence"),
+                       "--report-root", str(tmp_path / "reports"),
+                       "retrieval", "--arms-from-report", "stagea",
+                       "--arms", "a3-kv4",
+                       "--retrieval-root", str(tmp_path / "retrieval")])
+
+
+def test_a_no_advance_report_stops_the_evidence_pass(tmp_path, monkeypatch):
+    """`no-advance` means no arm held the control's quality, so every arm is
+    already blocked on BPB; measuring their retention is hours spent to confirm
+    a verdict the report has recorded."""
+    monkeypatch.setattr(evidence, "_run",
+                        lambda *a: pytest.fail("measured past a no-advance"))
+    _commit_stage_a_report(tmp_path / "reports", selected=[],
+                           verdict="no-advance")
+
+    with pytest.raises(SystemExit):
+        evidence_main(["--evidence-root", str(tmp_path / "evidence"),
+                       "--report-root", str(tmp_path / "reports"),
+                       "retrieval", "--arms-from-report", "stagea",
+                       "--retrieval-root", str(tmp_path / "retrieval")])
+
+
+def test_an_unscored_screen_stops_the_evidence_pass(tmp_path, monkeypatch):
+    """No report is not an empty arm list: the columns here are measured on a
+    conclusion, and there is no default better than stopping."""
+    monkeypatch.setattr(evidence, "_run",
+                        lambda *a: pytest.fail("measured without a report"))
+
+    with pytest.raises(SystemExit):
+        evidence_main(["--evidence-root", str(tmp_path / "evidence"),
+                       "--report-root", str(tmp_path / "reports"),
+                       "decode", "--arms-from-report", "stagea",
+                       "--out", str(tmp_path / "decode.json")])

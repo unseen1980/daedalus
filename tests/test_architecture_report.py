@@ -36,7 +36,7 @@ from scripts.architecture_report import (GATE_COLUMNS, MATCHED_HOLDOUT_SOURCE,
                                          render_recommendation_markdown,
                                          report_path, retrieval_check,
                                          score_arm, scorecard_path, scored_from,
-                                         select_stage_b)
+                                         select_stage_b, selection_notes)
 from scripts.architecture_report import main as architecture_report_main
 from scripts.architecture_sweep import (ARMS, ARMS_BY_NAME, CONTROL, STAGE_A,
                                         STAGE_B, arm_checkpoint_path)
@@ -375,6 +375,29 @@ def test_a_complete_screen_is_recorded_as_complete(tmp_path):
     screened = advanced_selection(report_root=str(tmp_path))["screened"]
 
     assert screened == {"scored": len(ARMS), "grid": len(ARMS), "complete": True}
+
+
+def test_a_partial_basis_is_announced_by_every_launcher_that_reads_it(tmp_path):
+    """Two launchers now take their arm list from a report -- the stage-B sweep
+    and the evidence pass -- and a warning only one of them printed would make a
+    partial screen look like a property of which command was typed."""
+    _commit_report(tmp_path, _advancing_rows())
+    notes = selection_notes(advanced_selection(report_root=str(tmp_path)))
+
+    assert len(notes) == 2
+    assert "partial screen" in notes[0] and f"of {len(ARMS)} arms" in notes[0]
+    assert "advanced by" in notes[1] and "stagea-report.json" in notes[1]
+
+
+def test_a_complete_screen_announces_only_what_advanced(tmp_path):
+    rows = [_row(CONTROL.name, bpb=1.2000, kv=8192, is_control=True)]
+    rows += [_row(arm.name, bpb=1.1990, kv=arm.kv_bytes_per_context_token)
+             for arm in ARMS if not arm.is_control]
+    _commit_report(tmp_path, rows)
+
+    notes = selection_notes(advanced_selection(report_root=str(tmp_path)))
+
+    assert len(notes) == 1 and "partial" not in notes[0]
 
 
 # ------------------------------------------------------------ measurement ----
