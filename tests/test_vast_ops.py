@@ -89,6 +89,34 @@ def test_approved_command_broker_exposes_only_safe_phase1_commands():
         assert forbidden not in wrapper
 
 
+def test_reload_service_refuses_everything_outside_this_program(tmp_path):
+    """`supervisorctl` also drives caddy, the portal and the tunnel manager --
+    the instance's management and auth surface. Restarting one of those to
+    reload a publisher is a way to lose the box."""
+    wrapper = ROOT / "ops/vast/run-approved"
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "vast/daedalus-improvements-20260824"],
+                   cwd=repository, check=True)
+    runtime = tmp_path / "runtime.env"
+    runtime.write_text("")
+    environment = os.environ.copy()
+    environment.update({"DAEDALUS_REPO": str(repository),
+                        "DAEDALUS_RUNTIME_ENV": str(runtime)})
+
+    for service in ("caddy", "instance_portal", "tunnel_manager", "", "all"):
+        result = subprocess.run([str(wrapper), "reload-service", service],
+                                capture_output=True, text=True, env=environment)
+        assert result.returncode != 0
+        assert "refusing to control service" in result.stderr
+
+    wrapper_text = wrapper.read_text()
+    assert "supervisorctl restart" in wrapper_text
+    for forbidden in ("supervisorctl stop", "supervisorctl shutdown"):
+        assert forbidden not in wrapper_text, (
+            "the wrapper may reload this program's services, not stop them")
+
+
 def test_safe_log_rejects_secret_and_parent_paths(tmp_path):
     wrapper = ROOT / "ops/vast/run-approved"
     repository = tmp_path / "repo"

@@ -119,7 +119,22 @@ bash ops/vast/install_supervisor.sh
 
 A committed change to `ops/vast/run-approved` does nothing until it is
 installed: sessions call `/usr/local/bin/daedalus-approved`, not the repository
-copy. That mismatch has already blocked the program once.
+copy. That mismatch has already blocked the program once. The copy is
+deliberate -- an approved wrapper that changed whenever a branch edited a file
+would let a session widen its own permissions by editing the repository -- so
+the install stays an operator step rather than something a session can do to
+itself.
+
+The same gap exists one level up, for the *code a service is running*. The
+publisher and the keeper are long-lived processes, so they keep running the
+module they imported at start: a committed change to `scripts/github_progress.py`
+changes what the next publisher does and nothing about the one publishing now.
+Once the wrapper above is installed, a session can reload either of this
+program's own services (and only those):
+
+```bash
+daedalus-approved reload-service daedalus_progress
+```
 
 ## Failure drills
 

@@ -120,6 +120,28 @@ case "${command_name}" in
         export PYTHONPATH="${repo}${PYTHONPATH:+:${PYTHONPATH}}"
         exec python scripts/vast_program.py "$@"
         ;;
+    reload-service)
+        # A control-plane service is a long-running process, so it keeps
+        # running the code it imported at start. Editing and committing
+        # `github_progress.py` changes what the *next* publisher does and
+        # nothing about the one publishing now -- which is how a heartbeat
+        # keeps omitting a field that has been in the state file for hours.
+        #
+        # Restricted to this program's own services by an explicit list.
+        # `supervisorctl` also drives caddy, the portal and the tunnel manager,
+        # which are the instance's management and auth surface: restarting one
+        # of those to reload a publisher would be a way to lose the box.
+        service=${1:-}
+        case "${service}" in
+            daedalus_progress|daedalus_session_keeper)
+                ;;
+            *)
+                echo "refusing to control service ${service:-<none>}" >&2
+                exit 4
+                ;;
+        esac
+        exec supervisorctl restart "${service}"
+        ;;
     progress-once)
         source "${venv_dir}/bin/activate"
         progress_worktree=${DAEDALUS_PROGRESS_WORKTREE:-/workspace/daedalus-progress}
