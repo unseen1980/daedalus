@@ -1,0 +1,49 @@
+{
+  "bpb": 1.2221234018958913,
+  "bpb_by_domain": {
+    "code": 0.9536123760458258,
+    "dialogue": 0.7846028111191713,
+    "general": 1.242214898235767,
+    "math": 1.3886845890492683,
+    "technical": 1.224213301655971
+  },
+  "checkpoint": "runs/tok-probe-40960-equal-bytes/checkpoint.pt",
+  "holdout_shape": {
+    "__all__": {
+      "batch_size": 8,
+      "tokens": 6573751,
+      "windows": 6419
+    },
+    "code": {
+      "batch_size": 8,
+      "tokens": 893899,
+      "windows": 872
+    },
+    "dialogue": {
+      "batch_size": 6,
+      "tokens": 6805,
+      "windows": 6
+    },
+    "general": {
+      "batch_size": 8,
+      "tokens": 4725723,
+      "windows": 4614
+    },
+    "math": {
+      "batch_size": 8,
+      "tokens": 501028,
+      "windows": 489
+    },
+    "technical": {
+      "batch_size": 8,
+      "tokens": 446296,
+      "windows": 435
+    }
+  },
+  "label": "40960",
+  "protocol": "equal-bytes",
+  "run": "tok-probe-40960-equal-bytes",
+  "steps": 1609,
+  "tokens_seen": 210894848,
+  "vocab_size": 40960
+}

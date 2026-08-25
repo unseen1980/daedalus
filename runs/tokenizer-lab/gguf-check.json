@@ -1,0 +1,122 @@
+{
+  "24576": {
+    "chkhsh": "476bf67be1bdaf4955274b6780088cb1ba398ce90d3d3c8e74424bba66c3aea6",
+    "converted": false,
+    "converter": "/opt/llama.cpp/convert_hf_to_gguf.py",
+    "label": "24576",
+    "pre_tokenizer_unrecognized": true,
+    "ran": true,
+    "returncode": 1,
+    "tail": [
+      "    self.set_vocab()",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1238, in set_vocab",
+      "    self._set_vocab_gpt2()",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1787, in _set_vocab_gpt2",
+      "    tokens, toktypes, tokpre = self.get_vocab_base()",
+      "                               ^^^^^^^^^^^^^^^^^^^^^",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1424, in get_vocab_base",
+      "    tokpre = self.get_vocab_base_pre(tokenizer)",
+      "             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1775, in get_vocab_base_pre",
+      "    raise NotImplementedError(\"BPE pre-tokenizer was not recognized - update get_vocab_base_pre()\")",
+      "NotImplementedError: BPE pre-tokenizer was not recognized - update get_vocab_base_pre()"
+    ],
+    "vocab_size": 24576
+  },
+  "32768": {
+    "chkhsh": "4268375615638c88fbfaaa69eb39d75e9c04fd345fd23057b31acd22c105d495",
+    "converted": false,
+    "converter": "/opt/llama.cpp/convert_hf_to_gguf.py",
+    "label": "32768",
+    "pre_tokenizer_unrecognized": true,
+    "ran": true,
+    "returncode": 1,
+    "tail": [
+      "    self.set_vocab()",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1238, in set_vocab",
+      "    self._set_vocab_gpt2()",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1787, in _set_vocab_gpt2",
+      "    tokens, toktypes, tokpre = self.get_vocab_base()",
+      "                               ^^^^^^^^^^^^^^^^^^^^^",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1424, in get_vocab_base",
+      "    tokpre = self.get_vocab_base_pre(tokenizer)",
+      "             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1775, in get_vocab_base_pre",
+      "    raise NotImplementedError(\"BPE pre-tokenizer was not recognized - update get_vocab_base_pre()\")",
+      "NotImplementedError: BPE pre-tokenizer was not recognized - update get_vocab_base_pre()"
+    ],
+    "vocab_size": 32768
+  },
+  "40960": {
+    "chkhsh": "19bb10dacf2b44725c18543097d1dfacd9b7de4a45c3ff0460fafb70abbb73cb",
+    "converted": false,
+    "converter": "/opt/llama.cpp/convert_hf_to_gguf.py",
+    "label": "40960",
+    "pre_tokenizer_unrecognized": true,
+    "ran": true,
+    "returncode": 1,
+    "tail": [
+      "    self.set_vocab()",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1238, in set_vocab",
+      "    self._set_vocab_gpt2()",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1787, in _set_vocab_gpt2",
+      "    tokens, toktypes, tokpre = self.get_vocab_base()",
+      "                               ^^^^^^^^^^^^^^^^^^^^^",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1424, in get_vocab_base",
+      "    tokpre = self.get_vocab_base_pre(tokenizer)",
+      "             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1775, in get_vocab_base_pre",
+      "    raise NotImplementedError(\"BPE pre-tokenizer was not recognized - update get_vocab_base_pre()\")",
+      "NotImplementedError: BPE pre-tokenizer was not recognized - update get_vocab_base_pre()"
+    ],
+    "vocab_size": 40960
+  },
+  "49152-matched": {
+    "chkhsh": "1a977900c3f28ffdf5bd81c560147eb8ba806ad84b8830951f4299d4a7f5de5c",
+    "converted": false,
+    "converter": "/opt/llama.cpp/convert_hf_to_gguf.py",
+    "label": "49152-matched",
+    "pre_tokenizer_unrecognized": true,
+    "ran": true,
+    "returncode": 1,
+    "tail": [
+      "    self.set_vocab()",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1238, in set_vocab",
+      "    self._set_vocab_gpt2()",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1787, in _set_vocab_gpt2",
+      "    tokens, toktypes, tokpre = self.get_vocab_base()",
+      "                               ^^^^^^^^^^^^^^^^^^^^^",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1424, in get_vocab_base",
+      "    tokpre = self.get_vocab_base_pre(tokenizer)",
+      "             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "  File \"/opt/llama.cpp/conversion/base.py\", line 1775, in get_vocab_base_pre",
+      "    raise NotImplementedError(\"BPE pre-tokenizer was not recognized - update get_vocab_base_pre()\")",
+      "NotImplementedError: BPE pre-tokenizer was not recognized - update get_vocab_base_pre()"
+    ],
+    "vocab_size": 49152
+  },
+  "49152-smollm2": {
+    "chkhsh": null,
+    "converted": true,
+    "converter": "/opt/llama.cpp/convert_hf_to_gguf.py",
+    "label": "49152-smollm2",
+    "pre_tokenizer_unrecognized": false,
+    "ran": true,
+    "returncode": 0,
+    "tail": [
+      "INFO:gguf.vocab:Setting special token type unk to 0",
+      "INFO:gguf.vocab:Setting special token type pad to 0",
+      "INFO:gguf.vocab:Setting chat_template to {% for message in messages %}{{ '<|im_start|>' + message['role'] + '",
+      "' + message['content'] + '<|im_end|>' + '",
+      "' }}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant",
+      "' }}{% endif %}",
+      "INFO:gguf.gguf_writer:Writing the following files:",
+      "INFO:gguf.gguf_writer:runs/tokenizer-lab/gguf-check/49152-smollm2/model-f16.gguf: n_tensors = 164, total_size = 168.4M",
+      "",
+      "Writing:   0%|          | 0.00/168M [00:00<?, ?byte/s]",
+      "Writing: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 168M/168M [00:00<00:00, 2.63Gbyte/s]",
+      "INFO:hf-to-gguf:Model successfully exported to runs/tokenizer-lab/gguf-check/49152-smollm2/model-f16.gguf"
+    ],
+    "vocab_size": 49152
+  }
+}

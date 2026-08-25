@@ -1,0 +1,130 @@
+{
+  "arms": {
+    "24576": {
+      "byte_budget": 904520760,
+      "holdout-all": {
+        "manifest_path": "data/tokenizer-lab/shards/24576/holdout-all/manifest.json",
+        "n_documents": 5257,
+        "shards": [
+          {
+            "file": "shard_00000.bin",
+            "tokens": 6868649
+          }
+        ],
+        "total_tokens": 6868649
+      },
+      "holdout-by-domain": {
+        "code": 939345,
+        "dialogue": 6983,
+        "general": 4932620,
+        "math": 524688,
+        "technical": 465013
+      },
+      "label": "24576",
+      "measured_bytes_per_token": 4.111497545130934,
+      "tokenizer": "data/tokenizer-lab/tokenizers/v24576",
+      "vocab_size": 24576
+    },
+    "32768": {
+      "byte_budget": 904520760,
+      "holdout-all": {
+        "manifest_path": "data/tokenizer-lab/shards/32768/holdout-all/manifest.json",
+        "n_documents": 5257,
+        "shards": [
+          {
+            "file": "shard_00000.bin",
+            "tokens": 6687530
+          }
+        ],
+        "total_tokens": 6687530
+      },
+      "holdout-by-domain": {
+        "code": 910839,
+        "dialogue": 6872,
+        "general": 4807610,
+        "math": 508699,
+        "technical": 453510
+      },
+      "label": "32768",
+      "measured_bytes_per_token": 4.218070833172235,
+      "tokenizer": "data/tokenizer-lab/tokenizers/v32768",
+      "vocab_size": 32768
+    },
+    "40960": {
+      "byte_budget": 904520760,
+      "holdout-all": {
+        "manifest_path": "data/tokenizer-lab/shards/40960/holdout-all/manifest.json",
+        "n_documents": 5257,
+        "shards": [
+          {
+            "file": "shard_00000.bin",
+            "tokens": 6573751
+          }
+        ],
+        "total_tokens": 6573751
+      },
+      "holdout-by-domain": {
+        "code": 893899,
+        "dialogue": 6805,
+        "general": 4725723,
+        "math": 501028,
+        "technical": 446296
+      },
+      "label": "40960",
+      "measured_bytes_per_token": 4.290769246824809,
+      "tokenizer": "data/tokenizer-lab/tokenizers/v40960",
+      "vocab_size": 40960
+    },
+    "49152-matched": {
+      "byte_budget": 904520760,
+      "holdout-all": {
+        "manifest_path": "data/tokenizer-lab/shards/49152-matched/holdout-all/manifest.json",
+        "n_documents": 5257,
+        "shards": [
+          {
+            "file": "shard_00000.bin",
+            "tokens": 6494522
+          }
+        ],
+        "total_tokens": 6494522
+      },
+      "holdout-by-domain": {
+        "code": 882646,
+        "dialogue": 6761,
+        "general": 4669775,
+        "math": 494602,
+        "technical": 440738
+      },
+      "label": "49152-matched",
+      "measured_bytes_per_token": 4.343223271571139,
+      "tokenizer": "data/tokenizer-lab/tokenizers/v49152",
+      "vocab_size": 49152
+    },
+    "49152-smollm2": {
+      "byte_budget": 904520760,
+      "holdout-all": {
+        "manifest_path": "data/tokenizer-lab/shards/49152-smollm2/holdout-all/manifest.json",
+        "n_documents": 5257,
+        "shards": [
+          {
+            "file": "shard_00000.bin",
+            "tokens": 6842862
+          }
+        ],
+        "total_tokens": 6842862
+      },
+      "holdout-by-domain": {
+        "code": 938520,
+        "dialogue": 6921,
+        "general": 4866647,
+        "math": 569163,
+        "technical": 461611
+      },
+      "label": "49152-smollm2",
+      "measured_bytes_per_token": 4.141726698842695,
+      "tokenizer": "HuggingFaceTB/SmolLM2-135M",
+      "vocab_size": 49152
+    }
+  },
+  "byte_budget": 904520760
+}

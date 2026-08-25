@@ -1,0 +1,49 @@
+{
+  "bpb": 1.2350041374852774,
+  "bpb_by_domain": {
+    "code": 0.982838991361872,
+    "dialogue": 0.8075951296120107,
+    "general": 1.2544316802880477,
+    "math": 1.3921464863718225,
+    "technical": 1.2372096255691296
+  },
+  "checkpoint": "runs/tok-probe-49152-smollm2-equal-tokens/checkpoint.pt",
+  "holdout_shape": {
+    "__all__": {
+      "batch_size": 8,
+      "tokens": 6842862,
+      "windows": 6682
+    },
+    "code": {
+      "batch_size": 8,
+      "tokens": 938520,
+      "windows": 916
+    },
+    "dialogue": {
+      "batch_size": 6,
+      "tokens": 6921,
+      "windows": 6
+    },
+    "general": {
+      "batch_size": 8,
+      "tokens": 4866647,
+      "windows": 4752
+    },
+    "math": {
+      "batch_size": 8,
+      "tokens": 569163,
+      "windows": 555
+    },
+    "technical": {
+      "batch_size": 8,
+      "tokens": 461611,
+      "windows": 450
+    }
+  },
+  "label": "49152-smollm2",
+  "protocol": "equal-tokens",
+  "run": "tok-probe-49152-smollm2-equal-tokens",
+  "steps": 1526,
+  "tokens_seen": 200015872,
+  "vocab_size": 49152
+}
