@@ -1,0 +1,14 @@
+{
+  "revision": "conv-probe-shipped-0.1-stable-end-step480",
+  "step": 480,
+  "tokens_seen": 983040,
+  "total_steps": 600,
+  "decay_frac": 0.2,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.15,
+  "adam_lr": 0.0003,
+  "config": "conv-probe",
+  "repo": null,
+  "path_in_repo": "milestone/conv-probe-shipped-0.1/checkpoint.pt",
+  "created_at": 1787630051.917798
+}
