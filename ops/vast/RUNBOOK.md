@@ -94,6 +94,12 @@ daedalus-approved phase --lane evidence run-phase --phase <name> \
 a pass that genuinely does not contend: two GPU phases in two lanes is two
 trainers on one card, which nothing here prevents.
 
+Read the state file as JSON, not with `grep`. The snapshot is written with
+sorted keys, so `lanes` now sorts *before* `status` -- and
+`grep '"status"' state.json | head -1` answers with some lane's status rather
+than the program's. Every reader in the repository parses it properly; the trap
+is only for a check typed at the prompt.
+
 ## Changing repository files by hand
 
 An engineering session is a child process of the keeper, not a supervised
