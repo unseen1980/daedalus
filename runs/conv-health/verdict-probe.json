@@ -1,0 +1,77 @@
+{
+  "arms": [
+    {
+      "arm": "weak-0.0133",
+      "checks": {
+        "dead_fraction_under_1pc": false,
+        "loss_not_worse": true,
+        "matched_ablation_bites": false,
+        "norms_within_2x": true
+      },
+      "dead_fraction": 0.055338541666666664,
+      "loss_regression": 0.0005816071242361254,
+      "matched_ablation_channels": 1106,
+      "matched_ablation_delta": 0.38841620087623596,
+      "matched_ablation_requested": 1112,
+      "norm_ratio": {
+        "in_proj": 1.2727432881111072,
+        "kernel": 0.7530925554363029,
+        "out_proj": 1.610382870445238
+      },
+      "passes": false
+    },
+    {
+      "arm": "warmup-0-to-0.1",
+      "checks": {
+        "dead_fraction_under_1pc": false,
+        "loss_not_worse": true,
+        "matched_ablation_bites": false,
+        "norms_within_2x": true
+      },
+      "dead_fraction": 0.7252604166666666,
+      "loss_regression": 0.0018541566829105229,
+      "matched_ablation_channels": 422,
+      "matched_ablation_delta": 1.766765534877777,
+      "matched_ablation_requested": 1112,
+      "norm_ratio": {
+        "in_proj": 1.018902093772911,
+        "kernel": 0.997690088220962,
+        "out_proj": 1.0159924429159901
+      },
+      "passes": false
+    },
+    {
+      "arm": "weak-then-0.1",
+      "checks": {
+        "dead_fraction_under_1pc": false,
+        "loss_not_worse": true,
+        "matched_ablation_bites": false,
+        "norms_within_2x": true
+      },
+      "dead_fraction": 0.6888020833333334,
+      "loss_regression": 0.00023863488180627166,
+      "matched_ablation_channels": 478,
+      "matched_ablation_delta": 1.6312056481838226,
+      "matched_ablation_requested": 1112,
+      "norm_ratio": {
+        "in_proj": 0.9545087469522605,
+        "kernel": 0.9920208055425026,
+        "out_proj": 0.9575086134281173
+      },
+      "passes": false
+    }
+  ],
+  "passing": [],
+  "positive_control": {
+    "arm": "shipped-0.1",
+    "dead_fraction": 0.7239583333333334,
+    "exhibits_death": true,
+    "flagged_ablation_delta": -8.940696716308594e-08
+  },
+  "thresholds": {
+    "max_dead_fraction": 0.01,
+    "max_loss_regression": 0.005,
+    "max_norm_ratio": 2.0
+  },
+  "valid": true
+}
