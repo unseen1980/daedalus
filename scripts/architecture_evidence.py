@@ -43,7 +43,7 @@ successful quantize, so a failure leaves every intermediate in place for
 diagnosis, and `--keep-hf` turns the cleanup off. Nothing is reachable by this
 path except directories this module itself wrote.
 
-Subcommands: `export`, `retrieval`.
+Subcommands: `export`, `retrieval`, `decode`.
 """
 
 from __future__ import annotations
@@ -61,9 +61,11 @@ from typing import Callable, Optional, Sequence, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from daedalus.scorecard import sha256_file  # noqa: E402
-from scripts.architecture_report import (RETRIEVAL_GATE_TASKS,  # noqa: E402
+from scripts.architecture_report import (DECODE_REPORT,  # noqa: E402
+                                         RETRIEVAL_GATE_TASKS,
                                          RETRIEVAL_MIN_ITEMS_PER_DEPTH,
-                                         RETRIEVAL_ROOT, read_retrieval)
+                                         RETRIEVAL_ROOT, TRAINED_CONTEXT,
+                                         read_decode_passes, read_retrieval)
 from scripts.architecture_sweep import (ARMS, REPORT_ROOT, RUN_ROOT,  # noqa: E402
                                         SHAPES, STAGE_A, ArchArm, StageShape,
                                         arm_checkpoint_path, arm_run_name,
@@ -100,6 +102,23 @@ RETRIEVAL_TIMEOUT_S = 7200.0
 #: coarser than the thing it screens for. Imported rather than copied so the two
 #: cannot drift; raising the gate's threshold lowers this automatically.
 RETRIEVAL_PER_DEPTH = RETRIEVAL_MIN_ITEMS_PER_DEPTH
+
+#: The two depths `decode_check` reads: where a conv hybrid has least to gain,
+#: and the context the arms were trained at. Both, or the column is unmeasured --
+#: a decode number at depth 0 alone measures this architecture exactly where its
+#: argument does not apply.
+DECODE_DEPTHS = (0, TRAINED_CONTEXT)
+
+#: `decode_bench.py`'s own defaults, restated because this module writes the
+#: invocation rather than typing it: three alternating rounds is what its
+#: anti-drift argument rests on, and 128 generated tokens is every decode number
+#: this project has recorded.
+DECODE_ROUNDS = 3
+DECODE_N_GEN = 128
+
+#: Every model, at both depths, three rounds each, on a box that may also be
+#: training. Bounded so a wedged benchmark cannot hold the phase open.
+DECODE_TIMEOUT_S = 10800.0
 
 
 def _utcnow() -> str:
@@ -468,6 +487,118 @@ def summarize_retrieval(records: dict) -> dict:
             "n_scored": len(scored), "n_arms": len(records)}
 
 
+# =================================================================== decode ====
+# The gate's fifth column. `decode_check` will only read an arm and the control
+# out of the *same* pass, because `decode_bench` alternates models within a pass
+# precisely so that concurrent box load hits both -- so this is one invocation
+# over every arm, not one invocation per arm.
+#
+# **Both depths, always.** Depth 0 is where a conv hybrid has least to gain and
+# `TRAINED_CONTEXT` is where its whole argument lives; a report with one of them
+# leaves the column unmeasured, which is the honest reading and a wasted hour.
+#
+# **A narrower rerun does not silently replace a wider report.** `--out` is one
+# file and `decode_bench` overwrites it, so re-running for two finalists after a
+# full pass would delete thirteen arms' decode numbers and leave a report that
+# looks complete. Refused unless `--refresh` says so.
+
+
+def decode_models(records: dict, arms: Sequence[ArchArm], tag: str) -> dict:
+    """`{run_name: q4_0 path}` for every arm that has an artifact, in order.
+
+    Keyed by run name rather than grid point: `decode_entry` accepts either, and
+    only the run name says which stage's checkpoint a number came from.
+    """
+    models = {}
+    for arm in arms:
+        artifact = (records.get(arm.name) or {}).get("gguf_q4_0") or {}
+        path = artifact.get("path")
+        if path and Path(path).exists():
+            models[arm_run_name(arm, tag)] = path
+    return models
+
+
+def decode_command(models: dict, out: str, *, bench_bin: str, threads: int = 8,
+                   rounds: int = DECODE_ROUNDS, n_gen: int = DECODE_N_GEN,
+                   depths: Sequence[int] = DECODE_DEPTHS,
+                   note: Optional[str] = None) -> list:
+    """The single `decode_bench.py` invocation that measures every arm."""
+    bench = Path(__file__).resolve().parent / "decode_bench.py"
+    command = [sys.executable, str(bench), "--models"]
+    command += [f"{name}={path}" for name, path in models.items()]
+    command += ["--threads", str(int(threads)), "--rounds", str(int(rounds)),
+                "--n-gen", str(int(n_gen)), "--depths"]
+    command += [str(int(depth)) for depth in depths]
+    command += ["--bench-bin", str(bench_bin), "--out", str(out)]
+    if note:
+        command += ["--note", str(note)]
+    return command
+
+
+def dropped_models(out, models: dict) -> list:
+    """Models an existing report measures that this invocation would not.
+
+    Read from the report rather than from a manifest: what is at risk is
+    whatever that file already contains, including a peer or a released artifact
+    somebody benchmarked alongside the grid.
+    """
+    measured = set()
+    for entry in read_decode_passes(out).values():
+        measured.update((entry.get("models") or {}).keys())
+    return sorted(measured - set(models))
+
+
+def run_decode(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
+               shape: StageShape = STAGE_A, evidence_root: str = EVIDENCE_ROOT,
+               out: str = DECODE_REPORT,
+               llama_cpp_dir: str = DEFAULT_LLAMA_CPP_DIR, threads: int = 8,
+               rounds: int = DECODE_ROUNDS, n_gen: int = DECODE_N_GEN,
+               depths: Sequence[int] = DECODE_DEPTHS, note: Optional[str] = None,
+               refresh: bool = False,
+               runner: Optional[Callable[[Sequence[str], float],
+                                         Tuple[int, str]]] = None) -> dict:
+    """Benchmark every exported arm against the control in one alternating pass."""
+    runner = runner or _run
+    records = _read_json(manifest_path(tag, evidence_root)).get("arms") or {}
+    models = decode_models(records, arms, tag)
+    common = {"tag": tag, "shape": shape.name, "out": str(out),
+              "models": models, "depths": [int(depth) for depth in depths],
+              "threads": int(threads), "at": _utcnow()}
+    if not models:
+        return {**common, "skipped": "no-gguf", "measured": False,
+                "reason": "no arm in the export manifest has a Q4_0 GGUF yet"}
+
+    bench_bin = Path(llama_cpp_dir) / "build" / "bin" / "llama-bench"
+    if not bench_bin.exists():
+        return {**common, "skipped": "no-llama-bench", "measured": False,
+                "reason": f"stock llama.cpp has no {bench_bin}"}
+
+    dropped = dropped_models(out, models)
+    if dropped and not refresh:
+        return {**common, "skipped": "would-drop-models", "measured": False,
+                "dropped": dropped,
+                "reason": f"{out} already measures {dropped}, which this "
+                          "invocation does not; one file holds the passes and "
+                          "rerunning replaces it. Include those arms, write "
+                          "elsewhere with --out, or pass --refresh."}
+
+    command = decode_command(models, str(out), bench_bin=str(bench_bin),
+                             threads=threads, rounds=rounds, n_gen=n_gen,
+                             depths=depths, note=note)
+    returncode, output = runner(command, DECODE_TIMEOUT_S)
+    passes = read_decode_passes(out)
+    covered = sorted({depth for _, depth in passes})
+    result = {**common, "returncode": returncode, "command": command,
+              "measured_depths": covered,
+              "measured": returncode == 0
+                          and all(int(depth) in covered for depth in depths)}
+    if not result["measured"]:
+        result["reason"] = (f"the benchmark did not leave a pass at every depth "
+                            f"{list(depths)}")
+        result["tail"] = output.strip().splitlines()[-12:]
+    return result
+
+
 # ====================================================================== cli ====
 
 def main(argv=None) -> int:
@@ -510,6 +641,27 @@ def main(argv=None) -> int:
     retrieval.add_argument("--refresh", action="store_true",
                            help="re-score arms already scored from this GGUF")
 
+    decode = sub.add_parser("decode")
+    decode.add_argument("--arms", default=None,
+                        help="comma-separated subset, control first; every arm "
+                             "named here is measured in one alternating pass")
+    decode.add_argument("--llama-cpp-dir", default=DEFAULT_LLAMA_CPP_DIR)
+    decode.add_argument("--out", default=DECODE_REPORT,
+                        help="the single report the gate reads; arm and control "
+                             "must appear in the same pass inside it")
+    decode.add_argument("--threads", type=int, default=8)
+    decode.add_argument("--rounds", type=int, default=DECODE_ROUNDS)
+    decode.add_argument("--n-gen", type=int, default=DECODE_N_GEN)
+    decode.add_argument("--depths", type=int, nargs="+", default=list(DECODE_DEPTHS),
+                        help="both the empty context and the trained one, or "
+                             "the gate's decode column stays unmeasured")
+    decode.add_argument("--note", default=None,
+                        help="what else the box was doing; absolutes are only "
+                             "comparable within one invocation")
+    decode.add_argument("--refresh", action="store_true",
+                        help="replace a report that measures models this "
+                             "invocation does not")
+
     args = parser.parse_args(argv)
     shape = SHAPES[args.shape]
     tag = shape.tag if args.tag is None else args.tag
@@ -537,6 +689,20 @@ def main(argv=None) -> int:
         print(json.dumps({**summarize_retrieval(report["arms"]),
                           "summary": report["summary"]}, indent=2))
         return 0
+
+    if args.command == "decode":
+        report = run_decode(selected_arms(args.arms, arms_for(shape)),
+                            tag=tag, shape=shape,
+                            evidence_root=args.evidence_root, out=args.out,
+                            llama_cpp_dir=args.llama_cpp_dir,
+                            threads=args.threads, rounds=args.rounds,
+                            n_gen=args.n_gen, depths=args.depths,
+                            note=args.note, refresh=args.refresh)
+        print(json.dumps(report, indent=2))
+        # A refused or incomplete benchmark is a non-zero exit: the caller is a
+        # phase, and a phase that "passed" without measuring is how an
+        # unmeasured column reaches a report as a finished one.
+        return 0 if report.get("measured") else 1
 
     raise SystemExit(f"unhandled command {args.command}")
 

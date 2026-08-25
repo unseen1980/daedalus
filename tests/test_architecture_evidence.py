@@ -23,11 +23,12 @@ import pytest
 from daedalus.scorecard import (ArtifactRef, Provenance, Scorecard,
                                 write_scorecard)
 from scripts import architecture_evidence as evidence
-from scripts.architecture_evidence import (RETRIEVAL_PER_DEPTH, exported_from,
-                                           export_arm, export_arms, gguf_paths,
+from scripts.architecture_evidence import (RETRIEVAL_PER_DEPTH, dropped_models,
+                                           exported_from, export_arm,
+                                           export_arms, gguf_paths,
                                            manifest_path, retrieval_command,
                                            retrieval_out_dir,
-                                           retrieval_scored_from,
+                                           retrieval_scored_from, run_decode,
                                            score_retrieval_arm,
                                            score_retrieval_arms,
                                            summarize_export,
@@ -35,7 +36,9 @@ from scripts.architecture_evidence import (RETRIEVAL_PER_DEPTH, exported_from,
 from scripts.architecture_evidence import main as evidence_main
 from scripts.architecture_report import (RETRIEVAL_GATE_TASKS,
                                          RETRIEVAL_MIN_ITEMS_PER_DEPTH,
-                                         export_check, read_retrieval)
+                                         TRAINED_CONTEXT, decode_entry,
+                                         export_check, read_decode_passes,
+                                         read_retrieval)
 from scripts.architecture_sweep import ARMS_BY_NAME, CONTROL
 
 
@@ -595,6 +598,190 @@ def test_cli_retrieval_scores_the_arms_the_export_manifest_names(
     printed = json.loads(capsys.readouterr().out)
     assert printed["scored"] == [CONTROL.name]
     assert printed["n_scored"] == 1
+
+
+# ----------------------------------------------------------------- decode ----
+
+class FakeBench:
+    """Stands in for `decode_bench.py`, writing the report it would."""
+
+    def __init__(self, *, returncode: int = 0, depths=(0, 2048)):
+        self.returncode = returncode
+        self.depths = tuple(depths)
+        self.calls = []
+
+    def runner(self, command, timeout):
+        command = [str(part) for part in command]
+        self.calls.append(command)
+        names = [spec.split("=", 1)[0] for spec in command[
+            command.index("--models") + 1:] if "=" in spec]
+        out = Path(command[command.index("--out") + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"passes": [
+            {"threads": 8, "depth": depth,
+             "models": {name: {"mean": 100.0, "file_mb": 60.0}
+                        for name in names}}
+            for depth in self.depths]}))
+        return self.returncode, "bench output"
+
+
+def _exported_manifest(tmp_path: Path, arms) -> Path:
+    """An export manifest with a Q4_0 on disk for each arm."""
+    evidence_root = tmp_path / "evidence"
+    records = {}
+    for arm in arms:
+        gguf = evidence_root / f"arch-stagea-{arm.name}" / "model-q4_0.gguf"
+        gguf.parent.mkdir(parents=True, exist_ok=True)
+        gguf.write_bytes(b"q4")
+        records[arm.name] = {"arm": arm.name, "quantized": True,
+                             "gguf_q4_0": {"path": str(gguf), "sha256": "c" * 64}}
+    path = manifest_path(root=str(evidence_root))
+    path.write_text(json.dumps({"tag": "stagea", "arms": records}))
+    return evidence_root
+
+
+def test_every_arm_and_the_control_land_in_one_invocation(tmp_path):
+    """`decode_check` refuses to read an arm and the control out of separate
+    invocations, so one pass has to contain both."""
+    evidence_root = _exported_manifest(tmp_path, (CONTROL, ARM))
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-bench").write_text("#!/bin/sh\n")
+    bench = FakeBench()
+
+    report = run_decode([CONTROL, ARM], evidence_root=str(evidence_root),
+                        out=str(tmp_path / "decode.json"),
+                        llama_cpp_dir=str(llama_cpp), runner=bench.runner)
+
+    assert report["measured"] is True
+    assert len(bench.calls) == 1, "one invocation, or the numbers are not paired"
+    specs = [part for part in bench.calls[0] if "=" in part]
+    assert sorted(spec.split("=")[0] for spec in specs) == sorted(
+        [f"arch-stagea-{CONTROL.name}", f"arch-stagea-{ARM.name}"])
+    # And the report reads back as a pass containing both, at both depths.
+    passes = read_decode_passes(tmp_path / "decode.json")
+    assert sorted(depth for _, depth in passes) == [0, TRAINED_CONTEXT]
+    for entry in passes.values():
+        assert decode_entry(entry, [f"arch-stagea-{ARM.name}"])["mean"] == 100.0
+
+
+def test_a_report_missing_the_trained_context_is_not_measured(tmp_path):
+    """Depth 0 alone measures this architecture where its argument does not
+    apply."""
+    evidence_root = _exported_manifest(tmp_path, (CONTROL,))
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-bench").write_text("#!/bin/sh\n")
+    bench = FakeBench(depths=(0,))
+
+    report = run_decode([CONTROL], evidence_root=str(evidence_root),
+                        out=str(tmp_path / "decode.json"),
+                        llama_cpp_dir=str(llama_cpp), runner=bench.runner)
+
+    assert report["measured"] is False
+    assert report["measured_depths"] == [0]
+    assert report["tail"] == ["bench output"]
+
+
+def test_a_narrower_rerun_refuses_to_replace_a_wider_report(tmp_path):
+    """One file holds the passes, so re-running for one arm after a full sweep
+    would delete the others' decode numbers and still look complete."""
+    evidence_root = _exported_manifest(tmp_path, (CONTROL, ARM))
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-bench").write_text("#!/bin/sh\n")
+    out = tmp_path / "decode.json"
+    run_decode([CONTROL, ARM], evidence_root=str(evidence_root), out=str(out),
+               llama_cpp_dir=str(llama_cpp), runner=FakeBench().runner)
+
+    refused = run_decode([CONTROL], evidence_root=str(evidence_root),
+                         out=str(out), llama_cpp_dir=str(llama_cpp),
+                         runner=lambda *a: pytest.fail("overwrote the report"))
+
+    assert refused["skipped"] == "would-drop-models"
+    assert refused["dropped"] == [f"arch-stagea-{ARM.name}"]
+    assert refused["measured"] is False
+    # The wider report is still on disk, untouched.
+    assert dropped_models(out, {}) == [f"arch-stagea-{name}"
+                                       for name in sorted([CONTROL.name, ARM.name])]
+
+
+def test_refresh_replaces_a_report_deliberately(tmp_path):
+    evidence_root = _exported_manifest(tmp_path, (CONTROL, ARM))
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-bench").write_text("#!/bin/sh\n")
+    out = tmp_path / "decode.json"
+    run_decode([CONTROL, ARM], evidence_root=str(evidence_root), out=str(out),
+               llama_cpp_dir=str(llama_cpp), runner=FakeBench().runner)
+
+    replaced = run_decode([CONTROL], evidence_root=str(evidence_root),
+                          out=str(out), llama_cpp_dir=str(llama_cpp),
+                          runner=FakeBench().runner, refresh=True)
+
+    assert replaced["measured"] is True
+    assert dropped_models(out, {}) == [f"arch-stagea-{CONTROL.name}"]
+
+
+def test_an_arm_without_an_artifact_is_left_out_of_the_pass(tmp_path):
+    """A refused conversion has no file to benchmark; the rest still are."""
+    evidence_root = _exported_manifest(tmp_path, (CONTROL,))
+    records = json.loads(manifest_path(root=str(evidence_root)).read_text())
+    records["arms"][ARM.name] = {"arm": ARM.name, "converted": False,
+                                 "quantized": False}
+    manifest_path(root=str(evidence_root)).write_text(json.dumps(records))
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-bench").write_text("#!/bin/sh\n")
+
+    report = run_decode([CONTROL, ARM], evidence_root=str(evidence_root),
+                        out=str(tmp_path / "decode.json"),
+                        llama_cpp_dir=str(llama_cpp), runner=FakeBench().runner)
+
+    assert sorted(report["models"]) == [f"arch-stagea-{CONTROL.name}"]
+    assert report["measured"] is True
+
+
+def test_nothing_exported_yet_is_a_skip_not_a_benchmark(tmp_path):
+    report = run_decode([CONTROL], evidence_root=str(tmp_path / "evidence"),
+                        out=str(tmp_path / "decode.json"),
+                        llama_cpp_dir=str(_llama_cpp(tmp_path)),
+                        runner=lambda *a: pytest.fail("benchmarked nothing"))
+
+    assert report["skipped"] == "no-gguf"
+    assert report["measured"] is False
+
+
+def test_cli_decode_exits_non_zero_when_the_column_is_unmeasured(tmp_path,
+                                                                 capsys,
+                                                                 monkeypatch):
+    """A phase that exits 0 without measuring is how an unmeasured column
+    reaches a report looking finished."""
+    evidence_root = _exported_manifest(tmp_path, (CONTROL,))
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-bench").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(evidence, "_run", FakeBench(depths=(0,)).runner)
+
+    code = evidence_main(["--evidence-root", str(evidence_root),
+                          "decode", "--arms", CONTROL.name,
+                          "--out", str(tmp_path / "decode.json"),
+                          "--llama-cpp-dir", str(llama_cpp)])
+
+    assert code == 1
+    assert json.loads(capsys.readouterr().out)["measured"] is False
+
+
+def test_cli_decode_measures_and_exits_zero(tmp_path, capsys, monkeypatch):
+    evidence_root = _exported_manifest(tmp_path, (CONTROL,))
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-bench").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(evidence, "_run", FakeBench().runner)
+
+    code = evidence_main(["--evidence-root", str(evidence_root),
+                          "decode", "--arms", CONTROL.name,
+                          "--out", str(tmp_path / "decode.json"),
+                          "--llama-cpp-dir", str(llama_cpp),
+                          "--note", "scoring pass running on the GPU"])
+
+    assert code == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["measured"] is True
+    assert printed["depths"] == [0, TRAINED_CONTEXT]
 
 
 def test_cli_export_writes_the_manifest_and_summarizes(tmp_path, capsys,
