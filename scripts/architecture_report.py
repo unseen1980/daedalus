@@ -149,9 +149,57 @@ SCORECARD_ROOT = f"{REPORT_ROOT}/scorecards"
 #: run, holding that arm's per-task retrieval scorecards.
 RETRIEVAL_ROOT = f"{REPORT_ROOT}/retrieval"
 
-#: The default `decode_bench.py` report. One file, not one per arm, and that is
-#: load-bearing -- see `read_decode_passes`.
-DECODE_REPORT = f"{REPORT_ROOT}/decode.json"
+def legacy_decode_report(root: str = REPORT_ROOT) -> str:
+    """The one `decode_bench.py` report every stage shared before the scoping.
+
+    Read as a fallback, never written -- see `resolve_decode_report`.
+    """
+    return f"{root}/decode.json"
+
+
+#: Stage A's measured pass lives here, under the name it was written with.
+DECODE_REPORT = legacy_decode_report()
+
+
+def decode_report_path(tag: str = "stagea", root: str = REPORT_ROOT) -> str:
+    """The decode report a stage writes, and the one its gate reads.
+
+    One file per *stage*, like the `export-<tag>.json` and `retrieval-<tag>.json`
+    manifests beside it. One file per arm would be wrong for the reason
+    `read_decode_passes` gives -- an arm and the control are only comparable
+    inside one alternating invocation -- but one file for *every* stage was
+    wrong in the other direction, and it cost a phase.
+
+    `run_decode` refuses to overwrite a report that measures models the
+    invocation does not: the guard that stops a two-finalist rerun deleting a
+    full sweep's numbers. Every stage after the first measures entirely
+    different runs, so a single shared filename made that refusal certain rather
+    than protective. Stage B's evidence chain hit it at 2026-08-26T06:34:32Z --
+    export and retrieval both passed, decode was refused as `would-drop-models`,
+    the chain exited 1, the controller marked the phase `failed`, and the gate's
+    fifth column stayed unmeasured on a stage that had already spent its GPU
+    hours. Scoping the name by tag leaves the guard doing its real job, within a
+    stage, and removes the collision between stages.
+    """
+    return f"{root}/decode-{tag}.json"
+
+
+def resolve_decode_report(tag: str = "stagea", explicit=None,
+                          root: str = REPORT_ROOT) -> str:
+    """Which decode report to *read* for this tag.
+
+    Writers always use `decode_report_path`. Readers accept the legacy shared
+    `decode.json` as a fallback, because stage A measured its pass into that
+    name before the scoping existed: resolving strictly would turn a measured
+    column into an unmeasured one and flip an already-published recommendation,
+    with nothing in the artifact saying why. The resolved path is recorded in
+    the recommendation, so which of the two was read is a fact in the
+    deliverable rather than something to reconstruct from mtimes.
+    """
+    if explicit:
+        return str(explicit)
+    scoped = Path(decode_report_path(tag, root))
+    return str(scoped) if scoped.exists() else legacy_decode_report(root)
 
 
 # ============================== preregistered: the recommendation gate ========
@@ -1304,7 +1352,8 @@ def gate_arm(row: dict, control_row: dict, *, retrieval: dict,
 def build_recommendation(rows: Sequence[dict], arms: Sequence[ArchArm], *,
                          tag: str = "stagea", shape: StageShape = STAGE_A,
                          retrieval_root: str = RETRIEVAL_ROOT,
-                         decode_report: str = DECODE_REPORT,
+                         decode_report: Optional[str] = None,
+                         report_root: str = REPORT_ROOT,
                          source: str = MATCHED_HOLDOUT_SOURCE) -> dict:
     """The phase deliverable: a Pareto set of shapes that clear every column.
 
@@ -1318,6 +1367,7 @@ def build_recommendation(rows: Sequence[dict], arms: Sequence[ArchArm], *,
     control_arm = by_name[control_row["arm"]]
     control_retrieval = read_retrieval(control_arm, tag=tag,
                                        root=retrieval_root)
+    decode_report = resolve_decode_report(tag, decode_report, report_root)
     decode_passes = read_decode_passes(decode_report)
 
     gated = []
@@ -1346,6 +1396,12 @@ def build_recommendation(rows: Sequence[dict], arms: Sequence[ArchArm], *,
                   "total_tokens": shape.total_tokens, "steps": shape.steps},
         "holdout_source": source,
         "control": control_row["arm"],
+        # Which files the two measured columns were read from. The decode one
+        # in particular can resolve to this stage's report or to the legacy
+        # shared one, and "unmeasured" reads very differently depending on
+        # which file the gate was looking at.
+        "retrieval_root": str(retrieval_root),
+        "decode_report": str(decode_report),
         "gate": {
             "columns": list(GATE_COLUMNS),
             "bpb_floor_pct": STAGE_B_FLOOR_PCT,
@@ -1947,9 +2003,12 @@ def main(argv=None) -> int:
     recommend.add_argument("--retrieval-root", default=RETRIEVAL_ROOT,
                            help="one directory per arm run, holding that arm's "
                                 "retrieval-<task>.json scorecards")
-    recommend.add_argument("--decode", default=DECODE_REPORT,
+    recommend.add_argument("--decode", default=None,
                            help="a single decode_bench.py report; arm and "
-                                "control must appear in the same pass")
+                                "control must appear in the same pass. "
+                                "Defaults to this stage's decode-<tag>.json, "
+                                "falling back to the legacy shared decode.json "
+                                "when the stage has none")
 
     stage_c = sub.add_parser(
         "stage-c", help="the preregistered go/no-go on stage C, read off this "
@@ -2005,6 +2064,7 @@ def main(argv=None) -> int:
         report = build_recommendation(rows, arms, tag=tag, shape=shape,
                                       retrieval_root=args.retrieval_root,
                                       decode_report=args.decode,
+                                      report_root=args.report_root,
                                       source=args.source)
         json_path = Path(args.report_root) / f"{tag}-recommendation.json"
         markdown_path = Path(args.report_root) / f"{tag}-recommendation.md"

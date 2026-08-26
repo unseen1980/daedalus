@@ -697,18 +697,18 @@ class FakeBench:
         return self.returncode, "bench output"
 
 
-def _exported_manifest(tmp_path: Path, arms) -> Path:
+def _exported_manifest(tmp_path: Path, arms, tag: str = "stagea") -> Path:
     """An export manifest with a Q4_0 on disk for each arm."""
     evidence_root = tmp_path / "evidence"
     records = {}
     for arm in arms:
-        gguf = evidence_root / f"arch-stagea-{arm.name}" / "model-q4_0.gguf"
+        gguf = evidence_root / f"arch-{tag}-{arm.name}" / "model-q4_0.gguf"
         gguf.parent.mkdir(parents=True, exist_ok=True)
         gguf.write_bytes(b"q4")
         records[arm.name] = {"arm": arm.name, "quantized": True,
                              "gguf_q4_0": {"path": str(gguf), "sha256": "c" * 64}}
-    path = manifest_path(root=str(evidence_root))
-    path.write_text(json.dumps({"tag": "stagea", "arms": records}))
+    path = manifest_path(tag, root=str(evidence_root))
+    path.write_text(json.dumps({"tag": tag, "arms": records}))
     return evidence_root
 
 
@@ -773,6 +773,40 @@ def test_a_narrower_rerun_refuses_to_replace_a_wider_report(tmp_path):
     # The wider report is still on disk, untouched.
     assert dropped_models(out, {}) == [f"arch-stagea-{name}"
                                        for name in sorted([CONTROL.name, ARM.name])]
+
+
+def test_each_stage_writes_its_own_decode_report(tmp_path):
+    """The refusal above must not fire between *stages*.
+
+    Every stage measures different runs, so one shared filename turned the
+    would-drop-models guard from a protection into a certainty: the second
+    stage to reach decode was always refused. Stage B hit it at
+    2026-08-26T06:34:32Z -- export and retrieval passed, decode was refused,
+    the chain exited 1 and the gate's fifth column stayed unmeasured on a stage
+    whose GPU hours were already spent.
+    """
+    evidence_root = _exported_manifest(tmp_path, (CONTROL, ARM))
+    _exported_manifest(tmp_path, (CONTROL, ARM), tag="stageb")
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-bench").write_text("#!/bin/sh\n")
+    reports = tmp_path / "reports"
+
+    first = run_decode([CONTROL, ARM], tag="stagea",
+                       evidence_root=str(evidence_root),
+                       report_root=str(reports), llama_cpp_dir=str(llama_cpp),
+                       runner=FakeBench().runner)
+    second = run_decode([CONTROL, ARM], tag="stageb",
+                        evidence_root=str(evidence_root),
+                        report_root=str(reports), llama_cpp_dir=str(llama_cpp),
+                        runner=FakeBench().runner)
+
+    assert first["measured"] is True
+    assert second["measured"] is True, "refused by the previous stage's report"
+    assert first["out"] == str(reports / "decode-stagea.json")
+    assert second["out"] == str(reports / "decode-stageb.json")
+    # And the earlier stage's numbers are still on disk, unreplaced.
+    assert dropped_models(first["out"], {}) == sorted(
+        f"arch-stagea-{arm.name}" for arm in (CONTROL, ARM))
 
 
 def test_refresh_replaces_a_report_deliberately(tmp_path):
@@ -1167,6 +1201,29 @@ def test_the_chain_runs_the_three_passes_in_order(tmp_path, capsys,
         (tmp_path / "evidence" / "evidence-stagea.json").read_text())
     assert written["arms"] == [CONTROL.name, ARM.name]
     assert written["ok"] is True
+
+
+def test_the_chain_defaults_its_decode_report_to_this_stage(tmp_path, capsys,
+                                                            monkeypatch):
+    """With no `--out`, the chain writes `decode-<tag>.json` under the report
+    root, beside the `export-<tag>.json` and `retrieval-<tag>.json` manifests
+    its other two passes write. A caller that has to remember a per-stage path
+    is a caller that will forget it once, and the cost of forgetting is a
+    refused decode pass on a stage that has already been trained."""
+    chain, argv = _chain_box(tmp_path, (CONTROL, ARM), monkeypatch)
+    reports = tmp_path / "reports"
+    # Drop the explicit --out the fixture supplies, and route the default.
+    argv = argv[:argv.index("--out")] + argv[argv.index("--out") + 2:]
+    argv = ["--report-root", str(reports)] + argv
+
+    code = evidence_main(argv)
+
+    assert code == 0
+    assert chain.passes == ["export", "retrieval", "decode"]
+    stages = {stage["stage"]: stage
+              for stage in json.loads(capsys.readouterr().out)["stages"]}
+    assert stages["decode"]["out"] == str(reports / "decode-stagea.json")
+    assert read_decode_passes(reports / "decode-stagea.json")
 
 
 def test_nothing_exported_stops_the_chain_before_the_stock_passes(

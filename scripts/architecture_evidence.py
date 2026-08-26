@@ -80,11 +80,11 @@ from typing import Callable, Optional, Sequence, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from daedalus.scorecard import sha256_file  # noqa: E402
-from scripts.architecture_report import (DECODE_REPORT,  # noqa: E402
-                                         RETRIEVAL_GATE_TASKS,
+from scripts.architecture_report import (RETRIEVAL_GATE_TASKS,  # noqa: E402
                                          RETRIEVAL_MIN_ITEMS_PER_DEPTH,
                                          RETRIEVAL_ROOT, TRAINED_CONTEXT,
                                          advanced_selection,
+                                         decode_report_path,
                                          read_decode_passes, read_retrieval,
                                          selection_notes, swept_arms,
                                          templated_cards)
@@ -638,7 +638,7 @@ def dropped_models(out, models: dict) -> list:
 
 def run_decode(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
                shape: StageShape = STAGE_A, evidence_root: str = EVIDENCE_ROOT,
-               out: str = DECODE_REPORT,
+               out: Optional[str] = None, report_root: str = REPORT_ROOT,
                llama_cpp_dir: str = DEFAULT_LLAMA_CPP_DIR, threads: int = 8,
                rounds: int = DECODE_ROUNDS, n_gen: int = DECODE_N_GEN,
                depths: Sequence[int] = DECODE_DEPTHS, note: Optional[str] = None,
@@ -647,6 +647,10 @@ def run_decode(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
                                          Tuple[int, str]]] = None) -> dict:
     """Benchmark every exported arm against the control in one alternating pass."""
     runner = runner or _run
+    # Per stage, not per program: see `decode_report_path`. A shared filename
+    # made the would-drop-models guard below fire on every stage after the
+    # first, which is how stage B finished with an unmeasured decode column.
+    out = out or decode_report_path(tag, report_root)
     records = _read_json(manifest_path(tag, evidence_root)).get("arms") or {}
     models = decode_models(records, arms, tag)
     common = {"tag": tag, "shape": shape.name, "out": str(out),
@@ -727,7 +731,7 @@ def run_all(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
             shape: StageShape = STAGE_A, run_root: str = RUN_ROOT,
             evidence_root: str = EVIDENCE_ROOT,
             retrieval_root: str = RETRIEVAL_ROOT,
-            decode_out: str = DECODE_REPORT,
+            decode_out: Optional[str] = None, report_root: str = REPORT_ROOT,
             llama_cpp_dir: str = DEFAULT_LLAMA_CPP_DIR, keep_hf: bool = False,
             per_depth: int = RETRIEVAL_PER_DEPTH, threads: int = 8,
             n_ctx: int = 4096, seed: Optional[int] = None,
@@ -771,6 +775,7 @@ def run_all(arms: Sequence[ArchArm] = ARMS, *, tag: str = "stagea",
 
         decode = run_decode(arms, tag=tag, shape=shape,
                             evidence_root=evidence_root, out=decode_out,
+                            report_root=report_root,
                             llama_cpp_dir=llama_cpp_dir, threads=threads,
                             rounds=rounds, n_gen=n_gen, note=note,
                             refresh=refresh, selection=selection)
@@ -860,9 +865,10 @@ def main(argv=None) -> int:
     decode.add_argument("--arms-from-report", default=None, metavar="TAG",
                         help=ARMS_FROM_REPORT_HELP)
     decode.add_argument("--llama-cpp-dir", default=DEFAULT_LLAMA_CPP_DIR)
-    decode.add_argument("--out", default=DECODE_REPORT,
+    decode.add_argument("--out", default=None,
                         help="the single report the gate reads; arm and control "
-                             "must appear in the same pass inside it")
+                             "must appear in the same pass inside it. Defaults "
+                             "to this stage's decode-<tag>.json")
     decode.add_argument("--threads", type=int, default=8)
     decode.add_argument("--rounds", type=int, default=DECODE_ROUNDS)
     decode.add_argument("--n-gen", type=int, default=DECODE_N_GEN)
@@ -894,8 +900,10 @@ def main(argv=None) -> int:
                             "gate's threshold has no power")
     chain.add_argument("--n-ctx", type=int, default=4096)
     chain.add_argument("--seed", type=int, default=None)
-    chain.add_argument("--out", default=DECODE_REPORT,
-                       help="the single decode report the gate reads")
+    chain.add_argument("--out", default=None,
+                       help="the single decode report the gate reads; defaults "
+                            "to this stage's decode-<tag>.json, which is what "
+                            "keeps one stage's pass from refusing the next's")
     chain.add_argument("--threads", type=int, default=8,
                        help="llama.cpp threads, for both stock passes")
     chain.add_argument("--rounds", type=int, default=DECODE_ROUNDS)
@@ -946,6 +954,7 @@ def main(argv=None) -> int:
         report = run_decode(arms,
                             tag=tag, shape=shape,
                             evidence_root=args.evidence_root, out=args.out,
+                            report_root=args.report_root,
                             llama_cpp_dir=args.llama_cpp_dir,
                             threads=args.threads, rounds=args.rounds,
                             n_gen=args.n_gen, depths=args.depths,
@@ -961,7 +970,7 @@ def main(argv=None) -> int:
         report = run_all(arms, tag=tag, shape=shape, run_root=args.run_root,
                          evidence_root=args.evidence_root,
                          retrieval_root=args.retrieval_root,
-                         decode_out=args.out,
+                         decode_out=args.out, report_root=args.report_root,
                          llama_cpp_dir=args.llama_cpp_dir,
                          keep_hf=args.keep_hf, per_depth=args.per_depth,
                          threads=args.threads, n_ctx=args.n_ctx, seed=args.seed,

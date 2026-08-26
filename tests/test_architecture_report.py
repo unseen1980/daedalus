@@ -34,13 +34,14 @@ from scripts.architecture_report import (GATE_COLUMNS, MATCHED_HOLDOUT_SOURCE,
                                          build_recommendation,
                                          build_report,
                                          credited_bpb_delta_pct, deadline_room,
-                                         decode_check,
+                                         decode_check, decode_report_path,
                                          export_check, gate_arm, gate_verdict,
                                          kv_check, pareto_frontier, read_rows,
                                          read_decode_passes,
                                          read_run_throughput, render_markdown,
                                          render_recommendation_markdown,
                                          render_stage_c_markdown, report_path,
+                                         resolve_decode_report,
                                          retrieval_check,
                                          score_arm, scorecard_path, scored_from,
                                          select_stage_b, selection_notes,
@@ -1184,6 +1185,65 @@ def test_the_recommend_subcommand_writes_both_artifacts(tmp_path):
     assert report["gate"]["columns"] == list(GATE_COLUMNS)
     assert "recommendation gate" in \
         (tmp_path / "out" / "stagea-recommendation.md").read_text()
+
+
+def test_the_gate_reads_this_stage_s_decode_report_by_default(tmp_path):
+    """Each stage writes `decode-<tag>.json`, so the gate reads that one.
+
+    Not a convenience: reading a shared file would let one stage's numbers
+    answer another stage's decode column whenever the names happened to line
+    up, and the names are the operator's to type (`decode_entry` accepts the
+    grid point as well as the run name)."""
+    root = tmp_path / "out"
+    _decode_report(decode_report_path("stageb", str(root)),
+                   models={arm: {0: 20.0, 2048: 20.0}
+                           for arm in ("a8-kv4", "a4-kv1")},
+                   file_mb={arm: 60.0 for arm in ("a8-kv4", "a4-kv1")})
+    # The shared file says the same arm is 95% slower than the control. If the
+    # gate read it, the decode column below would fail rather than pass.
+    _decode_report(root / "decode.json",
+                   models={"a8-kv4": {0: 20.0, 2048: 20.0},
+                           "a4-kv1": {0: 1.0, 2048: 1.0}},
+                   file_mb={arm: 60.0 for arm in ("a8-kv4", "a4-kv1")})
+    arms = [ARMS_BY_NAME["a8-kv4"], ARMS_BY_NAME["a4-kv1"]]
+    for name in ("a8-kv4", "a4-kv1"):
+        _write_retrieval(tmp_path / "retrieval", f"arch-stageb-{name}",
+                         depths={256: 0.90, 2048: 0.80})
+
+    built = build_recommendation(_gate_rows(), arms, tag="stageb",
+                                 shape=STAGE_B,
+                                 retrieval_root=str(tmp_path / "retrieval"),
+                                 report_root=str(root))
+
+    assert built["decode_report"] == decode_report_path("stageb", str(root))
+    assert built["arms"][1]["checks"]["decode"]["status"] == "pass"
+
+
+def test_a_stage_without_its_own_decode_report_still_reads_the_shared_one(
+        tmp_path):
+    """Stage A measured its pass into the shared `decode.json` before the name
+    was scoped. Resolving strictly would turn a measured column into an
+    unmeasured one and silently flip a published recommendation, so the legacy
+    file is still read -- and the artifact records which file that was."""
+    root = tmp_path / "out"
+    _decode_report(root / "decode.json",
+                   models={arm: {0: 20.0, 2048: 20.0}
+                           for arm in ("a8-kv4", "a4-kv1")},
+                   file_mb={arm: 60.0 for arm in ("a8-kv4", "a4-kv1")})
+    arms = [ARMS_BY_NAME["a8-kv4"], ARMS_BY_NAME["a4-kv1"]]
+    for name in ("a8-kv4", "a4-kv1"):
+        _write_retrieval(tmp_path / "retrieval", f"arch-stagea-{name}",
+                         depths={256: 0.90, 2048: 0.80})
+
+    built = build_recommendation(_gate_rows(), arms,
+                                 retrieval_root=str(tmp_path / "retrieval"),
+                                 report_root=str(root))
+
+    assert built["decode_report"] == str(root / "decode.json")
+    assert built["arms"][1]["checks"]["decode"]["status"] == "pass"
+    # An explicit path still wins over both.
+    assert resolve_decode_report("stagea", str(tmp_path / "typed.json"),
+                                 str(root)) == str(tmp_path / "typed.json")
 
 
 # ====================================================== the stage-C go/no-go ==
