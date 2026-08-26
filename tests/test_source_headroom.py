@@ -220,3 +220,174 @@ class TestBudgetParsing:
         p = tmp_path / "manifest.json"
         p.write_text('{"sources": {"a": {"tokens": 5}}}')
         assert sh.load_manifest(str(p))["a"]["tokens"] == 5
+
+
+# ------------------------------------------------- unique supply and epochs
+
+# Copied from data/shards/fineweb-edu/manifest.json on this box. The shape is
+# the trap: `total_tokens` describes the *fetched subset* and `subset_of` the
+# whole released build, so reading the obvious key understates the source by
+# 10.8x -- and understating supply is how a corpus reports a shortfall it does
+# not have.
+FINEWEB_SHARD_MANIFEST = {
+    "source_key": "fineweb-edu",
+    "source_dataset": "HuggingFaceFW/fineweb-edu",
+    "stream_state": {"epoch": 0, "hf_state": {"examples_iterable": {
+        "examples_iterable": {"shard_idx": 0, "shard_example_idx": 340000},
+        "previous_state": {"shard_idx": 6, "shard_example_idx": 184000},
+        "batch_idx": 4900000}}},
+    "n_seen": 4900000, "n_kept": 4899632,
+    "total_tokens": 479_185_034,
+    "subset_of": {"shards": 103, "total_tokens": 5_193_493_853},
+}
+
+# data/shards/stack-edu-python/manifest.json: the source that genuinely ran out
+# of documents, and the one whose manifest carries **no** stream position.
+STACK_SHARD_MANIFEST = {
+    "source_key": "stack-edu-python",
+    "source_dataset": "codeparrot/github-code",
+    "total_tokens": 200_000_000,
+    "subset_of": {"shards": 13, "total_tokens": 1_210_964_651},
+}
+
+
+class TestRealizedTokensComeFromTheWholeBuild:
+    def test_prefers_the_released_total_over_the_fetched_subset(self):
+        tokens, basis = sh.realized_tokens(FINEWEB_SHARD_MANIFEST)
+        assert tokens == 5_193_493_853
+        assert "subset_of" in basis
+
+    def test_falls_back_to_total_tokens_when_nothing_was_subsetted(self):
+        tokens, basis = sh.realized_tokens({"total_tokens": 403_573})
+        assert tokens == 403_573
+        assert "total_tokens" in basis
+
+    def test_a_manifest_with_neither_key_reports_nothing_rather_than_guessing(self):
+        assert sh.realized_tokens({})[0] == 0
+
+
+class TestSupplyRefusesToCreditFilesItCannotPlace:
+    """No stream position means no density, and no density means no reachable
+    remainder. Crediting file 0 as "the file we stopped in" would divide the
+    whole build's tokens by one file's bytes and inflate a 1.2B source to
+    something like 15B."""
+
+    def test_no_stream_position_credits_only_what_was_realized(self):
+        s = sh.supply_from_manifest("stack-edu-python", STACK_SHARD_MANIFEST,
+                                    file_sizes=STACK_SIZES)
+        assert s.unique_tokens == 1_210_964_651
+        assert s.reachable_tokens is None
+        assert s.density_tok_per_byte is None
+        assert "no stream position" in s.basis
+
+    def test_no_file_sizes_credits_only_what_was_realized(self):
+        s = sh.supply_from_manifest("fineweb-edu", FINEWEB_SHARD_MANIFEST)
+        assert s.unique_tokens == 5_193_493_853
+        assert s.reachable_tokens is None
+
+    def test_a_stream_position_adds_the_untouched_files(self):
+        # 7 of 10 files touched at shard_idx 6; density is the build's own
+        # tokens over those 7 files, and the remaining 3 are credited at it.
+        s = sh.supply_from_manifest("fineweb-edu", FINEWEB_SHARD_MANIFEST,
+                                    file_sizes=[1_000_000] * 10)
+        assert s.files_consumed == 6
+        assert s.density_tok_per_byte == 5_193_493_853 / 7_000_000
+        assert s.reachable_tokens == int(s.density_tok_per_byte * 3_000_000)
+        assert s.unique_tokens == 5_193_493_853 + s.reachable_tokens
+        assert "untouched" in s.basis
+
+    def test_an_exhausted_stream_has_nothing_left_to_reach(self):
+        s = sh.supply_from_manifest("stack-edu-python",
+                                    dict(STACK_SHARD_MANIFEST, stream_state=STACK_STATE),
+                                    file_sizes=STACK_SIZES)
+        assert s.files_consumed == s.files_total == 10
+        assert s.reachable_tokens == 0
+        assert s.unique_tokens == 1_210_964_651
+
+
+class TestEpochCurve:
+    """A budget times a share is a demand; a supply divided into it is epochs."""
+
+    SPECS = [("fineweb-edu", 0.375, 1), ("stack-edu-python", 0.09, 1)]
+
+    def _curve(self, budgets=(1_000_000_000_000,), supplies=None):
+        supplies = supplies or {
+            "fineweb-edu": sh.Supply(key="fineweb-edu", unique_tokens=5_193_493_853,
+                                     realized_tokens=5_193_493_853, basis="realized"),
+            "stack-edu-python": sh.Supply(key="stack-edu-python",
+                                          unique_tokens=1_210_964_651,
+                                          realized_tokens=1_210_964_651, basis="realized"),
+        }
+        return sh.epoch_curve(supplies, self.SPECS, budgets)
+
+    def test_epochs_are_the_demand_over_the_supply(self):
+        row = self._curve()[0]["sources"][0]
+        assert row.key == "fineweb-edu"
+        assert row.needed_tokens == 375_000_000_000
+        assert abs(row.epochs - 375_000_000_000 / 5_193_493_853) < 1e-9
+        assert row.epochs > 72          # 72.2 epochs of a corpus built for 3.5
+
+    def test_the_shortfall_is_what_must_be_added_to_reach_the_four_epoch_bar(self):
+        row = self._curve()[0]["sources"][0]
+        # 375B at 4 epochs needs 93.75B unique; the source has 5.19B.
+        assert row.shortfall_tokens == 93_750_000_000 - 5_193_493_853
+        assert row.over_cap is True
+        assert abs(row.growth_x - 93_750_000_000 / 5_193_493_853) < 1e-9
+
+    def test_a_source_inside_the_bar_reports_no_shortfall(self):
+        # 30B x 0.375 = 11.25B; at 4 epochs that needs 2.81B and it has 5.19B.
+        row = self._curve(budgets=(30_000_000_000,))[0]["sources"][0]
+        assert row.over_cap is False
+        assert row.shortfall_tokens == 0
+        assert row.epochs < 4
+
+    def test_a_source_with_no_supply_is_infinite_rather_than_a_crash(self):
+        supplies = {
+            "fineweb-edu": sh.Supply(key="fineweb-edu", unique_tokens=0,
+                                     realized_tokens=0, basis="none"),
+            "stack-edu-python": sh.Supply(key="stack-edu-python", unique_tokens=1,
+                                          realized_tokens=1, basis="realized"),
+        }
+        row = self._curve(supplies=supplies)[0]["sources"][0]
+        assert row.epochs == float("inf")
+        assert row.growth_x is None
+        assert row.shortfall_tokens == 375_000_000_000 // 4
+
+    def test_every_requested_budget_appears_once_in_ascending_order(self):
+        budgets = (100_000_000_000, 30_000_000_000, 1_000_000_000_000)
+        got = [point["budget"] for point in self._curve(budgets=budgets)]
+        assert got == [30_000_000_000, 100_000_000_000, 1_000_000_000_000]
+
+    def test_totals_name_the_binding_source_not_just_the_aggregate(self):
+        totals = self._curve()[0]["totals"]
+        # Aggregate epochs (1T over 6.40B unique) hides which source binds.
+        assert totals["unique_tokens"] == 5_193_493_853 + 1_210_964_651
+        assert totals["sources_over_cap"] == 2
+        assert totals["binding_source"] == "stack-edu-python"   # 74.3 epochs
+        assert totals["verdict"] == sh.SHORT
+        assert totals["shortfall_tokens"] == sum(
+            r.shortfall_tokens for r in self._curve()[0]["sources"])
+
+    def test_a_supported_budget_says_so(self):
+        totals = self._curve(budgets=(10_000_000_000,))[0]["totals"]
+        assert totals["sources_over_cap"] == 0
+        assert totals["verdict"] == sh.SUPPORTED
+
+    def test_a_source_with_no_measured_supply_is_carried_as_unknown(self):
+        # Missing from `supplies` entirely -- report it, do not drop it, and do
+        # not let a silent omission read as a corpus that covers the budget.
+        curve = sh.epoch_curve({}, self.SPECS, (30_000_000_000,))
+        rows = curve[0]["sources"]
+        assert [r.key for r in rows] == ["fineweb-edu", "stack-edu-python"]
+        assert all(r.basis == sh.UNKNOWN.lower() or "unknown" in r.basis.lower()
+                   for r in rows)
+        assert curve[0]["totals"]["verdict"] == sh.SHORT
+
+
+class TestTheCurveIsAReportNotAGate:
+    def test_a_corpus_short_of_the_bar_still_exits_zero(self):
+        """The expected answer at 1T is "no", and the phase must be able to
+        record it. A non-zero exit marks the controller phase failed, which
+        would turn the deliverable into a failure and invite someone to widen
+        the bar until it passed."""
+        assert sh.curve_exit_status([{"totals": {"verdict": sh.SHORT}}]) == 0
