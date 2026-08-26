@@ -418,3 +418,317 @@ def test_every_real_item_contributes_something_this_index_can_filter_on():
     assert CP.code_coverage_problems(prov) == []
     for name, meta in prov["benchmarks"].items():
         assert meta["fields"].get("reference", 0) > 0, name
+
+
+# ======================================================= the admission gate ===
+#
+# Two properties phase 8's corpus has and the general corpus never needed: every
+# document is permissively licensed, and no repository appears on both sides of
+# the train/holdout split. Both are decided per row, before anything is
+# tokenized, and both fail *quietly* -- a leaked repository makes the holdout
+# read better, an unrecognised licence string makes the corpus undescribable,
+# and neither raises. So these tests are about the quiet failures.
+
+
+def _row(repo="octocat/hello-world", license_value="mit", code="print(1)\n",
+         **extra) -> dict:
+    """Shaped like a `codeparrot/github-code` row: the code, the repository it
+    came from, and the licence GitHub reported for that repository."""
+    return {"code": code, "repo_name": repo, "path": "src/main.py",
+            "language": "Python", "license": license_value, **extra}
+
+
+def _gate(want="train", **kw) -> "CP.RepositoryGate":
+    kw.setdefault("holdout_frac", 0.25)   # coarse, so fixtures need few names
+    return CP.RepositoryGate(want=want, **kw)
+
+
+def _names(n: int, prefix: str = "org") -> list:
+    return [f"{prefix}/repo-{i}" for i in range(n)]
+
+
+# ------------------------------------------------------------- the licence ---
+
+@pytest.mark.parametrize("license_value", sorted(CP.PERMISSIVE_LICENSES))
+def test_every_permissive_licence_is_admitted(license_value):
+    assert CP.license_verdict(license_value) == "permissive"
+
+
+@pytest.mark.parametrize("license_value", sorted(CP.KNOWN_NON_PERMISSIVE_LICENSES))
+def test_every_copyleft_licence_is_refused_by_name(license_value):
+    """By name, not by falling through: a licence we know about and refuse is a
+    different fact from one we have never seen, and only the second is news."""
+    assert CP.license_verdict(license_value) == "non-permissive"
+
+
+@pytest.mark.parametrize("license_value", [
+    None,                       # the column exists and was never populated
+    "",
+    "   ",
+    "other",                    # GitHub's own catch-all
+    "elastic-2.0",              # source-available, not open source at all
+    "gpl-4.0",                  # a value that does not exist yet
+])
+def test_an_unrecognised_licence_is_refused_and_counted_as_unknown(license_value):
+    """The allow-list's whole purpose. A deny-list would admit every one of
+    these, and the corpus would contain text nobody can describe the terms of.
+    """
+    assert CP.license_verdict(license_value) == "unknown"
+
+    gate = _gate()
+    assert gate(_row(license_value=license_value)) is False
+    assert gate.refusals["unknown_license"] == 1
+    assert gate.refusals["non_permissive"] == 0
+
+
+def test_a_licence_is_normalised_before_it_is_looked_up():
+    assert CP.license_verdict("  Apache-2.0 ") == "permissive"
+    assert CP.license_verdict("MIT") == "permissive"
+    # Multi-licensed rows have carried a list. Its first entry is kept whole
+    # rather than joined, so what lands in the counters is something lookup-able.
+    assert CP.license_verdict(["mit", "gpl-3.0"]) == "permissive"
+    assert CP.normalize_license(["gpl-3.0"]) == "gpl-3.0"
+    assert CP.normalize_license([]) == ""
+
+
+def test_the_licence_histogram_keeps_refused_strings_verbatim():
+    """The unknown counter says *how many*; only the verbatim string says what
+    to do about it. Widening the allow-list on a guess is the alternative."""
+    gate = _gate()
+    for value in ("mit", "gpl-3.0", "gpl-3.0", "wtfpl"):
+        gate(_row(repo="org/only", license_value=value))
+
+    assert gate.manifest()["licenses"] == {"gpl-3.0": 2, "mit": 1, "wtfpl": 1}
+
+
+# ---------------------------------------------------------- the repository ---
+
+@pytest.mark.parametrize("key", CP.REPOSITORY_FIELDS)
+def test_a_repository_is_found_under_every_field_that_has_carried_one(key):
+    row = {"code": "x", "license": "mit", key: "Org/Name"}
+    assert CP.repository_of(row) == "org/name"
+    assert CP.repository_field_of(row) == key
+
+
+def test_a_row_with_no_repository_is_refused_by_both_sides():
+    """The only answer that keeps the two passes disjoint. Defaulting an
+    unidentifiable row to a side means both passes default it the same way and
+    the same document enters train *and* holdout -- the exact leak the split
+    exists to prevent."""
+    row = {"code": "print(1)", "license": "mit"}
+    assert CP.repository_of(row) is None
+
+    for want in CP.SPLITS:
+        gate = _gate(want=want)
+        assert gate(row) is False
+        assert gate.refusals["no_repository"] == 1
+
+
+def test_repository_case_is_not_part_of_its_identity():
+    """GitHub treats `Owner/Repo` and `owner/repo` as one project; blake2b does
+    not. Unlowercased, the two spellings hash to different buckets and one
+    repository lands on both sides."""
+    assert CP.repository_of(_row(repo="Octocat/Hello-World")) == \
+        CP.repository_of(_row(repo="octocat/hello-world"))
+    assert CP.repository_split("Torvalds/Linux".lower()) == \
+        CP.repository_split("torvalds/linux")
+
+
+# --------------------------------------------------------------- the split ---
+
+def test_the_split_is_a_pure_function_of_the_name():
+    names = _names(500)
+    first = [CP.repository_split(n) for n in names]
+    assert [CP.repository_split(n) for n in reversed(names)] == list(reversed(first))
+    assert [CP.repository_split(n) for n in names] == first
+
+
+def test_the_split_survives_a_different_interpreter_hash_seed():
+    """The failure this pins is invisible in-process. `hash()` is randomized per
+    interpreter, so a `hash()`-based split re-partitions every repository the
+    moment a long build restarts -- and the resulting train/holdout overlap
+    shows up only as a holdout that reads better than it should."""
+    import subprocess
+    import sys
+
+    names = _names(64)
+    program = (
+        "import sys; sys.path.insert(0, %r);"
+        "from daedalus.codeprep import repository_split;"
+        "print(','.join(repository_split(n) for n in %r))"
+        % (os.path.dirname(os.path.dirname(os.path.abspath(__file__))), names)
+    )
+    here = ",".join(CP.repository_split(n) for n in names)
+    for seed in ("0", "1", "12345"):
+        out = subprocess.run([sys.executable, "-c", program], check=True,
+                             capture_output=True, text=True,
+                             env={**os.environ, "PYTHONHASHSEED": seed})
+        assert out.stdout.strip() == here, seed
+
+
+def test_two_gates_partition_every_repository_exactly_once():
+    """What makes the holdout a second independent stream rather than a second
+    reading of the first."""
+    train, holdout = _gate("train"), _gate("holdout")
+    rows = [_row(repo=name) for name in _names(400)]
+
+    admitted = {"train": {r["repo_name"] for r in rows if train(r)},
+                "holdout": {r["repo_name"] for r in rows if holdout(r)}}
+
+    assert admitted["train"] & admitted["holdout"] == set()
+    assert admitted["train"] | admitted["holdout"] == {r["repo_name"] for r in rows}
+    assert admitted["holdout"], "a holdout of nothing cannot be measured"
+
+
+def test_a_repositorys_every_file_lands_on_one_side():
+    """The property the plan asks for in its own words: split by repository, not
+    by file or packed window. Two files from one project share helpers, idioms
+    and licence headers, so one leaked repository inflates the holdout score the
+    way training on it would."""
+    files = [_row(repo="org/one", path=f"src/{i}.py") for i in range(50)]
+    train, holdout = _gate("train"), _gate("holdout")
+
+    verdicts = {"train": {train(f) for f in files},
+                "holdout": {holdout(f) for f in files}}
+
+    for side, calls in verdicts.items():
+        assert calls in ({True}, {False}), f"{side} split one repository's files"
+    # ...and it is on exactly one of them, not neither.
+    assert verdicts["train"] != verdicts["holdout"]
+
+
+def test_the_realised_holdout_is_near_the_fraction_asked_for():
+    """A hash that clumps would satisfy every disjointness test above and still
+    starve the holdout to nothing, or hand it a quarter of the corpus."""
+    names = _names(20_000)
+    for frac in (0.02, 0.1, 0.25):
+        held = sum(CP.repository_split(n, holdout_frac=frac) == "holdout"
+                   for n in names)
+        assert abs(held / len(names) - frac) < 0.01, frac
+
+
+def test_a_different_salt_is_a_different_split():
+    """So a manifest that records the outcome without the salt records something
+    nobody can re-derive."""
+    names = _names(200)
+    ours = [CP.repository_split(n) for n in names]
+    theirs = [CP.repository_split(n, salt="something-else") for n in names]
+    assert ours != theirs
+
+
+@pytest.mark.parametrize("frac", [0.0, 1.0, -0.1, 2, 100])
+def test_a_holdout_fraction_outside_the_unit_interval_is_refused(frac):
+    """`2` for "2%" is the mistake, and it costs a whole build to find later."""
+    with pytest.raises(ValueError, match="holdout_frac"):
+        CP.repository_split("org/repo", holdout_frac=frac)
+    with pytest.raises(ValueError, match="holdout_frac"):
+        CP.RepositoryGate(want="train", holdout_frac=frac)
+
+
+def test_an_unknown_split_side_is_refused_at_construction():
+    with pytest.raises(ValueError, match="want"):
+        CP.RepositoryGate(want="validation")
+
+
+def test_split_is_disjoint_re_derives_both_sides_from_the_manifests_parameters():
+    names = _names(300)
+    audit = CP.split_is_disjoint(names, holdout_frac=0.25)
+
+    assert audit["overlap"] == []
+    assert sorted(audit["train"] + audit["holdout"]) == sorted(names)
+    assert audit["split_salt"] == CP.SPLIT_SALT
+
+
+# -------------------------------------------------------------- the record ---
+
+def test_the_manifest_carries_every_refusal_reason_even_at_zero():
+    """An absent counter and a zero one read identically, and "this build
+    refused nothing for licence reasons" is a claim worth being able to make."""
+    manifest = _gate().manifest()
+    assert set(manifest["refused"]) == set(CP.REFUSAL_REASONS)
+    assert all(count == 0 for count in manifest["refused"].values())
+
+
+def test_the_manifest_records_what_the_split_cannot_be_re_derived_without():
+    gate = _gate(want="holdout", holdout_frac=0.05)
+    manifest = gate.manifest()
+
+    assert manifest["split"] == "holdout"
+    assert manifest["holdout_frac"] == 0.05
+    assert manifest["split_salt"] == CP.SPLIT_SALT
+    assert manifest["permissive_licenses"] == sorted(CP.PERMISSIVE_LICENSES)
+
+
+def test_the_gate_counts_every_row_it_saw_and_the_repositories_it_admitted():
+    gate = _gate("train")
+    rows = ([_row(repo=n) for n in _names(100)]
+            + [_row(repo="org/copyleft", license_value="gpl-3.0"),
+               _row(repo="org/mystery", license_value="wtfpl"),
+               {"code": "x", "license": "mit"}])
+
+    kept = [r for r in rows if gate(r)]
+    manifest = gate.manifest()
+
+    assert manifest["rows_seen"] == len(rows)
+    assert manifest["rows_admitted"] == len(kept)
+    assert manifest["refused"]["non_permissive"] == 1
+    assert manifest["refused"]["unknown_license"] == 1
+    assert manifest["refused"]["no_repository"] == 1
+    assert manifest["repositories"] == len(gate.repositories) == len(
+        {r["repo_name"] for r in kept})
+    assert manifest["repository_fields"] == {"repo_name": len(rows) - 1}
+
+
+def test_a_refused_repository_is_not_in_the_shard_directorys_manifest():
+    gate = _gate("train")
+    gate(_row(repo="org/copyleft", license_value="gpl-3.0"))
+    assert gate.repositories == []
+
+
+def test_the_repository_list_is_bounded_and_says_when_it_stopped_recording():
+    """Phase 8's code sources stream repositories in the millions. An unbounded
+    set of names inside a `dataprep` worker is the growth its RSS caps exist to
+    catch -- a provenance record that OOMs the build is a bad trade."""
+    gate = CP.RepositoryGate(want="train", holdout_frac=0.25, max_repositories=10)
+    admitted = [r["repo_name"] for r in
+                (_row(repo=n) for n in _names(2_000)) if gate(r)]
+    manifest = gate.manifest()
+
+    assert len(manifest["repository_names"]) == 10 < len(admitted)
+    assert manifest["repositories_truncated"] is True
+    # The enumeration stops; the counts do not.
+    assert manifest["rows_admitted"] == len(admitted)
+    assert manifest["rows_seen"] == 2_000
+
+
+def test_a_gate_under_its_cap_does_not_claim_to_be_truncated():
+    gate = CP.RepositoryGate(want="train", holdout_frac=0.25, max_repositories=10)
+    for name in _names(3):
+        gate(_row(repo=name))
+    assert gate.manifest()["repositories_truncated"] is False
+
+
+# ------------------------------------------------- wired the way it is used ---
+
+def test_the_gate_works_as_the_row_filter_dataprep_actually_calls(monkeypatch):
+    """Pinned against `dataprep`'s own document stream rather than by calling
+    the gate directly, because that is the seam the build uses: `filter_fn` is
+    consulted before `text_fn`, so a gate that refused after tokenizing, or one
+    whose signature did not match, would pass every test above and still admit
+    the wrong text here."""
+    from daedalus import dataprep as DP
+
+    rows = [_row(repo="org/keep", license_value="mit", code="KEEP " * 100),
+            _row(repo="org/drop", license_value="gpl-3.0", code="DROP " * 100),
+            {"code": "NOREPO " * 100, "license": "mit"}]
+    monkeypatch.setattr(DP, "_stream_rows", lambda s, *a, **k: iter(rows))
+
+    gate = CP.RepositoryGate(want=CP.repository_split("org/keep"),
+                             holdout_frac=CP.DEFAULT_HOLDOUT_FRAC)
+    spec = DP.SourceSpec("code-python", "codeparrot/github-code", share=1.0,
+                         text_fn=lambda r: r.get("code") or "", filter_fn=gate)
+
+    documents = list(DP._documents(spec, max_docs=None))
+
+    assert [d.split()[0] for d in documents] == ["KEEP"]
+    assert gate.manifest()["rows_seen"] == 3
