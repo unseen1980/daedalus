@@ -19,7 +19,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 | 4 — Tokenizer lab for V2 | **complete**, 32,768 selected, reading in `runs/tokenizer-lab/v2-tokenizer-migration.md` |
 | 5 — ShortConv channel death prevention | **complete**, **no schedule selected**, verdict in `runs/conv-health/verdict-paired.json`, reading in `runs/conv-health/phase5-conv-decay.md` |
 | 6 — Architecture Pareto proxies | **complete**, **no shape recommended and stage C is a no-go**, verdicts in `runs/architecture/stageb-recommendation.json` and `runs/architecture/stageb-stage-c.json` |
-| 7 — Improved general corpus and mixture | **in progress**, headroom curve and complete decontamination coverage measured — reading in `runs/corpus/headroom-curve.md` and `runs/corpus/decontam-index.md` |
+| 7 — Improved general corpus and mixture | **in progress**, headroom curve and complete decontamination coverage measured — reading in `runs/corpus/headroom-curve.md` and `runs/corpus/decontam-index.md`; mixture reference arms training |
 | 8 — Daedalus-Code | not started |
 | 9 — Finalization and reporting | begins no later than T+136h |
 
@@ -165,6 +165,29 @@ Two properties make the digest an identity rather than a timestamp: the file is 
 Cost to the rebuild, measured rather than assumed: **241 MB resident per dataprep worker**, against a 4.0 GB cap on a ~2.6–2.9 GB baseline, leaving ~0.9–1.2 GB of margin at `--max-workers 4`.
 
 This says nothing about what the released corpus let through — that remains `contam_scan.py`'s measurement and is unchanged.
+
+## Phase 7 — Mixture optimisation: the rule is committed, the arms are training
+
+`daedalus/mixture_opt.py` is the decision half — arms, derivation, floors, selection — and it costs nothing to run, so all of it landed **before a single arm had been scored**. A rule that arrives in the same commit as the numbers it judges is indistinguishable from one fitted to them.
+
+The mixture is now an argument of the run: `train.py --mixture-weight NAME=FRACTION` threads explicit shares into `MixtureBatchSource`, defaulting to `None` so every earlier run resolves its mixture exactly where it did. Every other way of varying a mixture — a second data root per arm, an edited `MIXTURE`, a patched loader — also varies something that is supposed to be held.
+
+**Excess loss is measured against a specialist**: `bpb_baseline(s) − bpb_specialist_s(s)`, where the specialist is the same tiny model on the same budget trained on `s` alone. That is what this architecture at this scale can do with that source, so the gap is the part the mixture leaves unclaimed; every other reading of "excess" needs a quantity nothing on this box measures. A negative excess is kept as measured rather than clipped — a specialist re-reading a short source really can lose on that source's own holdout — and a 2× ratio cap bounds how far one such number can move the mixture.
+
+| preregistered | value |
+| --- | --- |
+| derivation | blueprint share × `exp(excess / 0.10)`, clipped to 2×, then floored |
+| domain floors | 0.4 of each floored domain's blueprint share, on `web-raw` / `math` / `code` |
+| quality-heavy arm | raw web scaled to 0.45, freed mass over the filtered sources by blueprint share |
+| selection | floors, then ≤5% per-source BPB regression, then lowest aggregate BPB — adopt only above 0.5% relative gain |
+
+Floors are fractions of the blueprint rather than invented absolutes, so the same rule means the same thing over the three sources on this box and over all ten. `math` has no source here, so `unrepresented_floored_domains` names it in the artifact instead of letting a report claim three floors held over a corpus one of them never touched.
+
+**Preflight refuses three failures the epoch-cap flag cannot tell apart**, all before the GPU is touched: a source the arm names that has no shards — which `resolve_mixture` renormalizes away and reports as *zero* skew, because `target_probs` is taken after that renormalization; a sampled mixture more than a thousandth of a point of L1 from the arm's own; and an arm that would re-read a source at or past the four-epoch cap, where the mixture is preserved and the repetition is what makes the arm unusable.
+
+One trap worth stating because it would have quietly decided the phase: `train.py`'s in-run `val_bpb` weights the holdout by the mixture each run samples, which is right for one run and useless across arms — six models scored on six different corpora. The comparison is `scripts/bpb_eval.py` under one fixed weighting for every arm, written into the sweep artifact so it can be checked rather than assumed.
+
+The four reference arms (baseline plus one specialist per source) are running at phase 4's LM probe recipe re-used unchanged — `tok-probe-49152`, 200,015,872 tokens, 1,526 whole steps of 131,072 — so throughput, memory headroom and schedule shape are measured facts on this box rather than estimates.
 
 ## Control plane
 
