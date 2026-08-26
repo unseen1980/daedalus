@@ -803,6 +803,7 @@ def probe_source(config: str, *, rows: int = 2_000,
                              max_repositories=rows, languages=languages)
     columns: Dict[str, int] = {}
     seen_languages: Dict[str, int] = {}
+    admitted_languages: Dict[str, Dict[str, int]] = {}
     admitted_bytes = {"train": 0, "holdout": 0}
     samples: List[dict] = []
     try:
@@ -826,6 +827,15 @@ def probe_source(config: str, *, rows: int = 2_000,
                 admitted_bytes["train"] += chars
             elif holdout_ok:
                 admitted_bytes["holdout"] += chars
+            if train_ok or holdout_ok:
+                # Per language, so one pass over the interleaved directory sizes
+                # every bucket drawn from it. Four separate filtered probes would
+                # answer the same question by streaming the same rows four
+                # times, and the rows are the expensive part.
+                entry = admitted_languages.setdefault(
+                    normalize_language(language), {"rows": 0, "bytes": 0})
+                entry["rows"] += 1
+                entry["bytes"] += chars
             if (train_ok or holdout_ok) and len(samples) < 3:
                 samples.append({"repository": repository_of(row),
                                 "license": normalize_license(row.get("license")),
@@ -843,6 +853,12 @@ def probe_source(config: str, *, rows: int = 2_000,
         "columns": dict(sorted(columns.items())),
         "languages": dict(sorted(seen_languages.items(),
                                  key=lambda kv: (-kv[1], kv[0]))),
+        # What survived the gate, per language. `languages` above counts rows
+        # *offered*; a share can only be budgeted from rows kept, and there is
+        # no reason the licence gate -- which refuses about a third of this
+        # dataset -- refuses at the same rate in every language.
+        "admitted_languages": dict(sorted(admitted_languages.items(),
+                                          key=lambda kv: (-kv[1]["rows"], kv[0]))),
         "repository_fields": train_manifest["repository_fields"],
         "licenses": train_manifest["licenses"],
         "admitted": {"train": gate.admitted, "holdout": holdout.admitted},

@@ -927,6 +927,27 @@ def test_the_probe_reports_what_streaming_a_rare_language_actually_costs():
     assert sum(record["admitted_bytes"].values()) == 400 * kept
 
 
+def test_one_pass_over_the_interleaved_directory_sizes_every_bucket_in_it():
+    """Four buckets are drawn from `all-all`. Measuring them with four filtered
+    probes would stream the same rows four times, and the rows are what costs;
+    the gate's own per-language yield answers all four from one pass -- and
+    answers it *after* the licence gate, which is the only side that can be
+    budgeted from."""
+    record = CP.probe_source("all-all", rows=100,
+                             stream=_stream(_mixed_rows()))
+
+    admitted = record["admitted_languages"]
+    assert set(admitted) == {"python", "rust"}
+    # Rows offered versus rows kept: two thirds of each language survive the
+    # licence gate here, so the seen histogram alone would overcount both.
+    assert record["languages"] == {"Python": 90, "Rust": 10}
+    assert admitted["rust"]["rows"] < 10
+    assert admitted["rust"]["bytes"] == 400 * admitted["rust"]["rows"]
+    assert admitted["python"]["bytes"] == 100 * admitted["python"]["rows"]
+    assert sum(entry["rows"] for entry in admitted.values()) == \
+        record["admitted"]["train"] + record["admitted"]["holdout"]
+
+
 def test_a_language_the_directory_does_not_carry_is_named_not_guessed_at():
     """Refusing every row looks identical whether the language is absent or its
     name is spelled the way the plan spells it. The counter distinguishes
