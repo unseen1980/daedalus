@@ -1,0 +1,73 @@
+{
+  "created_at": "2026-08-26T13:19:12.618861Z",
+  "details": {
+    "arm": "quality-heavy",
+    "basis": "raw-web sources scaled to 0.45 of their blueprint share, the freed mass redistributed over the filtered sources in proportion to theirs",
+    "holdout_root": "data/holdout",
+    "is_baseline": false,
+    "phase": "phase7-mixture",
+    "run": "mix-probe-quality-heavy",
+    "scored_role": "mixture",
+    "shape": "probe",
+    "sources_requested": [
+      "dclm-baseline",
+      "fineweb-edu",
+      "stack-edu-python"
+    ],
+    "tag": "probe",
+    "train_weights": {
+      "dclm-baseline": 0.146739,
+      "fineweb-edu": 0.688114,
+      "stack-edu-python": 0.165147
+    },
+    "weighting": "explicit",
+    "weights": {
+      "dclm-baseline": 0.3260869565217392,
+      "fineweb-edu": 0.5434782608695653,
+      "stack-edu-python": 0.13043478260869565
+    }
+  },
+  "item_count": 3,
+  "item_digest": "5c58f8afa743661424f47d16d7351b9f",
+  "kind": "bpb",
+  "metrics": {
+    "bpb": 1.2475719462656183,
+    "bpb_dclm-baseline": 1.4035317272584529,
+    "bpb_equal_weight": 1.1804461705725309,
+    "bpb_fineweb-edu": 1.2372891006624638,
+    "bpb_stack-edu-python": 0.900517683796676,
+    "bpb_token_weighted": 1.134591925367299,
+    "n_sources": 3.0,
+    "tokens_dclm-baseline": 66572481.0,
+    "tokens_fineweb-edu": 53588955.0,
+    "tokens_stack-edu-python": 100000000.0
+  },
+  "name": "mix-probe-quality-heavy-bpb",
+  "provenance": {
+    "artifact": {
+      "config": "tok-probe-49152",
+      "kind": "checkpoint",
+      "path": "runs/mix-probe-quality-heavy/checkpoint.pt",
+      "revision": null,
+      "sha256": "0c7abd25adc753e44d5917d5125c5c62754408f1a2fec484a9099d6ca17a0050"
+    },
+    "bpb_mode": "full",
+    "bpb_sample_batches": null,
+    "git_sha": "352af9c",
+    "runtime": {
+      "batch_size": 8,
+      "device": "cuda",
+      "seq_len": 1024
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<smollm2-default>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

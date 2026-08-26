@@ -1,0 +1,156 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+  val_bpb progress: 406/8126 batches (5%), elapsed 0.3m, eta 6.4m
+  val_bpb progress: 812/8126 batches (10%), elapsed 0.7m, eta 6.1m
+  val_bpb progress: 1218/8126 batches (15%), elapsed 1.0m, eta 5.7m
+  val_bpb progress: 1624/8126 batches (20%), elapsed 1.3m, eta 5.4m
+  val_bpb progress: 2030/8126 batches (25%), elapsed 1.7m, eta 5.1m
+  val_bpb progress: 2436/8126 batches (30%), elapsed 2.0m, eta 4.7m
+  val_bpb progress: 2842/8126 batches (35%), elapsed 2.4m, eta 4.4m
+  val_bpb progress: 3248/8126 batches (40%), elapsed 2.7m, eta 4.0m
+  val_bpb progress: 3654/8126 batches (45%), elapsed 3.0m, eta 3.7m
+  val_bpb progress: 4060/8126 batches (50%), elapsed 3.4m, eta 3.4m
+  val_bpb progress: 4466/8126 batches (55%), elapsed 3.7m, eta 3.0m
+  val_bpb progress: 4872/8126 batches (60%), elapsed 4.0m, eta 2.7m
+  val_bpb progress: 5278/8126 batches (65%), elapsed 4.4m, eta 2.4m
+  val_bpb progress: 5684/8126 batches (70%), elapsed 4.7m, eta 2.0m
+  val_bpb progress: 6090/8126 batches (75%), elapsed 5.1m, eta 1.7m
+  val_bpb progress: 6496/8126 batches (80%), elapsed 5.4m, eta 1.4m
+  val_bpb progress: 6902/8126 batches (85%), elapsed 5.7m, eta 1.0m
+  val_bpb progress: 7308/8126 batches (90%), elapsed 6.1m, eta 0.7m
+  val_bpb progress: 7714/8126 batches (95%), elapsed 6.4m, eta 0.3m
+  val_bpb progress: 8120/8126 batches (100%), elapsed 6.8m, eta 0.0m
+  val_bpb progress: 327/6541 batches (5%), elapsed 0.3m, eta 5.2m
+  val_bpb progress: 654/6541 batches (10%), elapsed 0.5m, eta 4.9m
+  val_bpb progress: 981/6541 batches (15%), elapsed 0.8m, eta 4.6m
+  val_bpb progress: 1308/6541 batches (20%), elapsed 1.1m, eta 4.4m
+  val_bpb progress: 1635/6541 batches (25%), elapsed 1.4m, eta 4.1m
+  val_bpb progress: 1962/6541 batches (30%), elapsed 1.6m, eta 3.8m
+  val_bpb progress: 2289/6541 batches (35%), elapsed 1.9m, eta 3.5m
+  val_bpb progress: 2616/6541 batches (40%), elapsed 2.2m, eta 3.3m
+  val_bpb progress: 2943/6541 batches (45%), elapsed 2.5m, eta 3.0m
+  val_bpb progress: 3270/6541 batches (50%), elapsed 2.7m, eta 2.7m
+  val_bpb progress: 3597/6541 batches (55%), elapsed 3.0m, eta 2.5m
+  val_bpb progress: 3924/6541 batches (60%), elapsed 3.3m, eta 2.2m
+  val_bpb progress: 4251/6541 batches (65%), elapsed 3.5m, eta 1.9m
+  val_bpb progress: 4578/6541 batches (70%), elapsed 3.8m, eta 1.6m
+  val_bpb progress: 4905/6541 batches (75%), elapsed 4.1m, eta 1.4m
+  val_bpb progress: 5232/6541 batches (80%), elapsed 4.4m, eta 1.1m
+  val_bpb progress: 5559/6541 batches (85%), elapsed 4.6m, eta 0.8m
+  val_bpb progress: 5886/6541 batches (90%), elapsed 4.9m, eta 0.5m
+  val_bpb progress: 6213/6541 batches (95%), elapsed 5.2m, eta 0.3m
+  val_bpb progress: 6540/6541 batches (100%), elapsed 5.5m, eta 0.0m
+  val_bpb progress: 610/12207 batches (5%), elapsed 0.5m, eta 9.7m
+  val_bpb progress: 1220/12207 batches (10%), elapsed 1.0m, eta 9.2m
+  val_bpb progress: 1830/12207 batches (15%), elapsed 1.5m, eta 8.7m
+  val_bpb progress: 2440/12207 batches (20%), elapsed 2.0m, eta 8.2m
+  val_bpb progress: 3050/12207 batches (25%), elapsed 2.6m, eta 7.7m
+  val_bpb progress: 3660/12207 batches (30%), elapsed 3.1m, eta 7.2m
+  val_bpb progress: 4270/12207 batches (35%), elapsed 3.6m, eta 6.6m
+  val_bpb progress: 4880/12207 batches (40%), elapsed 4.1m, eta 6.1m
+  val_bpb progress: 5490/12207 batches (45%), elapsed 4.6m, eta 5.6m
+  val_bpb progress: 6100/12207 batches (50%), elapsed 5.1m, eta 5.1m
+  val_bpb progress: 6710/12207 batches (55%), elapsed 5.6m, eta 4.6m
+  val_bpb progress: 7320/12207 batches (60%), elapsed 6.1m, eta 4.1m
+  val_bpb progress: 7930/12207 batches (65%), elapsed 6.6m, eta 3.6m
+  val_bpb progress: 8540/12207 batches (70%), elapsed 7.1m, eta 3.1m
+  val_bpb progress: 9150/12207 batches (75%), elapsed 7.7m, eta 2.6m
+  val_bpb progress: 9760/12207 batches (80%), elapsed 8.2m, eta 2.0m
+  val_bpb progress: 10370/12207 batches (85%), elapsed 8.7m, eta 1.5m
+  val_bpb progress: 10980/12207 batches (90%), elapsed 9.2m, eta 1.0m
+  val_bpb progress: 11590/12207 batches (95%), elapsed 9.7m, eta 0.5m
+  val_bpb progress: 12200/12207 batches (100%), elapsed 10.2m, eta 0.0m
+  val_bpb progress: 406/8126 batches (5%), elapsed 0.3m, eta 6.6m
+  val_bpb progress: 812/8126 batches (10%), elapsed 0.7m, eta 6.2m
+  val_bpb progress: 1218/8126 batches (15%), elapsed 1.0m, eta 5.8m
+  val_bpb progress: 1624/8126 batches (20%), elapsed 1.4m, eta 5.5m
+  val_bpb progress: 2030/8126 batches (25%), elapsed 1.7m, eta 5.1m
+  val_bpb progress: 2436/8126 batches (30%), elapsed 2.1m, eta 4.8m
+  val_bpb progress: 2842/8126 batches (35%), elapsed 2.4m, eta 4.5m
+  val_bpb progress: 3248/8126 batches (40%), elapsed 2.7m, eta 4.1m
+  val_bpb progress: 3654/8126 batches (45%), elapsed 3.1m, eta 3.8m
+  val_bpb progress: 4060/8126 batches (50%), elapsed 3.4m, eta 3.5m
+  val_bpb progress: 4466/8126 batches (55%), elapsed 3.8m, eta 3.1m
+  val_bpb progress: 4872/8126 batches (60%), elapsed 4.1m, eta 2.8m
+  val_bpb progress: 5278/8126 batches (65%), elapsed 4.5m, eta 2.4m
+  val_bpb progress: 5684/8126 batches (70%), elapsed 4.8m, eta 2.1m
+  val_bpb progress: 6090/8126 batches (75%), elapsed 5.2m, eta 1.7m
+  val_bpb progress: 6496/8126 batches (80%), elapsed 5.5m, eta 1.4m
+  val_bpb progress: 6902/8126 batches (85%), elapsed 5.8m, eta 1.0m
+  val_bpb progress: 7308/8126 batches (90%), elapsed 6.2m, eta 0.7m
+  val_bpb progress: 7714/8126 batches (95%), elapsed 6.5m, eta 0.3m
+  val_bpb progress: 8120/8126 batches (100%), elapsed 6.9m, eta 0.0m
+  val_bpb progress: 327/6541 batches (5%), elapsed 0.3m, eta 5.2m
+  val_bpb progress: 654/6541 batches (10%), elapsed 0.5m, eta 4.9m
+  val_bpb progress: 981/6541 batches (15%), elapsed 0.8m, eta 4.6m
+  val_bpb progress: 1308/6541 batches (20%), elapsed 1.1m, eta 4.4m
+  val_bpb progress: 1635/6541 batches (25%), elapsed 1.4m, eta 4.1m
+  val_bpb progress: 1962/6541 batches (30%), elapsed 1.6m, eta 3.8m
+  val_bpb progress: 2289/6541 batches (35%), elapsed 1.9m, eta 3.6m
+  val_bpb progress: 2616/6541 batches (40%), elapsed 2.2m, eta 3.3m
+  val_bpb progress: 2943/6541 batches (45%), elapsed 2.5m, eta 3.0m
+  val_bpb progress: 3270/6541 batches (50%), elapsed 2.7m, eta 2.7m
+  val_bpb progress: 3597/6541 batches (55%), elapsed 3.0m, eta 2.5m
+  val_bpb progress: 3924/6541 batches (60%), elapsed 3.3m, eta 2.2m
+  val_bpb progress: 4251/6541 batches (65%), elapsed 3.6m, eta 1.9m
+  val_bpb progress: 4578/6541 batches (70%), elapsed 3.8m, eta 1.6m
+  val_bpb progress: 4905/6541 batches (75%), elapsed 4.1m, eta 1.4m
+  val_bpb progress: 5232/6541 batches (80%), elapsed 4.4m, eta 1.1m
+  val_bpb progress: 5559/6541 batches (85%), elapsed 4.7m, eta 0.8m
+  val_bpb progress: 5886/6541 batches (90%), elapsed 4.9m, eta 0.5m
+  val_bpb progress: 6213/6541 batches (95%), elapsed 5.2m, eta 0.3m
+  val_bpb progress: 6540/6541 batches (100%), elapsed 5.5m, eta 0.0m
+  val_bpb progress: 610/12207 batches (5%), elapsed 0.5m, eta 9.9m
+  val_bpb progress: 1220/12207 batches (10%), elapsed 1.1m, eta 9.5m
+  val_bpb progress: 1830/12207 batches (15%), elapsed 1.6m, eta 9.0m
+  val_bpb progress: 2440/12207 batches (20%), elapsed 2.2m, eta 8.8m
+  val_bpb progress: 3050/12207 batches (25%), elapsed 2.7m, eta 8.2m
+  val_bpb progress: 3660/12207 batches (30%), elapsed 3.3m, eta 7.7m
+  val_bpb progress: 4270/12207 batches (35%), elapsed 3.8m, eta 7.1m
+  val_bpb progress: 4880/12207 batches (40%), elapsed 4.4m, eta 6.6m
+  val_bpb progress: 5490/12207 batches (45%), elapsed 5.0m, eta 6.1m
+  val_bpb progress: 6100/12207 batches (50%), elapsed 5.5m, eta 5.5m
+  val_bpb progress: 6710/12207 batches (55%), elapsed 6.0m, eta 4.9m
+  val_bpb progress: 7320/12207 batches (60%), elapsed 6.6m, eta 4.4m
+  val_bpb progress: 7930/12207 batches (65%), elapsed 7.2m, eta 3.9m
+  val_bpb progress: 8540/12207 batches (70%), elapsed 7.7m, eta 3.3m
+  val_bpb progress: 9150/12207 batches (75%), elapsed 8.2m, eta 2.7m
+  val_bpb progress: 9760/12207 batches (80%), elapsed 8.7m, eta 2.2m
+  val_bpb progress: 10370/12207 batches (85%), elapsed 9.3m, eta 1.6m
+  val_bpb progress: 10980/12207 batches (90%), elapsed 9.8m, eta 1.1m
+  val_bpb progress: 11590/12207 batches (95%), elapsed 10.3m, eta 0.5m
+  val_bpb progress: 12200/12207 batches (100%), elapsed 10.8m, eta 0.0m
+{
+  "scored": [
+    {
+      "arm": "baseline",
+      "checkpoint_sha256": "543f109368394b1abe330a3889d61666401cdf6f02143258b22ba31b7f3d161e",
+      "scorecard": "runs/corpus/scorecards/mix-probe-baseline-bpb.json",
+      "skipped": "already-scored",
+      "sources": [
+        "dclm-baseline",
+        "fineweb-edu",
+        "stack-edu-python"
+      ]
+    },
+    {
+      "arm": "quality-heavy",
+      "checkpoint_sha256": "0c7abd25adc753e44d5917d5125c5c62754408f1a2fec484a9099d6ca17a0050",
+      "scorecard": "runs/corpus/scorecards/mix-probe-quality-heavy-bpb.json",
+      "sources": [
+        "dclm-baseline",
+        "fineweb-edu",
+        "stack-edu-python"
+      ]
+    },
+    {
+      "arm": "derived",
+      "checkpoint_sha256": "45cea76cad7d2303bd8cd5e6d4bac458abbe7129a001a2da754510089aeb7ba4",
+      "scorecard": "runs/corpus/scorecards/mix-probe-derived-bpb.json",
+      "sources": [
+        "dclm-baseline",
+        "fineweb-edu",
+        "stack-edu-python"
+      ]
+    }
+  ]
+}

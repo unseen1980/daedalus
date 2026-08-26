@@ -1,0 +1,73 @@
+{
+  "created_at": "2026-08-26T11:09:22.405032Z",
+  "details": {
+    "arm": "baseline",
+    "basis": "dataprep.MIXTURE shares, renormalized over the sources present under the data root",
+    "holdout_root": "data/holdout",
+    "is_baseline": true,
+    "phase": "phase7-mixture",
+    "run": "mix-probe-baseline",
+    "scored_role": "mixture",
+    "shape": "probe",
+    "sources_requested": [
+      "dclm-baseline",
+      "fineweb-edu",
+      "stack-edu-python"
+    ],
+    "tag": "probe",
+    "train_weights": {
+      "dclm-baseline": 0.326087,
+      "fineweb-edu": 0.543478,
+      "stack-edu-python": 0.130435
+    },
+    "weighting": "explicit",
+    "weights": {
+      "dclm-baseline": 0.3260869565217392,
+      "fineweb-edu": 0.5434782608695653,
+      "stack-edu-python": 0.13043478260869565
+    }
+  },
+  "item_count": 3,
+  "item_digest": "e4b6f4401df96d765e8ea8274a907d7b",
+  "kind": "bpb",
+  "metrics": {
+    "bpb": 1.2485831928613356,
+    "bpb_dclm-baseline": 1.382766782546576,
+    "bpb_equal_weight": 1.1862428253879675,
+    "bpb_fineweb-edu": 1.2440818406167806,
+    "bpb_stack-edu-python": 0.9318798530005464,
+    "bpb_token_weighted": 1.1442114977470328,
+    "n_sources": 3.0,
+    "tokens_dclm-baseline": 66572481.0,
+    "tokens_fineweb-edu": 53588955.0,
+    "tokens_stack-edu-python": 100000000.0
+  },
+  "name": "mix-probe-baseline-bpb",
+  "provenance": {
+    "artifact": {
+      "config": "tok-probe-49152",
+      "kind": "checkpoint",
+      "path": "runs/mix-probe-baseline/checkpoint.pt",
+      "revision": null,
+      "sha256": "543f109368394b1abe330a3889d61666401cdf6f02143258b22ba31b7f3d161e"
+    },
+    "bpb_mode": "full",
+    "bpb_sample_batches": null,
+    "git_sha": "43fa76d",
+    "runtime": {
+      "batch_size": 8,
+      "device": "cuda",
+      "seq_len": 1024
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<smollm2-default>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

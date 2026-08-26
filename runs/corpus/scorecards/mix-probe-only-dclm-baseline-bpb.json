@@ -1,0 +1,63 @@
+{
+  "created_at": "2026-08-26T11:16:10.646491Z",
+  "details": {
+    "arm": "only-dclm-baseline",
+    "basis": "all mass on dclm-baseline: the achievable-BPB bound that per-source excess loss is measured against",
+    "holdout_root": "data/holdout",
+    "is_baseline": false,
+    "phase": "phase7-mixture",
+    "run": "mix-probe-only-dclm-baseline",
+    "scored_role": "specialist",
+    "shape": "probe",
+    "sources_requested": [
+      "dclm-baseline"
+    ],
+    "tag": "probe",
+    "train_weights": {
+      "dclm-baseline": 1.0,
+      "fineweb-edu": 0.0,
+      "stack-edu-python": 0.0
+    },
+    "weighting": "equal",
+    "weights": null
+  },
+  "item_count": 1,
+  "item_digest": "7c00aa2e4810b56ace1e164753b7ccd9",
+  "kind": "bpb",
+  "metrics": {
+    "bpb": 1.358170203266988,
+    "bpb_dclm-baseline": 1.358170203266988,
+    "bpb_equal_weight": 1.358170203266988,
+    "bpb_token_weighted": 1.358170203266988,
+    "n_sources": 1.0,
+    "tokens_dclm-baseline": 66572481.0
+  },
+  "name": "mix-probe-only-dclm-baseline-bpb",
+  "provenance": {
+    "artifact": {
+      "config": "tok-probe-49152",
+      "kind": "checkpoint",
+      "path": "runs/mix-probe-only-dclm-baseline/checkpoint.pt",
+      "revision": null,
+      "sha256": "d81810b71e437752894a433cbf66626504547bbff31c532cf745ee67a8881535"
+    },
+    "bpb_mode": "full",
+    "bpb_sample_batches": null,
+    "git_sha": "70f848b",
+    "runtime": {
+      "batch_size": 8,
+      "device": "cuda",
+      "seq_len": 1024
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<smollm2-default>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}
