@@ -36,9 +36,11 @@ from daedalus.codeprep import (CODE_LANGUAGE_SHARES,  # noqa: E402
                                DEFAULT_CODE_INDEX_PATH, DEFAULT_CODE_N,
                                DEFAULT_HOLDOUT_FRAC, GITHUB_CODE_LANGUAGES,
                                IncompleteIndex, IndexDigestMismatch,
+                               GITHUB_CODE_DATASET, GITHUB_CODE_REVISION,
                                build_code_index, code_coverage_problems,
-                               load_index, probe_languages, probe_problems,
-                               sidecar_path, write_index)
+                               config_near_misses, github_code_configs,
+                               load_index, missing_configs, probe_languages,
+                               probe_problems, sidecar_path, write_index)
 
 
 def _report(provenance: dict) -> str:
@@ -106,6 +108,47 @@ def _verify(a) -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 3
     print("\ncoverage: complete against today's code benchmarks")
+    return 0
+
+
+def _configs(a) -> int:
+    print(f"listing parquet directories on {a.dataset} @ {a.revision} ...",
+          flush=True)
+    try:
+        available = github_code_configs(dataset=a.dataset, revision=a.revision)
+    except Exception as e:                      # noqa: BLE001 - reported, not raised
+        print(f"REFUSE: could not list the repository: {e!r}", file=sys.stderr)
+        return 2
+    print(f"  {len(available):,} directories carry parquet files")
+    for name, count in available.items():
+        print(f"      {name:24s} {count:>5,} files")
+
+    # Only meaningful against the dataset the buckets are defined over; another
+    # repository has its own layout and "missing" would be noise about it.
+    missing = (missing_configs(available)
+               if a.dataset == GITHUB_CODE_DATASET else {})
+    if a.json_out:
+        os.makedirs(os.path.dirname(a.json_out) or ".", exist_ok=True)
+        with open(a.json_out, "w") as f:
+            json.dump({"dataset": a.dataset, "revision": a.revision,
+                       "available": available, "missing": missing,
+                       "near_misses": {config: config_near_misses(config, available)
+                                       for configs in missing.values()
+                                       for config in configs}},
+                      f, indent=2, sort_keys=True)
+            f.write("\n")
+        print(f"\nwrote {a.json_out}")
+    if missing:
+        print("\nbuckets this module names a directory that does not exist for:",
+              file=sys.stderr)
+        for bucket, configs in missing.items():
+            for config in configs:
+                near = config_near_misses(config, available)
+                hint = (f" -- did you mean {', '.join(near)}?" if near else
+                        " -- no near miss; this config was never converted")
+                print(f"  - {bucket}/{config}{hint}", file=sys.stderr)
+        return 3
+    print("\nevery bucket's directory exists on this revision")
     return 0
 
 
@@ -213,6 +256,16 @@ def _cli(argv=None) -> int:
     probe.add_argument("--holdout-frac", type=float, default=DEFAULT_HOLDOUT_FRAC)
     probe.add_argument("--json-out", default=None)
     probe.set_defaults(fn=_probe)
+
+    configs = corpus_action.add_parser(
+        "configs", help="list the parquet directories the revision really has")
+    configs.add_argument(
+        "--dataset", default=GITHUB_CODE_DATASET,
+        help="repository to list; another one is how a substitute source for a "
+             "language this dataset never converted gets chosen")
+    configs.add_argument("--revision", default=GITHUB_CODE_REVISION)
+    configs.add_argument("--json-out", default=None)
+    configs.set_defaults(fn=_configs)
 
     a = p.parse_args(argv)
     if getattr(a, "action", None) == "verify" and not os.path.exists(

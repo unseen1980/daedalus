@@ -778,6 +778,72 @@ def probe_source(config: str, *, rows: int = 2_000,
     return record
 
 
+def github_code_configs(*, dataset: str = GITHUB_CODE_DATASET,
+                        revision: str = GITHUB_CODE_REVISION,
+                        api=None) -> Dict[str, int]:
+    """`{directory: parquet files}` that actually exist on the revision.
+
+    Asked of the repository rather than guessed, because guessing has already
+    cost one probe: four of the ten directories in `GITHUB_CODE_LANGUAGES` --
+    18% of the plan's code mixture -- came back `DataFilesNotFoundError`, and a
+    `data_files` glob that matches nothing raises only because `datasets`
+    happens to check. A build would have had every reason to read it as "this
+    language has no permissively licensed code".
+
+    The auto-converted parquet branch is a *subset*: the converter has size
+    limits and does not convert every config of a large dataset, so absence here
+    is as likely to mean "never converted" as "misspelled". Either way the
+    remedy is the same -- read the list.
+
+    `dataset` is a parameter rather than a constant because the answer this
+    returns is how a substitute source gets chosen: `codeparrot/github-code`
+    turned out to carry no Go, Rust, Shell or SQL directory at all, and the
+    question that follows -- which permissively licensed dataset does -- is the
+    same question asked of a different repository.
+    """
+    if api is None:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+    counts: Dict[str, int] = {}
+    for path in api.list_repo_files(dataset, repo_type="dataset",
+                                    revision=revision):
+        if not path.endswith(".parquet"):
+            continue
+        head = path.split("/", 1)[0]
+        counts[head] = counts.get(head, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def missing_configs(available: Dict[str, int],
+                    languages: Optional[Dict[str, Tuple[str, ...]]] = None,
+                    ) -> Dict[str, List[str]]:
+    """`{bucket: [config, ...]}` this module names that the revision does not
+    carry, and the near-misses that suggest what it should have named instead.
+    """
+    languages = languages if languages is not None else GITHUB_CODE_LANGUAGES
+    missing: Dict[str, List[str]] = {}
+    for bucket, configs in sorted(languages.items()):
+        absent = [config for config in configs if config not in available]
+        if absent:
+            missing[bucket] = absent
+    return missing
+
+
+def config_near_misses(config: str, available: Dict[str, int]) -> List[str]:
+    """Directories that differ from `config` only in case or spacing.
+
+    `GO-all` against a real `Go-all` is the whole class of failure here, and it
+    is invisible to an exact lookup.
+    """
+    def fold(name: str) -> str:
+        return name.replace(" ", "").replace("_", "-").lower()
+
+    wanted = fold(config)
+    return sorted(name for name in available if fold(name) == wanted
+                  and name != config)
+
+
 def _stream_github_code(config: str):
     """Streaming rows of one `codeparrot/github-code` config.
 

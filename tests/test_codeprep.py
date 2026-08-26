@@ -831,6 +831,100 @@ def test_the_probe_stops_at_the_row_count_it_was_given():
     assert record["rows_read"] == 7
 
 
+# ------------------------------------------------- the directories that exist ---
+#
+# The probe's first live run returned `DataFilesNotFoundError` for four of ten
+# directories -- 18% of the plan's code mixture -- because they were named from
+# the dataset's language list rather than read off the revision. The parquet
+# branch is an auto-converted *subset*, so a name can be absent because it was
+# misspelled or because it was never converted, and only the list distinguishes
+# them.
+
+
+class _FakeApi:
+    def __init__(self, files):
+        self._files = files
+
+    def list_repo_files(self, repo_id, repo_type=None, revision=None):
+        self.asked = {"repo_id": repo_id, "repo_type": repo_type,
+                      "revision": revision}
+        return list(self._files)
+
+
+def test_the_available_directories_are_read_off_the_revision_not_guessed():
+    api = _FakeApi(["Python-all/partial-train/0000.parquet",
+                    "Python-all/partial-train/0001.parquet",
+                    "Go-all/partial-train/0000.parquet",
+                    "README.md",
+                    ".gitattributes"])
+
+    available = CP.github_code_configs(api=api)
+
+    assert available == {"Go-all": 1, "Python-all": 2}
+    assert api.asked["repo_type"] == "dataset"
+    assert api.asked["revision"] == CP.GITHUB_CODE_REVISION
+
+
+def test_a_bucket_naming_a_directory_that_does_not_exist_is_reported():
+    available = {"Python-all": 3, "Java-all": 2}
+
+    missing = CP.missing_configs(available)
+
+    assert missing["rust"] == ["Rust-all"]
+    assert set(missing["c-cpp"]) == {"C-all", "C++-all"}
+    assert "python" not in missing and "java" not in missing
+
+
+def test_a_directory_that_differs_only_in_case_is_offered_as_the_near_miss():
+    """`GO-all` against a real `Go-all`: invisible to an exact lookup, and the
+    single most likely reason a language came back empty."""
+    available = {"Go-all": 4, "Shell-all": 2}
+
+    assert CP.config_near_misses("GO-all", available) == ["Go-all"]
+    assert CP.config_near_misses("Shell-all", available) == []
+    assert CP.config_near_misses("Rust-all", available) == []
+
+
+def test_the_cli_lists_the_directories_and_fails_naming_the_near_miss(
+        tmp_path, monkeypatch, capsys):
+    import scripts.codeprep as CLI
+
+    monkeypatch.setattr(CLI, "github_code_configs",
+                        lambda **kw: {"Go-all": 4, "Python-all": 9})
+    out = str(tmp_path / "configs.json")
+
+    rc = CLI._cli(["corpus", "configs", "--json-out", out])
+
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "did you mean Go-all?" in err
+    # The distinction the live run turned on: a name that is wrong versus a
+    # config that was never converted at all. Only the first has a remedy.
+    assert "never converted" in err
+    written = json.load(open(out))
+    assert written["available"] == {"Go-all": 4, "Python-all": 9}
+    assert written["near_misses"]["GO-all"] == ["Go-all"]
+    assert "python" not in written["missing"]
+
+
+def test_listing_another_repository_does_not_report_this_datasets_buckets(
+        tmp_path, monkeypatch, capsys):
+    """`--dataset` exists to shop for a substitute source. Reporting that
+    `bigcode/whatever` is missing `Python-all` would be noise about a layout it
+    never claimed to have."""
+    import scripts.codeprep as CLI
+
+    monkeypatch.setattr(CLI, "github_code_configs",
+                        lambda **kw: {"data/rust": 12, "data/go": 9})
+    out = str(tmp_path / "configs.json")
+
+    rc = CLI._cli(["corpus", "configs", "--dataset", "bigcode/the-stack-smol",
+                   "--json-out", out])
+
+    assert rc == 0
+    assert json.load(open(out))["missing"] == {}
+
+
 def test_the_cli_writes_the_probe_and_fails_on_what_it_found(
         tmp_path, monkeypatch, capsys):
     """The record is written *before* the verdict: what was actually in the rows
