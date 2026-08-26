@@ -1,13 +1,13 @@
 {
   "attention": {
-    "blocker": "lane inspect: phase8-codeprep-allall-coverage failed",
-    "user_action_required": true
+    "blocker": "",
+    "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 54.86,
-    "finalization_in_hours": 81.14,
+    "elapsed_hours": 54.95,
+    "finalization_in_hours": 81.05,
     "hard_hours": 144.0,
-    "remaining_hours": 89.14,
+    "remaining_hours": 89.05,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T17:36:29.747068Z",
+  "heartbeat_at": "2026-08-26T17:41:35.515049Z",
   "lanes": {
     "evidence": {
       "details": {
@@ -53,17 +53,17 @@
           "--config",
           "all-all",
           "--rows",
-          "20000",
+          "200000",
           "--json-out",
-          "runs/codeprep/all-all-probe.json"
+          "runs/codeprep/allall-yield.json"
         ],
         "returncodes": [
-          -6
+          0
         ]
       },
-      "phase": "phase8-codeprep-allall-coverage",
-      "status": "failed",
-      "updated_at": "2026-08-26T17:25:42.683785Z"
+      "phase": "phase8-codeprep-allall-yield",
+      "status": "passed",
+      "updated_at": "2026-08-26T17:38:11.391440Z"
     },
     "operator": {
       "details": {
@@ -122,9 +122,9 @@
   "phase": "phase8-codeprep-gate",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "7bcab124e15a",
+  "source_sha": "5124c1209000",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "passed",
-  "updated_at": "2026-08-26T17:27:11.230683Z"
+  "updated_at": "2026-08-26T17:38:11.391440Z"
 }

@@ -1,19 +1,17 @@
 # Daedalus Vast Program Status
 
-> **Action required.** lane inspect: phase8-codeprep-allall-coverage failed
-
-- Heartbeat: `2026-08-26T17:36:29.747068Z`
+- Heartbeat: `2026-08-26T17:41:35.515049Z`
 - Phase: `phase8-codeprep-gate`
 - Status: `passed`
-- Source: `vast/daedalus-code-20260824` at `7bcab124e15a`
-- Elapsed: `54.86h` of `144.0h`
-- Finalization window opens in: `81.14h`
+- Source: `vast/daedalus-code-20260824` at `5124c1209000`
+- Elapsed: `54.95h` of `144.0h`
+- Finalization window opens in: `81.05h`
 - Deadline stage: `active`
 
 ## Lanes
 
 - `evidence`: `phase6-stageb-decode` (passed)
-- `inspect`: `phase8-codeprep-allall-coverage` (failed)
+- `inspect`: `phase8-codeprep-allall-yield` (passed)
 - `operator`: `phase8-branch-prerequisite` (passed)
 - `retrieval`: `phase6-stagea-retrieval-remeasure` (passed)
 - `selfcheck`: `phase6-lane-selfcheck` (passed)
