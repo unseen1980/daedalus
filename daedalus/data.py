@@ -95,6 +95,72 @@ def tokenizer_fingerprint(tokenizer, name: Optional[str] = None) -> dict:
     return fingerprint
 
 
+def manifest_vocab_size(manifest: dict) -> Optional[int]:
+    """The vocabulary size a tree was packed under, or None if unrecorded.
+
+    None is the honest answer for every shard directory built before
+    `dataprep.source_provenance` carried a fingerprint, and callers treat it as
+    "unknown" rather than "matches" -- the same way `assert_manifest_tokenizer`
+    passes an unfingerprinted manifest through.
+    """
+    recorded = manifest.get("tokenizer")
+    if not isinstance(recorded, dict):
+        return None
+    value = recorded.get("vocab_size")
+    return int(value) if isinstance(value, int) else None
+
+
+def assert_shards_vocab_size(data_dir: str, vocab_size: int) -> None:
+    """Refuse a shard tree packed under a vocabulary this model cannot mean.
+
+    The counterpart of `assert_manifest_tokenizer` for the reader that has no
+    tokenizer to compare with. Training never loads one: it reads ids and an
+    embedding table, so the only thing it can check the shards against is how
+    many rows that table has -- which is exactly the comparison that catches the
+    failure. A 49,152-row model reading 32,768-vocabulary shards indexes every
+    id successfully and trains on text that means something else; the reverse
+    dies somewhere inside a kernel, hours in, on an index nobody can trace back
+    to the corpus. Neither says which shard directory was wrong.
+
+    Accepts both shapes `train.py` accepts -- a single source directory and a
+    mixture root of them -- because the mismatch is per-directory and a mixture
+    can be wrong in one source. A manifest with no fingerprint is passed
+    through, so every corpus built before the field existed keeps loading.
+    """
+    if not os.path.isdir(data_dir):
+        return
+    own = os.path.join(data_dir, "manifest.json")
+    if os.path.exists(own):
+        manifests = [own]
+    else:
+        manifests = sorted(
+            os.path.join(data_dir, child, "manifest.json")
+            for child in os.listdir(data_dir)
+            if os.path.exists(os.path.join(data_dir, child, "manifest.json")))
+    mismatched = []
+    for path in manifests:
+        try:
+            with open(path) as handle:
+                recorded = manifest_vocab_size(json.load(handle))
+        except (OSError, ValueError):
+            # Unreadable is not this function's failure to report: the loader
+            # opens the same file moments later and says so precisely.
+            continue
+        if recorded is not None and recorded != vocab_size:
+            mismatched.append((os.path.basename(os.path.dirname(path)), recorded))
+    if mismatched:
+        raise ValueError(
+            "shard vocabulary mismatch: "
+            + "; ".join(f"{name!r} was packed under a {recorded:,}-token "
+                        f"vocabulary" for name, recorded in mismatched)
+            + f", but this model has {vocab_size:,} embedding rows. Reading "
+            f"these ids under that embedding is not an error anything raises "
+            f"when the model is the larger of the two -- it trains, logs a "
+            f"loss and exports a model of a corpus it never saw. Point "
+            f"--data-dir at a tree packed under this vocabulary, or run the "
+            f"config that matches it.")
+
+
 def assert_manifest_tokenizer(manifest: dict, tokenizer, name: Optional[str] = None
                               ) -> None:
     """Refuse a shard directory that was packed under a different tokenizer.

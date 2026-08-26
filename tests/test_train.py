@@ -804,6 +804,43 @@ def test_mixture_weights_without_a_data_dir_are_refused(tmp_path):
         Trainer(args)
 
 
+def test_trainer_refuses_shards_packed_under_another_vocabulary(tmp_path):
+    """`tiny` has a 512-row embedding. Shards packed under a larger vocabulary
+    would index into it only where the ids happen to be small enough, and the
+    run reports a loss either way -- so the refusal has to happen before the
+    sampler, where the answer can still name a directory."""
+    data_dir = _write_source(tmp_path, "packed-elsewhere", n_tokens=500,
+                             shard_tokens=200)
+    manifest_path = os.path.join(data_dir, "manifest.json")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    manifest["tokenizer"] = {"name": "fake/tok-32768", "vocab_size": 32768,
+                             "probe_digest": "0" * 32}
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f)
+
+    args = _tiny_args(tmp_path / "run", max_steps=2, data_dir=data_dir)
+    with pytest.raises(ValueError, match="shard vocabulary mismatch"):
+        Trainer(args)
+
+
+def test_trainer_reads_a_tree_that_records_its_own_vocabulary(tmp_path):
+    """The other half: a rebuilt tree that says what it was packed under, and
+    agrees, loads exactly as an unfingerprinted one does."""
+    data_dir = _write_source(tmp_path, "rebuilt", n_tokens=500, shard_tokens=200)
+    manifest_path = os.path.join(data_dir, "manifest.json")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    manifest["tokenizer"] = {"name": "fake/tok-512", "vocab_size": 512,
+                             "probe_digest": "0" * 32}
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f)
+
+    trainer = Trainer(_tiny_args(tmp_path / "run", max_steps=2,
+                                 data_dir=data_dir))
+    assert trainer.cfg.vocab_size == 512
+
+
 def test_trainer_auto_detects_mixture_root(tmp_path):
     """Trainer.data_dir with no manifest.json directly inside it, but
     subdirectories that each have one, is treated as a mixture root rather

@@ -734,6 +734,71 @@ def test_a_manifest_without_a_fingerprint_still_loads():
     assert_manifest_tokenizer({"total_tokens": 10}, _FingerprintTokenizer(32768))
 
 
+def _packed_tree(root, name, vocab_size=None, tokens=64):
+    """One shard directory, with or without a recorded vocabulary."""
+    from daedalus.data import ShardWriter
+
+    out_dir = root / name
+    writer = ShardWriter(str(out_dir), shard_tokens=tokens)
+    writer.write(list(range(tokens)))
+    writer.close()
+    extra = {"eos_id": 0, "source_key": name}
+    if vocab_size is not None:
+        extra["tokenizer"] = {"name": f"fake/tok-{vocab_size}",
+                              "vocab_size": vocab_size,
+                              "probe_digest": "0" * 32}
+    writer.write_manifest(extra)
+    return out_dir
+
+
+def test_a_tree_packed_under_another_vocabulary_is_refused_before_it_trains(
+        tmp_path):
+    """The reader with no tokenizer to compare against. A 49,152-row model
+    reading 32,768-vocabulary shards indexes every id successfully and trains
+    on text that means something else -- nothing raises, and the loss curve
+    looks like a run that is working."""
+    from daedalus.data import assert_shards_vocab_size
+
+    tree = _packed_tree(tmp_path, "code", vocab_size=32_768)
+    assert_shards_vocab_size(str(tree), 32_768)
+    with pytest.raises(ValueError, match="shard vocabulary mismatch") as excinfo:
+        assert_shards_vocab_size(str(tree), 49_152)
+    # Both numbers and the directory, because "a mismatch" is not actionable.
+    assert "32,768" in str(excinfo.value) and "49,152" in str(excinfo.value)
+    assert "'code'" in str(excinfo.value)
+
+
+def test_one_wrong_source_in_a_mixture_root_is_named(tmp_path):
+    """A mixture is wrong per source: two of three can be right, and the run
+    would sample the third at its blueprint share without a word."""
+    from daedalus.data import assert_shards_vocab_size
+
+    root = tmp_path / "mixture"
+    _packed_tree(root, "fineweb-edu", vocab_size=49_152)
+    _packed_tree(root, "dclm-baseline", vocab_size=49_152)
+    _packed_tree(root, "stack-edu-python", vocab_size=32_768)
+
+    with pytest.raises(ValueError, match="stack-edu-python") as excinfo:
+        assert_shards_vocab_size(str(root), 49_152)
+    assert "fineweb-edu" not in str(excinfo.value)
+
+
+def test_a_tree_that_records_no_vocabulary_still_loads(tmp_path):
+    """Every corpus on this box predates the fingerprint, including the one
+    phase 8 continues from. Unknown must not read as mismatched."""
+    from daedalus.data import assert_shards_vocab_size, manifest_vocab_size
+
+    tree = _packed_tree(tmp_path, "legacy")
+    assert manifest_vocab_size(json.loads(
+        (tree / "manifest.json").read_text())) is None
+    assert_shards_vocab_size(str(tree), 49_152)
+
+    root = tmp_path / "mixed"
+    _packed_tree(root, "legacy-source")
+    _packed_tree(root, "rebuilt-source", vocab_size=49_152)
+    assert_shards_vocab_size(str(root), 49_152)
+
+
 def test_get_tokenizer_default_is_still_smollm2():
     """The explicit-path form must not change what any existing caller gets."""
     import inspect

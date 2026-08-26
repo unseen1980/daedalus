@@ -1144,6 +1144,13 @@ class Trainer:
                 f"(a directory of per-source subdirectories, each with its own "
                 f"manifest.json). The weights would be silently ignored.")
         if args.data_dir:
+            # Before a sampler is built, because this is the last point where
+            # the answer is a refusal naming a directory rather than a loss
+            # curve that looks fine. Inert for a tree whose manifest predates
+            # the fingerprint, which is every corpus built so far.
+            from daedalus.data import assert_shards_vocab_size
+
+            assert_shards_vocab_size(args.data_dir, self.cfg.vocab_size)
             if not is_mixture_root:
                 self.batch_source = ShardBatchSource(args.data_dir, args.micro_batch,
                                                      args.device, seed=args.seed)
