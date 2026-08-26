@@ -68,6 +68,47 @@ daedalus-approved phase run-phase --phase <name> --estimated-hours <h> --detach 
 A detached phase is orphaned to init by design; `runs/vast-program/state.json`
 and `controller.lock` say whether one is still running.
 
+## Launching a training phase so it can be continued
+
+Detaching makes a phase outlive the session. It does not make it *continue*.
+Without `--supervise-checkpoint` the controller runs the argv it was given with
+`subprocess.run`, so a trainer launched as a bare phase command:
+
+- restarts at step zero on a retry, saving over the checkpoint the previous
+  attempt wrote;
+- restarts at step zero on a relaunch after the session, the controller or the
+  box died -- attempt one of a fresh process, beside a checkpoint nobody opened;
+- writes no `inflight.json`, which is what `scripts/boot_resume.py` continues a
+  run from after a reboot and what `session_keeper.supervised_job_probe` reads
+  to know the GPU is taken. Until the marker exists the keeper reads the box as
+  free and keeps launching sessions beside the run.
+
+```bash
+daedalus-approved phase run-phase --phase <name> --estimated-hours <h> --detach \
+    --log runs/<area>/<name>.log \
+    --supervise-checkpoint runs/<name>/checkpoint.pt \
+    --watchdog-tokens <target-tokens> --max-attempts 3 \
+    -- python train.py --run-name <name> ...
+```
+
+`--supervise-checkpoint` routes the phase through
+`daedalus.supervise.run_with_resume`: marker written, an interrupted run resumed
+on attempt one, `--resume` added on a retry, and a run the watchdog halted left
+alone rather than continued. `--watchdog-tokens` starts `watchdog.py` beside it
+for divergence and stalls; omit it and the run has neither. `--max-attempts` and
+`--backoff-sec` become the *supervisor's* budget (backoff defaults to 60s here,
+not 0), so the controller itself runs one attempt and notes what the supervisor
+did to `events.jsonl`.
+
+Hand it the checkpoint path `train.py` actually writes -- ask the trainer rather
+than composing it, the way `architecture_sweep.arm_checkpoint_path` does. Do not
+put `--resume` in the command: on attempt one it restores the finished run's step
+count, so the phase trains nothing and exits 0. `--init-from` is how a run starts
+from someone else's weights.
+
+A phase that is a scoring pass or a report generator wants none of this; leave
+the flag off and it behaves exactly as before.
+
 ## Running a second pass beside the phase that owns the box
 
 The schedule pairs work that does not contend for the same device -- phase 6's

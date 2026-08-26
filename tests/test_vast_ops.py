@@ -471,6 +471,10 @@ def test_runbook_covers_the_traps_an_operator_will_hit():
     assert "Operation not permitted" in runbook
     # Five sessions kept pr-body.md current and could not apply it.
     assert "daedalus-approved pr-find" in runbook
+    # Detaching a training phase makes it outlive the session; only this makes
+    # it continue. Without it a relaunch restarts at step zero over the
+    # checkpoint, and the run is invisible to boot resume and to the keeper.
+    assert "--supervise-checkpoint" in runbook
 
 
 def test_phase_four_prompt_compares_bpb_not_token_perplexity():
