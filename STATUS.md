@@ -1,11 +1,11 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-26T03:23:10.908234Z`
+- Heartbeat: `2026-08-26T03:28:12.293905Z`
 - Phase: `phase6-stageb-sweep`
 - Status: `running`
 - Source: `vast/daedalus-improvements-20260824` at `75af8650a1c6`
-- Elapsed: `40.64h` of `144.0h`
-- Finalization window opens in: `95.36h`
+- Elapsed: `40.73h` of `144.0h`
+- Finalization window opens in: `95.27h`
 - Deadline stage: `active`
 
 ## Latest Metrics
