@@ -153,9 +153,51 @@ A 25-document live smoke over all sixteen sources of the pre-retarget plan resol
 
 One more cadence defect the smoke exposed. `run_source` writes its durable checkpoints every N *yielded* documents, and a holdout pass yields about 2% of what it streams — so at the shared 50,000-document default the whole 2M-token Python holdout yields ~800 documents and never checkpoints once. The pass with the most streaming behind each token it keeps was the one no crash could be resumed from. It cannot simply be made small either: every checkpoint closes the buffer as a *new shard file*, so a 500-document cadence over a 357M-token source would leave hundreds of shards behind. It is derived from each source's own budget now — about twenty checkpoints per source, never coarser than 200 documents — and `--progress-every` follows the same rule, because a detached multi-hour source that prints nothing between its start and its finish cannot be told from one that has hung.
 
-**Running:** the corpus for the 250M and 1B gates — 1B total, so **650M code tokens**: Python 357.5M, `JavaScript-all` 125.7M, `TypeScript-all` 166.8M, plus ~4M of by-repository holdout — is building detached under the controller (`phase8-code-corpus-build`, three attempts, log in `runs/codeprep/corpus-build.log`). The 3B continuation is the same command at a larger `--total-tokens`, which resumes each source from where this one leaves it rather than rebuilding.
+**Built.** The corpus for the 250M and 1B gates — 1B total, so **650M code tokens** — finished in 40 minutes under the controller (`phase8-code-corpus-build`, one attempt, exit 0, log in `runs/codeprep/corpus-build.log`), detached so it outlived the session that started it:
+
+| side | source | tokens | of budget |
+| --- | --- | --- | --- |
+| train | `code-python` | 357.5M | 100.0% |
+| train | `code-javascript-typescript-javascript-all` | 125.7M | 100.0% |
+| train | `code-javascript-typescript-typescript-all` | 166.8M | 100.0% |
+| holdout | the same three, split by repository | 4.1M | — |
+
+**650.0M train tokens of a 650.0M code budget.** The 3B continuation is the same command at a larger `--total-tokens`, which resumes each source from where this one left it rather than rebuilding.
 
 An earlier launch of this build was stopped by the operator two minutes in, and it is worth recording why rather than quietly relaunching: it was streaming the **old seven-bucket mixture**. The retarget landed at 20:13:31Z and the build went out at 20:18:28Z, from a session that had read the controller state at the top of its turn and not again before starting a six-hour job. The build code itself needed no change — `corpus build` consumes whatever `corpus plan` produced — so the fault was ordering, and the cost was the 4.0 MB that attempt had written, removed rather than resumed.
+
+## The mixture a probe actually reads
+
+The corpus above is 65% of an arm. The other 35% is the original pretraining data, already on this box, and replaying it is the entire mechanism by which the general retention gates below are meant to be passable. `train.py`'s `resolve_mixture` reads **one** root and looks for `<root>/<source>/manifest.json` per weight, so the two corpora have to be reachable under a single directory before `--data-dir` can name them both. `scripts/codeprep.py corpus mixture` is that directory — a farm of symlinks, so no token is copied and the composed root stays a *view* of corpora that are still being written.
+
+| bucket | share | sources | read from |
+| --- | --- | --- | --- |
+| code | 65% | `code-python` 0.3575, `…javascript-all` 0.1257, `…typescript-all` 0.1668 | `data/code-shards/train` |
+| technical | 15% | `finepdfs-edu` 0.0857, `finemath-3plus` 0.0321, `infiwebmath-3plus` 0.0321 | `data/shards` |
+| general replay | 20% | `fineweb-edu` 0.0974, `dclm-baseline` 0.0584, `finephrase` 0.0182, `cosmopedia-v2` 0.0130, `finewiki-en` 0.0078, `everyday-conversations` 0.0052 | `data/shards-train`, else `data/shards` |
+
+Four decisions, none of them free.
+
+**The replay side is read off `dataprep.MIXTURE`, not retyped.** "Original general replay" means the distribution the released model was pretrained on and there is exactly one record of that. A second copy would drift invisibly — an arm training on a replay mixture that no longer matched the model it was replaying for, with every number it produced still looking reasonable.
+
+**`stack-edu-python` leaves the replay bucket.** It is 9% of the original mixture and it is GitHub code from `codeparrot/github-code` at the revision the code bucket streams. Counted as general replay it would put its share on top of the code share — 66.8% code in a corpus whose manifest, model card and gate all say 65%.
+
+**The three carved sources are read from `data/shards-train`, not `data/shards`.** `data/shards` still holds the windows `data/holdout` scores, and the retention gate reading them decides whether 1B tokens get spent. The other seven were never carved — one shard each, nothing to hold out — so they resolve to `data/shards` and are scored by nothing. Five of the twelve have a holdout at all: the three code buckets, split by repository by the build, plus `fineweb-edu` and `dclm-baseline`. The seven that do not are recorded rather than quietly absent.
+
+**A bucket's missing source moves share within its own bucket.** 65/15/20 is the preregistered quantity, so a directory that was never built must not quietly reweight prose against code.
+
+Measured at both budgets it will be read at, with `train.py`'s own resolver rather than a second implementation of it:
+
+| budget | l1 skew | most repeated | code sources |
+| --- | --- | --- | --- |
+| 250M (one probe) | **0.00 pts** | `everyday-conversations`, 3.22 epochs | 0.25 epochs each |
+| 1B (the branch) | **0.72 pts** | `everyday-conversations`, capped at 4.00 | **1.00 epoch each** |
+
+Only `everyday-conversations` ever caps, and it is 403,573 tokens — the whole dataset, which is why phase 7 recommends dropping it from a future general corpus. At 1B the code sources are read exactly once, which is what the corpus was sized for. Record in `runs/codeprep/train-mixture.json`, including the twelve `--mixture-weight` flags to train with.
+
+**One caveat carried to the scoring slice, not fixed here.** `data/holdout/stack-edu-python` is GitHub Python from the same dataset and revision the code bucket streams, and the code corpus is repository-split against *its own* holdout only. That source therefore cannot serve as a general-retention measurement for a model being trained on code — it can be improved by the very training the gate is meant to constrain. The ≤1.5% general BPB bound will be read over the general-text sources separately from it. It is in the mixture record's `caveats` so the scoring cannot quietly inherit it.
+
+**An unfinished build is refused rather than composed**, and it took two checks to mean it. A source that is present and short is the easy half. The half the first live dry run found is a source that is *not there at all*: `corpus build` appends to its manifest as each source finishes, so the directory it has not started is absent rather than short — and the bucket check passes anyway, because the bucket's other directory is there. It composed a 74/26 python-to-javascript mixture at weights that said 55/45. The manifest's own `code_tokens` closes it: the train budgets are a partition of it, so a short sum names the gap in tokens even though nothing in the file is missing a value.
 
 **One operator ask.** Every Hub read in this program is unauthenticated: the runtime environment carries `HF_TOKEN_WRITE` but not `HF_TOKEN`, which is the name `huggingface_hub` reads. It has already cost one measurement — the 429 that took `all-all`'s tenth footer and made two buckets a flagged lower bound — and it is a worse risk over a multi-GB streaming build. Not repaired here: the fix belongs in the approved wrapper, which is control-plane and lives on #14, and the installed copy is only refreshed by an operator run of `ops/vast/install_supervisor.sh`. Promoting a write-scoped credential into `HF_TOKEN` from inside a build script would put a secret in code. Adding a read-scoped `HF_TOKEN` to the runtime environment closes it.
 
@@ -188,6 +230,16 @@ The cost is stated rather than left implicit: the loose reading is easier to pas
 
 It does **not** pick the winner. `select_on` reads "subject to general retention" and no retention bound is preregistered for the *probe* stage — only for the 1B branch — so the verdict ranks the qualifying arms by code BPB, breaks ties on pass@1 movement, and names `best_before_retention`. Applying retention stays with the caller holding the general-side scorecards. Inventing a probe-stage retention bound would have been a second preregistration decision nobody asked for.
 
+### How the three arms are run
+
+`scripts/code_probes.py sweep` is gate 1's launcher. Everything that is not the learning rate is built once — a test asserts the three argvs differ in exactly **three** arguments — because "identical data, order and seed" is a claim three shell lines cannot support and a diff of three argvs can. The seed is `TrainArgs`' default 0 for all three; `train.py` has no `--seed` flag to disagree about.
+
+**One sweep, not three phases.** The box has one GPU and the controller holds one lease per lane, so three separately detached phases would not queue behind each other — the second would be *refused* while the first ran, and the box would sit idle between turns waiting to be asked again. This is the shape phases 5 and 6 used.
+
+**Restart-safe in both directions**, which is the property phase 4 lost an arm to. Each arm goes through the existing watchdog, halt marker and `run_with_resume`, so a crash *inside* an arm resumes it rather than restarting it; a relaunch of the *sweep* skips the arms that reached their budget and resumes the one that was in flight. Completion is read off `metrics.jsonl` rather than off the checkpoint — the checkpoint is written throughout a run, so skipping on it would skip the very arm the relaunch existed to resume.
+
+Three refusals happen before any GPU time is spent: a base checkpoint that does not hash to the pinned released one (every arm's result is a difference against that file); a composed root missing a source (`resolve_mixture` renormalizes over what it finds, so a root that lost half its sources trains a healthy-looking arm on a mixture no artifact describes); and a mixture whose epoch cap makes it a different experiment at 250M. A shortened smoke must carry its own `--tag`, so it cannot land in the gate's run directory and be resumed as the real arm or read as one that finished at a budget nobody chose.
+
 Final acceptance: code BPB improves ≥5%, HumanEval+/MBPP+ pass@1 and syntax validity improve over the untouched base, general full-pass BPB regression ≤1.5%, five-task mean drop ≤1 point with no single task dropping >2 points unreviewed, retrieval drop ≤2 points at every depth, and the Q4 penalty either meets the selected V1 QAT target or is reported transparently.
 
 ## Status
@@ -196,6 +248,8 @@ Branch created from #14's tested SHA; parent recorded in `runs/vast-program/code
 
 The mixture decision is closed twice over: the plan is measured and Rust is dropped by name for what the revision could serve, and the code portion is then retargeted by the user to Python and JavaScript/TypeScript, with the two kinds of drop recorded apart. Both remaining buckets are verified SUPPORTED at all three gates — 1.2 and 0.3 epochs at 3B against a cap of 4.
 
-The build is written, smoked against the real sources, and **running** for the 250M and 1B gates — 650M code tokens across six sources, detached under the controller so it outlives the session that started it. No training has started.
+The corpus is **built**: 650.0M train tokens of a 650.0M budget across six sources, every one at 100%, with 4.1M of by-repository holdout beside it. The training mixture is **composed and measured** — twelve sources under one root at 65/15/20, 0.00 points of skew at 250M and 0.72 at 1B, where the code sources are read exactly once.
 
-Gate 1's wording is now unambiguous and executable, settled while the corpus was still streaming and no arm existed to settle it in favour of. The next slice is the three 250M probes, which will have a corpus to read and a gate that can return no.
+Gate 1's wording was settled while the corpus was still streaming, with no arm in existence to settle it in favour of. Its launcher is written, tested, and smoked end-to-end: three four-step arms under their own `code-smoke-*` names trained from the released base on the composed mixture, wrote per-source BPB over all five holdout sources, and a relaunch skipped all three as already complete rather than retraining them.
+
+**The three 250M probes are running** — `phase8-code-probes-250m`, detached under the controller, ~1.7h an arm, log in `runs/code-probes/sweep.log`, report written after each arm to `runs/code-probes/probes.json`. They have a corpus to read, a mixture record that says what they read, and a gate that can return no.
