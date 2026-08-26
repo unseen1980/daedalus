@@ -84,3 +84,90 @@ def test_the_nine_sources_the_gate_names_are_the_nine_on_disk():
         "finephrase", "fineweb-edu", "finewiki-en", "infiwebmath-3plus",
         "stack-edu-python",
     ], "everyday-conversations is deliberately absent (one shard, cannot split)"
+
+
+# ------------------------------------------------- the phase 5-8 proxy split ---
+# The corpus this box carries is not the hero split: it is `data/shards-train`
+# with `data/holdout` carved off it, and every phase 5, 6 and 7 number is a
+# training run over the first and a held-out BPB over the second. That makes
+# their disjointness the load-bearing assumption of three phases' evidence, and
+# it is one an ordinary mistake breaks quietly: `make_mixture_holdout_split`
+# reserves whole *tail shards* and hardlinks them, so a re-carve, a re-fetch
+# that renumbers shards, or a source with too few shards to split can put the
+# same tokens on both sides. Nothing downstream would notice -- the BPB would
+# simply come out better, uniformly, and read as a model that had learned.
+
+TRAIN_ROOT = os.path.join(REPO, "data", "shards-train")
+HOLDOUT_ROOT = os.path.join(REPO, "data", "holdout")
+
+requires_proxy_split = pytest.mark.skipif(
+    not (_sources(TRAIN_ROOT) and _sources(HOLDOUT_ROOT)),
+    reason="the phase 5-8 train/holdout pair is not carved on this box")
+
+
+def _shard_identity(root, src, man):
+    """`{file name}` and `{(device, inode)}` for one source's shards.
+
+    Both, because either alone misses a real case: two hardlinks of one shard
+    under different names share an inode, and two genuinely different shards can
+    only be told apart by name once they are in separate directories.
+    """
+    names, inodes = set(), set()
+    for entry in man["shards"]:
+        path = os.path.join(root, src, entry["file"])
+        names.add(entry["file"])
+        if os.path.exists(path):
+            stat = os.stat(path)
+            inodes.add((stat.st_dev, stat.st_ino))
+    return names, inodes
+
+
+@requires_proxy_split
+def test_no_source_puts_the_same_shard_in_both_the_train_split_and_the_holdout():
+    shared, compared = {}, []
+    for src, _, holdout in _manifests(HOLDOUT_ROOT):
+        train_dir = os.path.join(TRAIN_ROOT, src, "manifest.json")
+        if not os.path.isfile(train_dir):
+            continue
+        with open(train_dir) as f:
+            train = json.load(f)
+        compared.append(src)
+        h_names, h_inodes = _shard_identity(HOLDOUT_ROOT, src, holdout)
+        t_names, t_inodes = _shard_identity(TRAIN_ROOT, src, train)
+        overlap = (h_names & t_names) | {f"inode {i}" for i in h_inodes & t_inodes}
+        if overlap:
+            shared[src] = sorted(str(item) for item in overlap)
+    assert not shared, (
+        "these sources are scored on tokens they trained on, so every phase 5-8 "
+        f"held-out BPB over them is a memorization measurement: {shared}")
+    # A disjointness check that examined nothing passes for the wrong reason,
+    # which is the same silent-vacuum failure the rest of this file guards.
+    assert compared == _sources(HOLDOUT_ROOT), (
+        f"only compared {compared} of the holdout's {_sources(HOLDOUT_ROOT)}; a "
+        f"source scored without a matching train manifest was not checked")
+
+
+@requires_proxy_split
+def test_every_shard_of_the_proxy_split_is_byte_exact_against_its_manifest():
+    """The same check the hero split gets, on the corpus that is actually being
+    trained over here. A truncated shard surfaces at loader startup, which for a
+    detached multi-hour sweep means the arm dies and the box sits idle."""
+    bad = []
+    for root in (TRAIN_ROOT, HOLDOUT_ROOT):
+        for src, d, man in _manifests(root):
+            itemsize = ITEMSIZE.get(man.get("dtype", "uint16"))
+            assert itemsize, f"{src}: unknown dtype {man.get('dtype')!r}"
+            summed = sum(int(e["tokens"]) for e in man["shards"])
+            assert int(man["total_tokens"]) == summed, (
+                f"{os.path.basename(root)}/{src}: total_tokens "
+                f"{man['total_tokens']:,} != sum of shards {summed:,}")
+            for entry in man["shards"]:
+                path = os.path.join(d, entry["file"])
+                want = int(entry["tokens"]) * itemsize
+                if not os.path.exists(path):
+                    bad.append(f"{os.path.basename(root)}/{src}/{entry['file']}: missing")
+                elif os.path.getsize(path) != want:
+                    bad.append(
+                        f"{os.path.basename(root)}/{src}/{entry['file']}: "
+                        f"{os.path.getsize(path):,} bytes, manifest implies {want:,}")
+    assert not bad, "truncated or missing shards:\n  " + "\n  ".join(bad[:20])
