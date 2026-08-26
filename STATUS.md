@@ -1,11 +1,11 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-26T16:39:47.206233Z`
+- Heartbeat: `2026-08-26T16:44:48.622929Z`
 - Phase: `phase8-prep-per-source-bpb-live`
 - Status: `passed`
 - Source: `vast/daedalus-improvements-20260824` at `bbff83d4c429`
-- Elapsed: `53.92h` of `144.0h`
-- Finalization window opens in: `82.08h`
+- Elapsed: `54.0h` of `144.0h`
+- Finalization window opens in: `82.0h`
 - Deadline stage: `active`
 
 ## Lanes
