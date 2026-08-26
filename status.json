@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 48.85,
-    "finalization_in_hours": 87.15,
+    "elapsed_hours": 48.93,
+    "finalization_in_hours": 87.07,
     "hard_hours": 144.0,
-    "remaining_hours": 95.15,
+    "remaining_hours": 95.07,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 10088,
     "utilization_pct": 98
   },
-  "heartbeat_at": "2026-08-26T11:35:32.218405Z",
+  "heartbeat_at": "2026-08-26T11:40:33.655623Z",
   "metrics": {},
   "phase": "phase7-mixture-candidates",
   "schema": 1,
@@ -24,5 +24,5 @@
   "source_sha": "0c771f15730d",
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
-  "updated_at": "2026-08-26T11:32:06.712705Z"
+  "updated_at": "2026-08-26T11:40:33.307534Z"
 }
