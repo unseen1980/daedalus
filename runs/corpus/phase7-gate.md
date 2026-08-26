@@ -1,8 +1,10 @@
 # Phase 7: the acceptance list, decided from the corpus on disk
 
 Measured 2026-08-26 with `scripts/corpus_gate.py`. Exact numbers in the
-`runs/corpus/phase7-gate-*.json` verdicts; the exit status of each run is the
-verdict, so a controller gates on it without reading this page.
+`runs/corpus/phase7-gate-*.json` verdicts — one per budget, named for it, with
+`-no-dialogue` for the arms that drop `everyday-conversations`. The exit status
+of each run is the verdict, so a controller gates on it without reading this
+page.
 
 Phase 7's acceptance is five claims. Each is a property of files that exist — a
 frozen n-gram index, a scan artifact, ten `manifest.json`s — so each is read
@@ -52,16 +54,24 @@ satisfies the criterion and this one cannot be made to retroactively.
 The skew is the one criterion whose failure is a *measurement* rather than a
 known gap, so it is worth the detail.
 
-| budget | L1 skew (pts) | worst source | epoch-cap | mixture-skew |
-| ---: | ---: | ---: | :--- | :--- |
-| 30B | 3.9892 | 4.000 | PASS | PASS |
-| 40B | 3.9919 | 4.000 | PASS | PASS |
-| 45B | 3.9928 | 4.000 | PASS | PASS |
-| 50B | 3.9935 | 4.000 | PASS | PASS |
-| 55B | 4.3801 | 4.000 | PASS | PASS |
-| **59.9B** | **11.4593** | 4.000 | PASS | **FAIL** |
-| 59.9B, no dialogue | 10.6180 | 4.000 | PASS | FAIL |
-| 30B, no dialogue | **0.0000** | 2.275 | PASS | PASS |
+| budget | blueprint | dialogue dropped |
+| ---: | ---: | ---: |
+| 30B | 3.9892 | **0.0000** |
+| 40B | 3.9919 | |
+| 45B | 3.9928 | |
+| 50B | 3.9935 | **0.0000** |
+| 55B | 4.3801 | 1.7422 |
+| 56B | **5.5020** | |
+| 57B | | **5.0108** |
+| 58B | | 6.5606 |
+| **59.9B** | **11.4593** | 10.6180 |
+
+L1 skew in points; **bold** is the first budget over the 5-pt bound in each
+column. Every row passes `epoch-cap` — the worst source sits at exactly 4.000
+epochs from 30B up, and at 2.275 at 30B with dialogue dropped.
+
+**The corpus as built delivers the blueprint within the bound to ~55.4B, and to
+~56.9B with the dialogue source removed.** The released run's 59.9B is past both.
 
 Three things this says.
 
@@ -76,19 +86,22 @@ Three things this says.
    post-carve mixture at 60B; this figure is pre-carve, so the two are not the
    same number and should not be quoted as one.
 
-2. **Below ~55B the entire skew is one source.** The 3.99 pts floor at every
+2. **Below ~53B the entire skew is one source.** The 3.99 pts floor at every
    budget from 30B to 50B is `everyday-conversations` alone: 403,573 tokens
    cannot fund a 2% share, so 2 points leave and 2 points redistribute. Drop it
-   and the skew at 30B is **exactly 0.0000**, with the worst source at 2.275
-   epochs. That is the plan's step 4 measured rather than argued.
+   and the skew is **exactly 0.0000** at both 30B and 50B, with the worst source
+   at 2.275 epochs at 30B. That is the plan's step 4 measured rather than
+   argued, and it is a complete fix while it applies.
 
-3. **The same removal is nearly useless at 59.9B**, buying 0.84 pts of the 6.46
-   it would need. The 2% it frees is renormalized onto sources that are
-   themselves at the cap and cannot absorb it, so one kind of skew converts into
-   another. Past ~55B the binding constraint is supply, not the dialogue source
-   — which is the step 5 top-up, and agrees with
-   `runs/corpus/headroom-curve.md`'s finding that `stack-edu-python` sets a
-   53.8B ceiling.
+3. **It stops being a fix at almost exactly the point the code source runs
+   out.** Removing dialogue moves the ceiling from ~55.4B to ~56.9B — about
+   1.5B of budget — and at 59.9B buys 0.84 pts of the 6.46 it would need. The
+   2% it frees is renormalized onto sources that are themselves at the cap and
+   cannot absorb it, so one kind of skew converts into another. That knee sits
+   just above the 53.8B ceiling `runs/corpus/headroom-curve.md` derives from
+   `stack-edu-python` having no more documents, and the two are the same fact:
+   past it the binding constraint is supply, which is step 5's top-up and phase
+   8's code corpus, not a source removal.
 
 ## The trap this gate is built around
 
