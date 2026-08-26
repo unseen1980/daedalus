@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 57.13,
-    "finalization_in_hours": 78.87,
+    "elapsed_hours": 57.2,
+    "finalization_in_hours": 78.8,
     "hard_hours": 144.0,
-    "remaining_hours": 86.87,
+    "remaining_hours": 86.8,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T19:52:34.234696Z",
+  "heartbeat_at": "2026-08-26T19:56:19.774553Z",
   "lanes": {
     "evidence": {
       "details": {
@@ -44,32 +44,22 @@
     },
     "inspect": {
       "details": {
-        "attempts": 1,
-        "command": [
-          "python",
-          "scripts/codeprep.py",
-          "corpus",
-          "probe",
-          "--language",
-          "python",
-          "--language",
-          "javascript-typescript",
-          "--language",
-          "c-cpp",
-          "--language",
-          "java",
-          "--rows",
-          "2000",
-          "--json-out",
-          "runs/codeprep/directory-yield.json"
+        "caveat": "all-all counted from 9 of 10 footers after a 429; the two fallback buckets are a flagged lower bound",
+        "commits": [
+          "dd79972",
+          "d602382",
+          "c14b19e"
         ],
-        "returncodes": [
-          0
-        ]
+        "headroom": "runs/codeprep/headroom.json",
+        "next": "the corpus build itself",
+        "plan": "runs/codeprep/source-plan.json",
+        "pr": "https://github.com/unseen1980/daedalus/pull/15",
+        "slice": "the code mixture decision, closed",
+        "verdict": "SUPPORTED at 250M, 1B and 3B total tokens; python at its raised 64.4% share is read 1.4 times at the largest budget against a cap of 4"
       },
-      "phase": "phase8-codeprep-directory-yield",
+      "phase": "phase8-codeprep-gate",
       "status": "passed",
-      "updated_at": "2026-08-26T19:48:29.758880Z"
+      "updated_at": "2026-08-26T19:56:19.522649Z"
     },
     "operator": {
       "details": {
@@ -128,9 +118,9 @@
   "phase": "phase8-codeprep-gate",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "dd79972c3c08",
+  "source_sha": "c14b19e4d64e",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "passed",
-  "updated_at": "2026-08-26T19:48:29.758880Z"
+  "updated_at": "2026-08-26T19:56:19.522649Z"
 }
