@@ -69,6 +69,7 @@ and a manifest carries them the same way.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -1371,6 +1372,15 @@ def bucket_supply(*, plan: dict, row_counts: Dict[str, dict],
     A bucket missing either factor is reported with `unique_tokens` 0 and a
     basis that names what was missing, which reads downstream as infinite epochs
     -- the safe direction, and distinguishable from a measured zero.
+
+    `per_config` carries the same arithmetic before it is summed, because the
+    build has to divide a bucket's budget between its directories and the sum
+    cannot answer that. `javascript-typescript` is one bucket over two of them,
+    and the two are not the same size: splitting its 14% evenly would ask
+    `TypeScript-all` for tokens it does not hold and stop short, while
+    `JavaScript-all` sat under its own budget with rows to spare. That
+    shortfall would be reported per directory and invisible per bucket, which is
+    the shape of miscount this whole measurement exists to prevent.
     """
     supply: Dict[str, dict] = {}
     for bucket, entry in sorted((plan.get("buckets") or {}).items()):
@@ -1386,6 +1396,7 @@ def bucket_supply(*, plan: dict, row_counts: Dict[str, dict],
             supply[bucket] = {"share": entry.get("share", 0.0),
                               "unique_bytes": 0, "unique_tokens": 0,
                               "configs": [], "missing": [], "partial": [],
+                              "per_config": {},
                               "lower_bound": False,
                               "basis": f"{bucket} is not drawn from this "
                                        f"revision: {entry.get('reason', '')}"}
@@ -1395,6 +1406,7 @@ def bucket_supply(*, plan: dict, row_counts: Dict[str, dict],
         missing: List[str] = []
         partial: List[str] = []
         parts: List[str] = []
+        per_config: Dict[str, int] = {}
         for config, admitted in draws:
             probe = probes.get(config) or {}
             rows_read = probe.get("rows_read") or 0
@@ -1405,6 +1417,8 @@ def bucket_supply(*, plan: dict, row_counts: Dict[str, dict],
                 continue
             per_row = admitted / rows_read
             unique_bytes += per_row * total
+            per_config[config] = (int(per_row * total / bytes_per_token)
+                                  if bytes_per_token > 0 else 0)
             files, files_read = counted.get("files") or 0, counted.get("files_read")
             of_files = ""
             if files and files_read is not None and files_read < files:
@@ -1431,6 +1445,7 @@ def bucket_supply(*, plan: dict, row_counts: Dict[str, dict],
             "configs": [config for config, _ in draws],
             "missing": missing,
             "partial": partial,
+            "per_config": per_config,
             "lower_bound": bool(partial),
             "basis": basis or "no directory measured for this bucket",
         }
@@ -1510,4 +1525,323 @@ def split_is_disjoint(repositories: Sequence[str],
         "overlap": sorted(sides["train"] & sides["holdout"]),
         "holdout_frac": holdout_frac,
         "split_salt": salt,
+    }
+
+
+# ------------------------------------------------------------- the build ---
+#
+# What turns the measured plan into shards. Everything above answers a question
+# about the source; this answers "what exactly does the build run", and it is
+# deliberately a pure function of the plan rather than a second reading of it.
+# The build is the expensive step -- hours of streaming -- so the arithmetic
+# that decides which directory is asked for how many tokens is worth being able
+# to print, test and diff before a row is read.
+#
+# The writer is `dataprep.run_source`, unchanged: the shard format, the resume
+# position, the per-source manifest and the memory discipline are the general
+# corpus's and there is no version of "the code corpus writes its own shards"
+# that is not a second implementation of all four.
+
+#: The row field carrying a file's text in `codeparrot/github-code`.
+CODE_TEXT_FIELD = "code"
+
+#: Ceiling on one bucket's holdout, in tokens. A holdout exists to measure code
+#: BPB on repositories the model never trained on, and a few million tokens per
+#: language measures that as precisely as fifty would. The cost of not capping
+#: it is real: the holdout pass streams the whole directory and keeps the 2% of
+#: repositories on its side, so every holdout token costs ~50 tokens of
+#: streaming. At 3B total the uncapped holdout would be ~39M tokens -- and
+#: ~2 billion tokens of streaming to collect them.
+DEFAULT_HOLDOUT_CAP_TOKENS = 2_000_000
+
+
+def code_text(row: dict) -> str:
+    """`SourceSpec.text_fn` for a GitHub code row.
+
+    A named module-level function rather than the lambda `dataprep.MIXTURE`
+    uses for its text fields, because this one is rebuilt rather than written
+    once: a build that resumes re-derives its specs in a fresh process, and the
+    two have to agree about which column the text came from. A name is also what
+    makes that answerable from a traceback.
+    """
+    return row.get(CODE_TEXT_FIELD) or ""
+
+
+def config_slug(config: str) -> str:
+    """A parquet directory name as a shard-key fragment.
+
+    `C-all` and `C++-all` are two directories of one bucket whose names differ
+    only in the characters a naive slug throws away -- so a naive slug gives
+    both the same key, the second source's shards land in the first's directory
+    under the first's prefix, and `_recover_source_stats` reads the pair as one
+    interrupted source and resumes it. The corpus would contain C++ files
+    manifested as C, and nothing would have failed.
+    """
+    value = config.replace("+", "p").replace("#", "sharp").lower()
+    return "-".join(part for part in re.split(r"[^a-z0-9]+", value) if part)
+
+
+def source_key(bucket: str, config: str, *, configs: Sequence[str]) -> str:
+    """The shard directory one (bucket, directory) pair fills.
+
+    The bucket alone when the bucket has one directory, because the bucket is
+    the unit a mixture weight, a BPB holdout and a model card are written in,
+    and `code-python-python-all` says the same thing twice. Qualified by the
+    directory only when there is more than one to tell apart.
+    """
+    return (f"code-{bucket}" if len(tuple(configs)) <= 1
+            else f"code-{bucket}-{config_slug(config)}")
+
+
+def code_token_budget(total_tokens: int) -> int:
+    """The code portion of a total training budget.
+
+    The other 35% is technical prose and general replay, neither of which any
+    code directory supplies -- so this is the number every share below is a
+    share *of*, and taking the total by mistake would over-ask every directory
+    by half again.
+    """
+    return int(round(total_tokens * CORPUS_SHARES["code"]))
+
+
+def _largest_remainder(total: int, weights: Dict[str, float]) -> Dict[str, int]:
+    """Split `total` across `weights` so the parts sum to exactly `total`."""
+    positive = {key: value for key, value in weights.items() if value > 0}
+    if not positive:
+        return {key: 0 for key in weights}
+    scale = sum(positive.values())
+    exact = {key: total * value / scale for key, value in positive.items()}
+    parts = {key: int(value) for key, value in exact.items()}
+    remainder = total - sum(parts.values())
+    # Ties broken by name, so the same plan produces the same budgets on every
+    # machine and a resumed build asks for what the interrupted one did.
+    for key in sorted(positive, key=lambda k: (-(exact[k] - parts[k]), k))[:remainder]:
+        parts[key] += 1
+    return {key: parts.get(key, 0) for key in weights}
+
+
+def config_budgets(bucket_tokens: int, configs: Sequence[str],
+                   per_config_supply: Optional[Dict[str, int]] = None,
+                   ) -> Tuple[Dict[str, int], str]:
+    """`({config: tokens}, basis)` -- one bucket's budget over its directories.
+
+    Proportional to each directory's measured unique-token supply when that
+    measurement is available, which is the only division that does not create a
+    shortfall out of nothing: asking two directories for equal halves of a
+    bucket only works if they hold equal halves of it.
+
+    Falls back to an even split, and *says so* in the basis, when the supply was
+    never measured. That is a real state -- a plan can be built before a
+    headroom pass -- and the difference between "divided on a measurement" and
+    "divided evenly because there was none" is exactly what a manifest has to
+    carry for a later shortfall to be readable.
+    """
+    configs = list(configs)
+    supply = {config: int((per_config_supply or {}).get(config) or 0)
+              for config in configs}
+    if len(configs) == 1:
+        return {configs[0]: int(bucket_tokens)}, "the bucket's only directory"
+    if all(value > 0 for value in supply.values()):
+        parts = _largest_remainder(int(bucket_tokens), supply)
+        measured = ", ".join(f"{config} {supply[config] / 1e6:,.0f}M"
+                             for config in configs)
+        return parts, f"by measured unique tokens ({measured})"
+    parts = _largest_remainder(int(bucket_tokens),
+                               {config: 1.0 for config in configs})
+    unmeasured = ", ".join(config for config in configs if supply[config] <= 0)
+    return parts, (f"evenly across {len(configs)} directories; no measured "
+                   f"supply for {unmeasured}")
+
+
+@dataclass
+class CodeSource:
+    """One shard directory the build will fill, and everything it takes to.
+
+    The `spec` and the `gate` travel together because they are two halves of one
+    decision: the spec says which rows are streamed and the gate says which of
+    them are admitted, and a manifest that records one without the other cannot
+    say what the shards contain.
+    """
+
+    key: str
+    bucket: str
+    config: str
+    split: str
+    token_budget: int
+    basis: str
+    gate: "RepositoryGate"
+    spec: object                       # dataprep.SourceSpec, imported lazily
+
+    def out_dir(self, out_root: str) -> str:
+        """Where this source's shards live under a build root.
+
+        Split first, then key, so that `<root>/train` and `<root>/holdout` are
+        each an ordinary mixture root -- the shape `--data-dir` and
+        `--holdout-root` already take, and the shape `daedalus.data`'s
+        `resolve_mixture` already reads, with the same key naming both sides of
+        one source the way `make_mixture_holdout_split` does.
+        """
+        import os
+
+        return os.path.join(out_root, self.split, self.key)
+
+
+def corpus_specs(*, plan: dict, split: str, total_tokens: int,
+                 supply: Optional[dict] = None,
+                 holdout_frac: float = DEFAULT_HOLDOUT_FRAC,
+                 salt: str = SPLIT_SALT,
+                 holdout_cap_tokens: int = DEFAULT_HOLDOUT_CAP_TOKENS,
+                 max_repositories: int = DEFAULT_MAX_REPOSITORIES,
+                 dataset: str = GITHUB_CODE_DATASET,
+                 revision: str = GITHUB_CODE_REVISION,
+                 ) -> List[CodeSource]:
+    """The sources one side of the build runs, derived from the measured plan.
+
+    Called once per side. The two calls produce the same keys over the same
+    directories with the same language filters and differ only in which side of
+    `repository_split` their gates want, which is what makes the holdout a
+    second independent stream over the same rows rather than a slice of the
+    first: no document can reach both, because no repository can.
+
+    The holdout's budget is not its share of the corpus. It is `holdout_frac` of
+    each bucket, capped -- see `DEFAULT_HOLDOUT_CAP_TOKENS`. A holdout sized as
+    a share of a 3B-token corpus is 50x more measurement than any BPB gate
+    needs, at ~50x its own size in streaming.
+
+    Refuses a plan `plan_problems` rejects. The build is the expensive step and
+    every problem that function reports is one that produces shards -- an empty
+    directory, a bucket of the wrong language -- rather than an error.
+    """
+    from daedalus.dataprep import SourceSpec
+
+    if split not in SPLITS:
+        raise ValueError(f"split must be one of {SPLITS}, got {split!r}")
+    problems = plan_problems(plan)
+    if problems:
+        raise ValueError("this plan cannot be built as written: "
+                         + "; ".join(problems))
+    code_tokens = code_token_budget(total_tokens)
+    supply = supply or {}
+
+    sources: List[CodeSource] = []
+    for bucket, entry in sorted((plan.get("buckets") or {}).items(),
+                                key=lambda kv: (-kv[1].get("share", 0.0), kv[0])):
+        share = float(entry.get("share") or 0.0)
+        if share <= 0:
+            # A dropped bucket. `source_plan` already recorded why and at what
+            # budget it would come back; building it at 0 tokens would put an
+            # empty directory in the corpus that reads as a failed source.
+            continue
+        source = entry.get("source")
+        if source == "directories":
+            configs = list(entry.get("configs") or [])
+            languages = None
+        elif source == "interleaved":
+            configs = [entry.get("source_config") or INTERLEAVED_CONFIG]
+            languages = frozenset(entry.get("languages") or [])
+        else:
+            raise ValueError(
+                f"{bucket} has share {share} but source {source!r}, which names "
+                f"no directory to read it from")
+        if not configs:
+            raise ValueError(f"{bucket} has share {share} and no directory")
+
+        bucket_tokens = int(round(code_tokens * share))
+        if split == "holdout":
+            bucket_tokens = min(int(holdout_cap_tokens),
+                                max(1, int(round(bucket_tokens * holdout_frac))))
+        budgets, basis = config_budgets(
+            bucket_tokens, configs,
+            (supply.get(bucket) or {}).get("per_config"))
+        for config in configs:
+            gate = RepositoryGate(want=split, holdout_frac=holdout_frac,
+                                  salt=salt, max_repositories=max_repositories,
+                                  languages=languages)
+            key = source_key(bucket, config, configs=configs)
+            sources.append(CodeSource(
+                key=key, bucket=bucket, config=config, split=split,
+                token_budget=budgets[config], basis=basis, gate=gate,
+                spec=SourceSpec(
+                    key=key, dataset=dataset, revision=revision,
+                    # A fraction of the code budget rather than of the whole
+                    # one, recorded for the reader; the build passes
+                    # `token_budget` to `run_source` and never multiplies this.
+                    share=(budgets[config] / code_tokens) if code_tokens else 0.0,
+                    text_fn=code_text, filter_fn=gate,
+                    load_kwargs={"data_files": github_code_data_files(config)},
+                    # One group per bucket, both sides of the split inside it,
+                    # so a file vendored into two repositories of the same
+                    # language is caught once -- including across the split,
+                    # where a near-duplicate is a leak rather than waste. The
+                    # catch is windowed by `DedupState.near_dup_reset_every`,
+                    # so it supplements the repository split and does not
+                    # replace it.
+                    near_dup_group=f"code-{bucket}",
+                    note=f"phase 8 code corpus, {bucket} {split} from "
+                         f"{config}; {basis}")))
+    return sources
+
+
+#: What two gate manifests must agree on before their counters may be added.
+#: Each one changes which rows the gate admits, so a merge across a difference
+#: would produce a manifest describing a corpus neither pass built.
+GATE_IDENTITY_FIELDS = ("split", "holdout_frac", "split_salt", "languages")
+
+
+def merge_gate_manifest(prior: Optional[dict], current: dict,
+                        max_repositories: int = DEFAULT_MAX_REPOSITORIES,
+                        ) -> dict:
+    """One gate manifest covering a resumed source's attempts, not just its last.
+
+    A gate lives in the process that streams the source. The shards, the stream
+    position and the counters in the shard manifest all survive that process
+    dying; the gate's licence histogram and repository list do not. Without this
+    the manifest beside a resumed source would describe only the final attempt
+    -- reporting, for a source that stopped at 90% and finished on a second run,
+    the licences of the last 10% as if they were the corpus's.
+
+    Refuses to merge across a difference in what the gate *was*, because those
+    counters are not addable: the same directory under a different `holdout_frac`
+    or a different language filter is a different corpus.
+    """
+    current = dict(current)
+    if not prior:
+        return {**current, "attempts": int(current.get("attempts") or 1)}
+    mismatched = [name for name in GATE_IDENTITY_FIELDS
+                  if prior.get(name) != current.get(name)]
+    if mismatched:
+        raise ValueError(
+            "refusing to merge gate manifests that disagree about "
+            + ", ".join(f"{name} ({prior.get(name)!r} vs {current.get(name)!r})"
+                        for name in mismatched))
+
+    def _sum(name: str) -> dict:
+        merged = dict(prior.get(name) or {})
+        for key, value in (current.get(name) or {}).items():
+            merged[key] = merged.get(key, 0) + value
+        return dict(sorted(merged.items()))
+
+    names = sorted(set(prior.get("repository_names") or [])
+                   | set(current.get("repository_names") or []))
+    truncated = bool(prior.get("repositories_truncated")
+                     or current.get("repositories_truncated"))
+    if len(names) > max_repositories:
+        names = names[:max_repositories]
+        truncated = True
+    return {
+        **current,
+        "rows_seen": int(prior.get("rows_seen") or 0) + int(current.get("rows_seen") or 0),
+        "rows_admitted": (int(prior.get("rows_admitted") or 0)
+                          + int(current.get("rows_admitted") or 0)),
+        "refused": _sum("refused"),
+        "licenses": _sum("licenses"),
+        "repository_fields": _sum("repository_fields"),
+        "repository_names": names,
+        # The count of *distinct* names, which is not the sum of two counts:
+        # a repository met by both attempts is one repository.
+        "repositories": len(names) if not truncated
+                        else max(int(prior.get("repositories") or 0),
+                                 int(current.get("repositories") or 0)),
+        "repositories_truncated": truncated,
+        "attempts": int(prior.get("attempts") or 1) + int(current.get("attempts") or 1),
     }

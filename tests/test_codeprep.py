@@ -1608,3 +1608,531 @@ def test_the_probe_leaves_with_its_verdict_instead_of_dying_in_teardown(
     CLI._exit(3)
 
     assert events == [("flush", "stdout"), ("flush", "stderr"), ("exit", 3)]
+
+
+# ---------------------------------------------------------------- the build ---
+#
+# The build is the expensive step: hours of streaming, and every mistake in it
+# is a directory full of plausible shards. So what these test is the arithmetic
+# and the wiring *before* a row is read -- which directory is asked for how many
+# tokens, which side of the split each pass admits, what a resumed source's
+# manifest says it contains, and whether a source that stopped short can be
+# reported as a corpus that is whole.
+
+
+def _plan_with_supply():
+    plan = CP.source_plan(available=AVAILABLE, interleaved=_allall())
+    probes = {config: _directory_probe(config)
+              for config in ("Python-all", "JavaScript-all", "TypeScript-all",
+                             "C-all", "C++-all", "Java-all")}
+    # TypeScript is a quarter the size of JavaScript here, which is the case an
+    # even split gets wrong.
+    probes["TypeScript-all"] = _directory_probe("TypeScript-all",
+                                                admitted_bytes=2_000_000)
+    probes["all-all"] = _allall()
+    rows = {config: {"files": 10, "files_read": 10, "rows": 500_000, "errors": {}}
+            for config in probes}
+    rows["all-all"] = {"files": 10, "files_read": 10, "rows": 20_000_000,
+                       "errors": {}}
+    supply = CP.bucket_supply(plan=plan, row_counts=rows, probes=probes)
+    return plan, supply
+
+
+def test_the_two_directories_of_one_bucket_get_separate_shard_directories():
+    """`C-all` and `C++-all` differ only in characters a slug throws away. Given
+    the same key they would share a directory and a shard prefix, and the second
+    source would be read back as an interrupted run of the first -- so the
+    corpus would hold C++ files manifested as C, with nothing having failed."""
+    plan, supply = _plan_with_supply()
+
+    sources = CP.corpus_specs(plan=plan, split="train", supply=supply,
+                              total_tokens=1_000_000_000)
+
+    keys = {s.config: s.key for s in sources if s.bucket == "c-cpp"}
+    assert keys == {"C-all": "code-c-cpp-c-all", "C++-all": "code-c-cpp-cpp-all"}
+
+
+def test_a_bucket_with_one_directory_is_named_after_the_bucket():
+    plan, supply = _plan_with_supply()
+
+    sources = CP.corpus_specs(plan=plan, split="train", supply=supply,
+                              total_tokens=1_000_000_000)
+
+    assert [s.key for s in sources if s.bucket == "python"] == ["code-python"]
+
+
+def test_the_budget_is_the_code_share_of_the_total_not_the_total():
+    """65% of the mixture is code; the rest is technical prose and general
+    replay, and no code directory supplies either. Budgeting the whole total
+    would over-ask every directory by half again -- and the epoch-cap verdict
+    that said the directories hold it was computed on the code share."""
+    plan, supply = _plan_with_supply()
+
+    sources = CP.corpus_specs(plan=plan, split="train", supply=supply,
+                              total_tokens=1_000_000_000)
+
+    total = sum(s.token_budget for s in sources)
+    assert total == pytest.approx(650_000_000, rel=1e-6)
+    python = next(s for s in sources if s.bucket == "python")
+    assert python.token_budget == pytest.approx(
+        650_000_000 * plan["buckets"]["python"]["share"], rel=1e-6)
+
+
+def test_a_multi_directory_buckets_budget_is_split_on_measured_supply():
+    """An even split asks `TypeScript-all` for tokens it does not hold. The
+    shortfall would then be reported per directory and invisible per bucket."""
+    plan, supply = _plan_with_supply()
+
+    sources = CP.corpus_specs(plan=plan, split="train", supply=supply,
+                              total_tokens=1_000_000_000)
+
+    js = {s.config: s.token_budget for s in sources
+          if s.bucket == "javascript-typescript"}
+    assert js["JavaScript-all"] > js["TypeScript-all"] * 3
+    assert sum(js.values()) == pytest.approx(
+        650_000_000 * plan["buckets"]["javascript-typescript"]["share"], abs=2)
+    basis = next(s.basis for s in sources
+                 if s.bucket == "javascript-typescript")
+    assert "measured unique tokens" in basis
+
+
+def test_an_unmeasured_bucket_is_split_evenly_and_says_so():
+    """A plan can be built before a headroom pass. Dividing evenly is then the
+    only thing left to do -- and the manifest has to say that is what happened,
+    or a later shortfall reads as a directory that came up short rather than a
+    budget that was guessed."""
+    plan, _ = _plan_with_supply()
+
+    sources = CP.corpus_specs(plan=plan, split="train", supply=None,
+                              total_tokens=1_000_000_000)
+
+    js = {s.config: s.token_budget for s in sources
+          if s.bucket == "javascript-typescript"}
+    assert js["JavaScript-all"] == pytest.approx(js["TypeScript-all"], abs=1)
+    assert "no measured supply" in next(
+        s.basis for s in sources if s.bucket == "javascript-typescript")
+
+
+def test_the_two_sides_name_the_same_sources_and_partition_the_rows():
+    """The holdout is a second independent stream over the same directories,
+    not a slice of the first: same keys, same directories, same language
+    filters, opposite sides of a total split function."""
+    plan, supply = _plan_with_supply()
+
+    train = CP.corpus_specs(plan=plan, split="train", supply=supply,
+                            total_tokens=1_000_000_000)
+    holdout = CP.corpus_specs(plan=plan, split="holdout", supply=supply,
+                              total_tokens=1_000_000_000)
+
+    assert [(s.key, s.config) for s in train] == [(s.key, s.config) for s in holdout]
+    for a, b in zip(train, holdout):
+        assert a.gate.want == "train" and b.gate.want == "holdout"
+        # In this source's own language, so a fallback bucket's filter is not
+        # what refuses the row.
+        language = (sorted(a.gate.languages)[0] if a.gate.languages else "Python")
+        row = _row(repo="org/one", license_value="mit", language=language)
+        # Exactly one side admits it, whichever side that is.
+        assert a.gate(dict(row)) != b.gate(dict(row))
+
+
+def test_a_fallback_bucket_carries_the_language_filter_that_reaches_it():
+    """Go has no directory on this revision; it is read out of the interleaved
+    one. Without the filter the bucket would be every language at once, and the
+    per-language BPB holdout it exists for would measure nothing."""
+    plan, supply = _plan_with_supply()
+
+    sources = CP.corpus_specs(plan=plan, split="train", supply=supply,
+                              total_tokens=1_000_000_000)
+
+    go = next(s for s in sources if s.bucket == "go")
+    assert go.config == "all-all"
+    assert go.gate.languages == frozenset({"go"})
+    assert go.gate.manifest()["languages"] == ["go"]
+    python = next(s for s in sources if s.bucket == "python")
+    assert python.gate.languages is None
+
+
+def test_a_dropped_bucket_is_not_built_as_an_empty_directory():
+    """Rust is 0.336% of the interleaved directory against an 8% share, so the
+    plan dropped it by name. Building it at zero tokens would put an empty
+    shard directory in the corpus, which reads as a source that failed."""
+    plan, supply = _plan_with_supply()
+
+    sources = CP.corpus_specs(plan=plan, split="train", supply=supply,
+                              total_tokens=1_000_000_000)
+
+    assert plan["buckets"]["rust"]["source"] == "dropped"
+    assert not [s for s in sources if s.bucket == "rust"]
+
+
+def test_the_holdout_is_capped_rather_than_sized_as_a_share_of_the_corpus():
+    """Every holdout token costs ~50 tokens of streaming, because the pass reads
+    the whole directory and keeps the 2% of repositories on its side. A holdout
+    sized as a share of a 3B-token corpus is 50x more measurement than a BPB
+    gate needs, at 2B tokens of streaming to collect it."""
+    plan, supply = _plan_with_supply()
+
+    holdout = CP.corpus_specs(plan=plan, split="holdout", supply=supply,
+                              total_tokens=3_000_000_000, holdout_cap_tokens=2_000_000)
+
+    python = next(s for s in holdout if s.bucket == "python")
+    assert python.token_budget == 2_000_000
+    # And it scales down rather than dominating a small build.
+    small = CP.corpus_specs(plan=plan, split="holdout", supply=supply,
+                            total_tokens=10_000_000, holdout_cap_tokens=2_000_000)
+    assert next(s for s in small if s.bucket == "python").token_budget < 200_000
+
+
+def test_a_build_is_refused_on_a_plan_that_cannot_be_built_as_written():
+    plan, supply = _plan_with_supply()
+    plan["buckets"]["go"]["interleaved_rows"] = 0
+
+    with pytest.raises(ValueError, match="cannot be built as written"):
+        CP.corpus_specs(plan=plan, split="train", supply=supply,
+                        total_tokens=1_000_000_000)
+
+
+def test_each_side_writes_under_its_own_root_with_the_same_key():
+    plan, supply = _plan_with_supply()
+    train = CP.corpus_specs(plan=plan, split="train", supply=supply,
+                            total_tokens=1_000_000_000)[0]
+    holdout = CP.corpus_specs(plan=plan, split="holdout", supply=supply,
+                              total_tokens=1_000_000_000)[0]
+
+    assert train.out_dir("data/code-shards").endswith(f"train/{train.key}")
+    assert holdout.out_dir("data/code-shards").endswith(f"holdout/{holdout.key}")
+
+
+# ------------------------------------------------- the resumed gate manifest ---
+
+def _train_side(n: int, prefix: str = "org") -> list:
+    """Repository names the split puts on the train side at `holdout_frac` 0.5,
+    so a fixture's gate really does admit the names it was handed rather than
+    quietly refusing half of them."""
+    names, index = [], 0
+    while len(names) < n:
+        name = f"{prefix}/repo-{index}"
+        if CP.repository_split(name, holdout_frac=0.5) == "train":
+            names.append(name)
+        index += 1
+    return names
+
+
+def _gate_manifest(repos=None, **overrides) -> dict:
+    gate = CP.RepositoryGate(want="train", holdout_frac=0.5)
+    for name in (_train_side(2) if repos is None else repos):
+        gate(_row(repo=name, license_value="mit"))
+    manifest = gate.manifest()
+    assert manifest["rows_admitted"] == manifest["rows_seen"], \
+        "fixture gate refused a row it was meant to admit"
+    manifest.update(overrides)
+    return manifest
+
+
+def test_a_resumed_sources_gate_manifest_covers_every_attempt():
+    """A gate lives in the process that streams the source. The shards and the
+    stream position survive that process dying; the licence histogram does not
+    -- so without a merge, a source that stopped at 90%% and finished on a
+    second run manifests the licences of the last 10%% as the corpus's."""
+    first, second = _train_side(2)
+    prior = _gate_manifest(repos=(first,))
+    current = _gate_manifest(repos=(second,))
+
+    merged = CP.merge_gate_manifest(prior, current)
+
+    assert merged["rows_seen"] == prior["rows_seen"] + current["rows_seen"]
+    assert merged["rows_admitted"] == (prior["rows_admitted"]
+                                       + current["rows_admitted"])
+    assert merged["licenses"]["mit"] == 2
+    assert merged["attempts"] == 2
+
+
+def test_one_repository_met_by_both_attempts_is_still_one_repository():
+    a, b, c = _train_side(3)
+    prior = _gate_manifest(repos=(a, b))
+    current = _gate_manifest(repos=(b, c))
+
+    merged = CP.merge_gate_manifest(prior, current)
+
+    assert merged["repository_names"] == sorted({a, b, c})
+    assert merged["repositories"] == 3
+    # The rows are added up even though the repository is not: four files were
+    # read, from three projects.
+    assert merged["rows_admitted"] == 4
+
+
+def test_a_first_attempt_merges_to_itself():
+    current = _gate_manifest()
+
+    assert CP.merge_gate_manifest(None, current) == {**current, "attempts": 1}
+
+
+@pytest.mark.parametrize("field,value", [
+    ("split", "holdout"), ("holdout_frac", 0.25),
+    ("split_salt", "other"), ("languages", ["go"])])
+def test_gate_manifests_that_disagree_about_the_split_are_not_added_up(
+        field, value):
+    """The same directory under a different holdout fraction, salt or language
+    filter is a different corpus. Adding those counters produces a manifest
+    describing neither pass."""
+    prior = _gate_manifest()
+    current = _gate_manifest(**{field: value})
+
+    with pytest.raises(ValueError, match="disagree about"):
+        CP.merge_gate_manifest(prior, current)
+
+
+# ------------------------------------------------------------- the build CLI ---
+
+class _FakeTokenizer:
+    """Two bytes per token, deterministically, so budgets are checkable."""
+
+    name_or_path = "fake"
+
+    def encode(self, text):
+        return [1] * max(1, len(text) // 2)
+
+
+def _build_argv(tmp_path, plan_path, **overrides):
+    argv = ["corpus", "build", "--plan-json", str(plan_path),
+            "--headroom-json", str(tmp_path / "missing-headroom.json"),
+            "--out-root", str(tmp_path / "code-shards"),
+            "--manifest", str(tmp_path / "code-shards" / "manifest.json"),
+            "--total-tokens", "100000", "--eval-index", "",
+            "--code-index", str(tmp_path / "code-index.txt.gz"),
+            "--shard-tokens", "100000"]
+    for flag, value in overrides.items():
+        argv += [f"--{flag}"] if value is True else [f"--{flag}", str(value)]
+    return argv
+
+
+def _write_code_index(tmp_path):
+    """A real index file, so the build's own digest check is exercised."""
+    path = str(tmp_path / "code-index.txt.gz")
+    ngrams = [" ".join(f"tok{i}{j}" for j in range(13)) for i in range(50)]
+    provenance = {
+        "schema": 1, "kind": "code", "n": CP.DEFAULT_CODE_N,
+        "ngrams": len(ngrams), "complete": True, "limit": None,
+        "evalplus": "0.3.1", "built_at": "2026-08-26T00:00:00Z",
+        "benchmarks": {name: {"items": CP.CODE_EXPECTED_ITEMS[name],
+                              "fields": {"reference": 10}, "short_fields": {}}
+                       for name in CP.CODE_BENCHMARKS},
+    }
+    CP.write_index(path, ngrams, provenance)
+    return path
+
+
+def _one_bucket_plan(tmp_path):
+    """A plan with a single directory-backed bucket, so a CLI test streams one
+    source per side instead of eleven."""
+    plan = {"buckets": {"python": {"configs": ["Python-all"], "plan_share": 1.0,
+                                   "share": 1.0, "source": "directories",
+                                   "missing_configs": [], "reason": "test"}},
+            "interleaved": {"config": "all-all", "available": True},
+            "shares": {"python": 1.0}, "redistributed": 0.0,
+            "interleave_passes": 1.0, "min_bucket_share": 0.005}
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan))
+    return path
+
+
+def _code_rows(n=400):
+    """Distinct documents, not one document repeated: the near-duplicate filter
+    is real and 400 near-identical files would be dropped as the duplicates they
+    are, which would make every budget below unreachable for the wrong reason."""
+    return [_row(repo=f"org-{i}/repo-{i}", license_value="mit",
+                 code="\n".join(
+                     f"def transform_{i}_{j}(value_{i}_{j}, scale_{j}):\n"
+                     f"    return value_{i}_{j} * scale_{j} + {i * 31 + j}"
+                     for j in range(30)))
+            for i in range(n)]
+
+
+def _github_stream(monkeypatch, rows):
+    from daedalus import dataprep as DP
+
+    monkeypatch.setattr(DP, "_stream_rows", lambda s, *a, **k: iter(list(rows)))
+
+
+class _StatefulRows:
+    """A row stream that can report and restore its position, the way
+    `datasets`' `IterableDataset.state_dict` does -- which is the path a real
+    build resumes on, and the one where the gate has *not* re-read the prefix."""
+
+    def __init__(self, rows, start=0):
+        self._rows, self._index = rows, start
+        self.resumed = start > 0
+
+    def __iter__(self):
+        while self._index < len(self._rows):
+            row = self._rows[self._index]
+            self._index += 1
+            yield row
+
+    def state(self):
+        return {"index": self._index}
+
+
+def _stateful_stream(monkeypatch, rows):
+    from daedalus import dataprep as DP
+
+    def stream(spec, stream_state=None, log=print):
+        return _StatefulRows(list(rows), start=(stream_state or {}).get("index", 0))
+
+    monkeypatch.setattr(DP, "_stream_rows", stream)
+
+
+def test_the_build_streams_each_side_into_its_own_root_and_manifests_both(
+        tmp_path, monkeypatch, capsys):
+    import scripts.codeprep as CLI
+    from daedalus import data as DATA
+
+    _write_code_index(tmp_path)
+    monkeypatch.setattr(DATA, "get_tokenizer", lambda name=None: _FakeTokenizer())
+    _github_stream(monkeypatch, _code_rows())
+
+    rc = CLI._cli(_build_argv(tmp_path, _one_bucket_plan(tmp_path),
+                              **{"holdout-frac": 0.5}))
+
+    assert rc == 0, capsys.readouterr().err
+    root = tmp_path / "code-shards"
+    for split in ("train", "holdout"):
+        gate = json.load(open(root / split / "code-python" / "gate.json"))
+        assert gate["split"] == split
+        assert gate["rows_admitted"] > 0
+        assert gate["licenses"]["mit"] > 0
+        assert (root / split / "code-python" / "manifest.json").exists()
+    manifest = json.load(open(root / "manifest.json"))
+    assert {entry["split"] for entry in manifest["sources"]} == {"train", "holdout"}
+    # Disjoint by construction, and shown rather than asserted.
+    names = [set(entry["gate"]["repository_names"]) for entry in manifest["sources"]]
+    assert names[0] and names[1] and not (names[0] & names[1])
+
+
+def test_the_build_records_the_index_it_filtered_against(tmp_path, monkeypatch,
+                                                         capsys):
+    """"Filtered against some index" is the claim the released corpus could not
+    improve on. The digest is what makes it "filtered against *this* one"."""
+    import scripts.codeprep as CLI
+    from daedalus import data as DATA
+
+    path = _write_code_index(tmp_path)
+    digest = CP.read_provenance(path)["digest"]
+    monkeypatch.setattr(DATA, "get_tokenizer", lambda name=None: _FakeTokenizer())
+    _github_stream(monkeypatch, _code_rows(8))
+
+    rc = CLI._cli(_build_argv(tmp_path, _one_bucket_plan(tmp_path),
+                              **{"code-index-digest": digest,
+                                 "max-docs-per-source": 5}))
+
+    assert rc == 0, capsys.readouterr().err
+    manifest = json.load(open(tmp_path / "code-shards" / "manifest.json"))
+    assert manifest["decontam_index"]["code"]["digest"] == digest
+    assert manifest["decontam_index"]["eval"] is None
+    assert manifest["decontam_index"]["ngrams"] == 50
+
+
+def test_the_build_refuses_an_index_that_is_not_the_one_it_was_pinned_to(
+        tmp_path, monkeypatch, capsys):
+    import scripts.codeprep as CLI
+
+    _write_code_index(tmp_path)
+
+    rc = CLI._cli(_build_argv(tmp_path, _one_bucket_plan(tmp_path),
+                              **{"code-index-digest": "sha256:not-this-one"}))
+
+    assert rc == 2
+    assert "REFUSE" in capsys.readouterr().err
+
+
+def test_a_relaunch_continues_a_source_instead_of_rebuilding_it(
+        tmp_path, monkeypatch, capsys):
+    """The rule the phase 4 sweep lost 60.3M tokens to: a run relaunched beside
+    its own output continues it. Here the first pass is stopped by a document
+    cap; the second must pick up the shards, the counters and the stream
+    position rather than starting at row zero and overwriting them."""
+    import scripts.codeprep as CLI
+    from daedalus import data as DATA
+
+    _write_code_index(tmp_path)
+    monkeypatch.setattr(DATA, "get_tokenizer", lambda name=None: _FakeTokenizer())
+    _stateful_stream(monkeypatch, _code_rows())
+    plan = _one_bucket_plan(tmp_path)
+
+    assert CLI._cli(_build_argv(tmp_path, plan, **{"holdout-frac": 0.5,
+                                                   "max-docs-per-source": 20})) == 0
+    first = json.load(open(tmp_path / "code-shards" / "manifest.json"))
+    first_train = next(e for e in first["sources"] if e["split"] == "train")
+    assert first_train["tokens"] > 0
+    assert first_train["gate"]["attempts"] == 1
+
+    assert CLI._cli(_build_argv(tmp_path, plan, **{"holdout-frac": 0.5,
+                                                   "max-docs-per-source": 20})) == 0
+    second = json.load(open(tmp_path / "code-shards" / "manifest.json"))
+    second_train = next(e for e in second["sources"] if e["split"] == "train")
+
+    assert second_train["resumed"] is True
+    assert second_train["tokens"] > first_train["tokens"]
+    # Continued from the saved position, so the gate never saw the prefix
+    # again and the two attempts' counters are the source's.
+    assert second_train["gate"]["attempts"] == 2
+    assert second_train["gate"]["rows_seen"] > first_train["gate"]["rows_seen"]
+
+
+def test_a_replayed_resume_does_not_count_its_prefix_twice(
+        tmp_path, monkeypatch, capsys):
+    """Without a saved stream position the resume replays from row zero, and
+    `_DocumentStream` consults the gate on every replayed row before it skips
+    it. This attempt's manifest therefore already covers the whole source --
+    folding the previous one onto it would report a licence histogram twice the
+    size of the corpus it describes."""
+    import scripts.codeprep as CLI
+    from daedalus import data as DATA
+
+    _write_code_index(tmp_path)
+    monkeypatch.setattr(DATA, "get_tokenizer", lambda name=None: _FakeTokenizer())
+    _github_stream(monkeypatch, _code_rows())            # no state() to restore
+    plan = _one_bucket_plan(tmp_path)
+
+    assert CLI._cli(_build_argv(tmp_path, plan, **{"holdout-frac": 0.5,
+                                                   "max-docs-per-source": 20})) == 0
+    assert CLI._cli(_build_argv(tmp_path, plan, **{"holdout-frac": 0.5,
+                                                   "max-docs-per-source": 40})) == 0
+
+    second = json.load(open(tmp_path / "code-shards" / "manifest.json"))
+    train = next(e for e in second["sources"] if e["split"] == "train")
+    assert train["resumed"] is True
+    assert train["gate"]["attempts"] == 1
+    assert train["gate"]["rows_seen"] <= len(_code_rows())
+
+
+def test_a_source_that_stops_short_of_its_budget_fails_the_build(
+        tmp_path, monkeypatch, capsys):
+    """`headroom` said the directories hold their shares inside the epoch cap. A
+    source that runs out anyway has falsified that, and the budget it fell short
+    of is the one downstream training reads -- so this must not be a log line
+    under a corpus used as if it were whole."""
+    import scripts.codeprep as CLI
+    from daedalus import data as DATA
+
+    _write_code_index(tmp_path)
+    monkeypatch.setattr(DATA, "get_tokenizer", lambda name=None: _FakeTokenizer())
+    _github_stream(monkeypatch, [_row(repo="org/a", license_value="mit",
+                                      code="print(1)\n" * 60)])
+
+    rc = CLI._cli(_build_argv(tmp_path, _one_bucket_plan(tmp_path)))
+
+    assert rc == 3
+    assert "stopped short" in capsys.readouterr().err
+
+
+def test_a_dry_run_prints_the_budgets_without_reading_a_row(tmp_path, capsys):
+    import scripts.codeprep as CLI
+
+    rc = CLI._cli(_build_argv(tmp_path, _one_bucket_plan(tmp_path),
+                              **{"dry-run": True}))
+
+    assert rc == 0
+    printed = capsys.readouterr().out
+    assert "code-python" in printed and "nothing was streamed" in printed
+    assert not (tmp_path / "code-shards").exists()

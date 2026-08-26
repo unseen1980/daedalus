@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import sys
+from typing import Tuple
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -34,17 +35,21 @@ if _ROOT not in sys.path:
 
 from daedalus.codeprep import (CODE_LANGUAGE_SHARES,  # noqa: E402
                                DEFAULT_CODE_INDEX_PATH, DEFAULT_CODE_N,
+                               DEFAULT_HOLDOUT_CAP_TOKENS,
                                DEFAULT_HOLDOUT_FRAC, DEFAULT_INTERLEAVE_PASSES,
                                GITHUB_CODE_LANGUAGES, INTERLEAVED_CONFIG,
                                IncompleteIndex, IndexDigestMismatch,
                                GITHUB_CODE_DATASET, GITHUB_CODE_REVISION,
                                MIN_BUCKET_SHARE, CODE_BYTES_PER_TOKEN,
-                               CORPUS_SHARES, build_code_index, bucket_supply,
-                               code_coverage_problems, config_near_misses,
-                               config_row_counts, github_code_configs,
-                               load_index, missing_configs, plan_problems,
-                               probe_languages, probe_problems, probe_record,
-                               sidecar_path, source_plan, write_index)
+                               CORPUS_SHARES, SPLIT_SALT, build_code_index,
+                               bucket_supply, code_coverage_problems,
+                               code_manifest_record, code_token_budget,
+                               config_near_misses, config_row_counts,
+                               corpus_specs, github_code_configs, load_index,
+                               merge_gate_manifest, missing_configs,
+                               plan_problems, probe_languages, probe_problems,
+                               probe_record, sidecar_path, source_plan,
+                               write_index)
 
 
 def _report(provenance: dict) -> str:
@@ -433,6 +438,299 @@ def _headroom(a) -> int:
     return 0
 
 
+#: The general corpus's frozen index. Unioned with the code one rather than
+#: replaced by it: a code corpus is still training data for a model scored on
+#: the five general tasks, and dropping the general filter to add the code one
+#: would decontaminate against the benchmarks phase 8 added and re-contaminate
+#: against the ones it inherited.
+DEFAULT_EVAL_INDEX_PATH = "data/decontam/eval-index-13gram.txt.gz"
+
+
+def _load_union_index(a) -> Tuple[set, dict]:
+    """`(ngrams, record)` -- the one set the corpus is filtered against.
+
+    Both indexes are the same kind of file at the same `n` (see
+    `daedalus/codeprep.py`'s module docstring), so the union is a set union and
+    the predicate that consumes it does not know there were two. What the
+    manifest carries is both provenance records, because "filtered against some
+    index" is the claim the released corpus could not improve on.
+    """
+    from daedalus.eval_index import coverage_problems as eval_coverage_problems
+    from daedalus.eval_index import load_index as load_eval_index
+    from daedalus.eval_index import manifest_record as eval_manifest_record
+
+    code_ngrams, code_provenance = load_index(
+        a.code_index, expect_digest=a.code_index_digest)
+    problems = code_coverage_problems(code_provenance)
+    if problems:
+        raise ValueError(f"{a.code_index} does not cover what phase 8 is gated "
+                         f"on: {'; '.join(problems)}")
+    record = {"code": code_manifest_record(code_provenance, path=a.code_index)}
+    ngrams = set(code_ngrams)
+
+    if a.eval_index:
+        eval_ngrams, eval_provenance = load_eval_index(
+            a.eval_index, expect_digest=a.eval_index_digest)
+        problems = eval_coverage_problems(eval_provenance)
+        if problems:
+            raise ValueError(f"{a.eval_index} does not cover what this model is "
+                             f"scored on: {'; '.join(problems)}")
+        record["eval"] = eval_manifest_record(eval_provenance, path=a.eval_index)
+        ngrams |= eval_ngrams
+    else:
+        # Recorded, not omitted: a corpus filtered against the code benchmarks
+        # alone is a different artifact from one filtered against both, and an
+        # absent field reads as an older manifest.
+        record["eval"] = None
+    record["ngrams"] = len(ngrams)
+    return ngrams, record
+
+
+def _build_order(holdout, train):
+    """Holdout before train, source by source.
+
+    Both sides share a `near_dup_group`, and the near-duplicate filter is a
+    window over stream order rather than the whole corpus. Running the small
+    side first means the train pass meets a filter that still holds the holdout
+    documents, so a training file that near-duplicates a holdout file is dropped
+    from *training* -- the direction that protects the measurement. The reverse
+    order drops the holdout copy instead, which shrinks the holdout and leaves
+    the leak where it was.
+
+    Paired by position rather than re-sorted, because `corpus_specs` derives
+    both sides from the same plan in the same order; a pairing that disagreed
+    with that would put one bucket's holdout beside another's train.
+    """
+    if [(s.key, s.config) for s in holdout] != [(s.key, s.config) for s in train]:
+        raise ValueError("the two sides of the split describe different sources")
+    return [source for pair in zip(holdout, train) for source in pair]
+
+
+def _source_row(source, stats: dict) -> str:
+    achieved = stats.get("achieved_fraction") or 0.0
+    note = ""
+    if stats.get("error"):
+        note = f"  ERROR {stats['error'][:60]}"
+    elif stats.get("exhausted"):
+        note = "  EXHAUSTED"
+    elif stats.get("incomplete"):
+        note = "  INCOMPLETE"
+    return (f"  {source.split:8s} {source.key:28s} {source.config:16s} "
+            f"{stats.get('tokens', 0) / 1e6:>9,.1f}M of "
+            f"{source.token_budget / 1e6:>8,.1f}M  {achieved:>6.1%}{note}")
+
+
+def _build_corpus(a) -> int:
+    from daedalus.data import get_tokenizer
+    from daedalus.dataprep import (DedupState, _recover_source_stats,
+                                   resolve_source_release, run_source)
+
+    try:
+        with open(a.plan_json) as f:
+            plan = json.load(f)
+        supply = {}
+        if a.headroom_json and os.path.exists(a.headroom_json):
+            with open(a.headroom_json) as f:
+                supply = json.load(f).get("supply") or {}
+    except OSError as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+
+    try:
+        sides = {split: corpus_specs(
+            plan=plan, split=split, total_tokens=a.total_tokens, supply=supply,
+            holdout_frac=a.holdout_frac, salt=a.split_salt,
+            holdout_cap_tokens=a.holdout_cap_tokens)
+            for split in ("holdout", "train")}
+        sources = _build_order(sides["holdout"], sides["train"])
+    except ValueError as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+
+    code_tokens = code_token_budget(a.total_tokens)
+    print(f"{a.total_tokens / 1e6:,.0f}M total tokens, "
+          f"{CORPUS_SHARES['code']:.0%} code = {code_tokens / 1e6:,.0f}M, "
+          f"holdout {a.holdout_frac:.1%} of repositories capped at "
+          f"{a.holdout_cap_tokens / 1e6:,.1f}M per bucket")
+    if not supply:
+        print(f"  no per-directory supply from {a.headroom_json}; multi-directory "
+              f"buckets are split evenly")
+    for source in sources:
+        print(f"  {source.split:8s} {source.key:28s} {source.config:16s} "
+              f"{source.token_budget / 1e6:>8,.1f}M  {source.basis}")
+    if a.dry_run:
+        print("\n--dry-run: nothing was streamed")
+        return 0
+
+    try:
+        ngrams, decontam = _load_union_index(a)
+    except (OSError, ValueError, IndexDigestMismatch) as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+    print(f"\ndecontamination: {decontam['ngrams']:,} n-grams "
+          f"({decontam['code']['ngrams']:,} code + "
+          f"{(decontam['eval'] or {}).get('ngrams', 0):,} general)")
+
+    tokenizer = get_tokenizer(a.tokenizer)
+    dedup = DedupState()
+    manifest = {
+        "schema": 1,
+        "total_tokens": a.total_tokens,
+        "code_tokens": code_tokens,
+        "corpus_shares": dict(CORPUS_SHARES),
+        "out_root": a.out_root,
+        "holdout_frac": a.holdout_frac,
+        "split_salt": a.split_salt,
+        "holdout_cap_tokens": a.holdout_cap_tokens,
+        "tokenizer": a.tokenizer,
+        "decontam_index": decontam,
+        "evidence": {"plan": a.plan_json, "headroom": a.headroom_json},
+        "max_docs_per_source": a.max_docs_per_source,
+        "sources": [],
+    }
+
+    def write_manifest() -> None:
+        os.makedirs(os.path.dirname(a.manifest) or ".", exist_ok=True)
+        tmp = a.manifest + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(manifest, f, indent=2, sort_keys=True, default=str)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, a.manifest)
+
+    for source in sources:
+        out_dir = source.out_dir(a.out_root)
+        split_root = os.path.join(a.out_root, source.split)
+        recovered = _recover_source_stats(source.key, split_root) or {}
+        gate_path = os.path.join(out_dir, "gate.json")
+        prior_gate = None
+        if os.path.exists(gate_path):
+            try:
+                with open(gate_path) as f:
+                    prior_gate = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                prior_gate = None
+
+        if a.resume and recovered.get("tokens", 0) >= source.token_budget > 0:
+            print(f"=== skip {source.split}/{source.key}: "
+                  f"{recovered['tokens']:,} tokens already on disk meets its "
+                  f"{source.token_budget:,} budget ===", flush=True)
+            manifest["sources"].append({
+                **{k: v for k, v in vars(source).items()
+                   if k not in ("spec", "gate")},
+                **{k: v for k, v in recovered.items() if k != "drops"},
+                "achieved_fraction": recovered["tokens"] / source.token_budget,
+                "gate": prior_gate, "resumed": True})
+            write_manifest()
+            continue
+
+        resume: dict = {}
+        if a.resume and recovered.get("tokens", 0) > 0 and recovered.get("shards"):
+            if recovered.get("stream_state") or recovered.get("n_seen"):
+                resume = {"resume_skip": recovered.get("n_seen", 0),
+                          "resume_seed": recovered,
+                          "stream_state": recovered.get("stream_state")}
+                how = ("stream-position restore (O(1))"
+                       if recovered.get("stream_state")
+                       else f"replaying {recovered.get('n_seen', 0):,} documents")
+                print(f"resuming {source.key}: {recovered['tokens']:,} tokens "
+                      f"already flushed, continuing via {how}", flush=True)
+            else:
+                # Shards with no recorded position: appending to them would
+                # duplicate documents into the corpus silently, which is worse
+                # than paying for the source again. Same call `run_dataprep`
+                # makes.
+                print(f"{source.key}: {recovered['tokens']:,} tokens on disk "
+                      f"with no resume point -- rebuilding this source",
+                      flush=True)
+
+        print(f"=== {source.split}/{source.key} ({source.config}) "
+              f"budget={source.token_budget:,} tokens ===", flush=True)
+        try:
+            stats = run_source(
+                source.spec, tokenizer, source.token_budget, out_dir, dedup,
+                ngrams, shard_tokens=a.shard_tokens,
+                max_docs=a.max_docs_per_source,
+                rss_limit_gb=a.rss_limit_gb,
+                rss_check_every=a.rss_check_every,
+                checkpoint_every=a.checkpoint_every,
+                resume_skip=resume.get("resume_skip", 0),
+                resume_seed=resume.get("resume_seed"),
+                resume_stream_state=resume.get("stream_state"),
+                release=resolve_source_release(source.spec),
+                tokenizer_name=a.tokenizer)
+        except Exception as e:                  # noqa: BLE001 - recorded, not raised
+            print(f"FAILED {source.key}: {e!r}", file=sys.stderr, flush=True)
+            stats = dict(recovered) or {"key": source.key, "tokens": 0}
+            stats["error"] = repr(e)
+
+        # Merged only when the resume restored a stream *position*. The replay
+        # fallback re-reads the prefix from row zero and the gate is consulted
+        # on every replayed row (`_DocumentStream.__iter__` filters before it
+        # skips), so this attempt's manifest already covers the whole source --
+        # folding the prior one onto it would count the prefix twice and report
+        # a licence histogram no corpus has.
+        gate = merge_gate_manifest(
+            prior_gate if resume.get("stream_state") else None,
+            source.gate.manifest())
+        os.makedirs(out_dir, exist_ok=True)
+        with open(gate_path, "w") as f:
+            json.dump(gate, f, indent=2, sort_keys=True)
+            f.write("\n")
+        manifest["sources"].append({
+            **{k: v for k, v in vars(source).items()
+               if k not in ("spec", "gate")},
+            **{k: v for k, v in stats.items()
+               if k not in ("stream_state", "drops")},
+            "drops": stats.get("drops"),
+            "gate": gate,
+            "resumed": bool(resume)})
+        write_manifest()
+        print(_source_row(source, stats), flush=True)
+
+    print(f"\nwrote {a.manifest}")
+    for entry in manifest["sources"]:
+        source = next(s for s in sources
+                      if s.key == entry["key"] and s.split == entry["split"])
+        print(_source_row(source, entry))
+    total = sum(entry.get("tokens", 0) for entry in manifest["sources"]
+                if entry["split"] == "train")
+    print(f"\n  {total / 1e6:,.1f}M train tokens of a {code_tokens / 1e6:,.1f}M "
+          f"code budget")
+
+    failed = [entry for entry in manifest["sources"] if entry.get("error")]
+    if failed:
+        print(f"\n{len(failed)} source(s) failed:", file=sys.stderr)
+        for entry in failed:
+            print(f"  - {entry['split']}/{entry['key']}: {entry['error']}",
+                  file=sys.stderr)
+        return 3
+    if a.max_docs_per_source:
+        # A document-capped run is a smoke: every source is short by
+        # construction, so the shortfall check below would fail it for doing
+        # exactly what it was asked to do.
+        print("\n--max-docs-per-source was set: this is a smoke, not a corpus")
+        return 0
+    short = [entry for entry in manifest["sources"]
+             if entry.get("tokens", 0) < entry["token_budget"] * 0.99]
+    if short:
+        # `headroom` said every bucket's directories hold its share inside the
+        # epoch cap. A source that stops short anyway has falsified that, and
+        # the budget it was measured against is the one downstream training
+        # reads -- so this exits non-zero rather than logging a line under a
+        # corpus that will be used as if it were whole.
+        print(f"\n{len(short)} source(s) stopped short of the budget headroom "
+              f"said they could fill:", file=sys.stderr)
+        for entry in short:
+            print(f"  - {entry['split']}/{entry['key']}: "
+                  f"{entry.get('tokens', 0):,} of {entry['token_budget']:,} "
+                  f"tokens{' (stream exhausted)' if entry.get('exhausted') else ''}",
+                  file=sys.stderr)
+        return 3
+    return 0
+
+
 def _cli(argv=None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -545,6 +843,62 @@ def _cli(argv=None) -> int:
                                "this many times")
     headroom.add_argument("--json-out", default=None)
     headroom.set_defaults(fn=_headroom)
+
+    build = corpus_action.add_parser(
+        "build", help="stream the planned directories into licensed, "
+                      "repository-split, decontaminated shards")
+    build.add_argument("--plan-json", default="runs/codeprep/source-plan.json",
+                       help="`corpus plan --json-out` output: the mixture this "
+                            "revision can actually serve")
+    build.add_argument("--headroom-json", default="runs/codeprep/headroom.json",
+                       help="`corpus headroom --json-out` output, for the "
+                            "per-directory supply a multi-directory bucket's "
+                            "budget is divided on")
+    build.add_argument("--total-tokens", type=int, default=1_000_000_000,
+                       help="total training budget in tokens; the code corpus "
+                            f"built is {CORPUS_SHARES['code']:.0%} of it")
+    build.add_argument("--out-root", default="data/code-shards",
+                       help="shards go to <root>/train/<key> and "
+                            "<root>/holdout/<key>, so each side is an ordinary "
+                            "mixture root")
+    build.add_argument("--manifest", default="data/code-shards/manifest.json")
+    build.add_argument("--code-index", default=DEFAULT_CODE_INDEX_PATH)
+    build.add_argument("--code-index-digest", default=None,
+                       help="pin the code index this corpus is filtered "
+                            "against, as `decontam build` prints it")
+    build.add_argument("--eval-index", default=DEFAULT_EVAL_INDEX_PATH,
+                       help="the general corpus's frozen index, unioned with "
+                            "the code one; empty string to filter against the "
+                            "code benchmarks alone")
+    build.add_argument("--eval-index-digest", default=None)
+    build.add_argument("--tokenizer", default=None,
+                       help="tokenizer the ids are packed under (default: the "
+                            "released SmolLM2 vocabulary Daedalus-Code inherits)")
+    build.add_argument("--holdout-frac", type=float, default=DEFAULT_HOLDOUT_FRAC,
+                       help="fraction of *repositories* held out")
+    build.add_argument("--holdout-cap-tokens", type=int,
+                       default=DEFAULT_HOLDOUT_CAP_TOKENS,
+                       help="ceiling on one bucket's holdout tokens")
+    build.add_argument("--split-salt", default=SPLIT_SALT,
+                       help="mixed into the repository hash; changing it is a "
+                            "different split and cannot be resumed onto an "
+                            "existing tree")
+    build.add_argument("--shard-tokens", type=int, default=100_000_000)
+    build.add_argument("--max-docs-per-source", type=int, default=None,
+                       help="stop each source after this many documents -- a "
+                            "smoke, and reported as one")
+    build.add_argument("--rss-limit-gb", type=float, default=8.0)
+    build.add_argument("--rss-check-every", type=int, default=5_000)
+    build.add_argument("--checkpoint-every", type=int, default=50_000)
+    build.add_argument(
+        "--no-resume", dest="resume", action="store_false",
+        help="rebuild every source from row zero. The default continues each "
+             "source from the shards and stream position already on disk, "
+             "which is what makes a relaunch after a crash cost the remainder "
+             "rather than the whole corpus")
+    build.add_argument("--dry-run", action="store_true",
+                       help="print the budgets and exit without streaming")
+    build.set_defaults(fn=_build_corpus, resume=True)
 
     configs = corpus_action.add_parser(
         "configs", help="list the parquet directories the revision really has")

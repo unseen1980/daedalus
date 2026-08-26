@@ -364,6 +364,10 @@
       "lower_bound": false,
       "missing": [],
       "partial": [],
+      "per_config": {
+        "C++-all": 829720689,
+        "C-all": 487307964
+      },
       "share": 0.117155,
       "unique_bytes": 3769336008,
       "unique_tokens": 1317028654
@@ -378,6 +382,9 @@
       "partial": [
         "all-all"
       ],
+      "per_config": {
+        "all-all": 24415699
+      },
       "share": 0.028462,
       "unique_bytes": 69877732,
       "unique_tokens": 24415699
@@ -390,6 +397,9 @@
       "lower_bound": false,
       "missing": [],
       "partial": [],
+      "per_config": {
+        "Java-all": 818094232
+      },
       "share": 0.058577,
       "unique_bytes": 2341385694,
       "unique_tokens": 818094232
@@ -403,6 +413,10 @@
       "lower_bound": false,
       "missing": [],
       "partial": [],
+      "per_config": {
+        "JavaScript-all": 1087887556,
+        "TypeScript-all": 1443044251
+      },
       "share": 0.140585,
       "unique_bytes": 7243526835,
       "unique_tokens": 2530931808
@@ -415,6 +429,9 @@
       "lower_bound": false,
       "missing": [],
       "partial": [],
+      "per_config": {
+        "Python-all": 921119351
+      },
       "share": 0.64435,
       "unique_bytes": 2636243584,
       "unique_tokens": 921119351
@@ -425,6 +442,7 @@
       "lower_bound": false,
       "missing": [],
       "partial": [],
+      "per_config": {},
       "share": 0.0,
       "unique_bytes": 0,
       "unique_tokens": 0
@@ -439,6 +457,9 @@
       "partial": [
         "all-all"
       ],
+      "per_config": {
+        "all-all": 9325612
+      },
       "share": 0.010871,
       "unique_bytes": 26689902,
       "unique_tokens": 9325612
