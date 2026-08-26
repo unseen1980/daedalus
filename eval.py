@@ -604,7 +604,7 @@ def evaluate_bpb_mixture(model, root: str, seq_len: int, tokenizer,
     `evaluate_bpb` handles only the single-dir case -- `make_loader` opens
     `<dir>/manifest.json`, which a mixture root does not have. That mattered:
     `hero.py` carves a per-source holdout with `make_mixture_holdout_split` and
-    passes the *root* as `train.py --val-dir`, where `Trainer._val_bpb`
+    passes the *root* as `train.py --val-dir`, where `Trainer._validate`
     swallows every exception by design. The four-day run would have logged
     `val_bpb: null` at every eval interval behind a WARNING line -- no
     validation curve at all, and nothing for the watchdog to act on.

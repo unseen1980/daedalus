@@ -588,7 +588,7 @@ def test_metrics_say_which_forward_produced_val_bpb(tmp_path):
     regression."""
     import train as train_mod
     t = train_mod.Trainer(_recovery_args(tmp_path))
-    t._val_bpb = lambda: 1.234
+    t._validate = lambda: {"val_bpb": 1.234, "per_source_val_bpb": {}}
     t.maybe_enable_qat()
     t.log_step(t.train_step(), force=True)
 
@@ -605,7 +605,7 @@ def test_metrics_say_which_forward_produced_val_bpb(tmp_path):
 def test_a_float_run_labels_its_validation_float(tmp_path):
     import train as train_mod
     t = train_mod.Trainer(_recovery_args(tmp_path, qat_frac=0.0))
-    t._val_bpb = lambda: 1.234
+    t._validate = lambda: {"val_bpb": 1.234, "per_source_val_bpb": {}}
     t.maybe_enable_qat()
     t.log_step(t.train_step(), force=True)
 

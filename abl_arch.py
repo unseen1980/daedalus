@@ -458,7 +458,7 @@ def run_abl_arch(mixture_dir: str, configs: List[str], total_tokens: int,
     #  - `hero.py` has passed --val-dir since 298c059, so the four-day, ~$43.70
     #    run depends on a code path that has never executed on a GPU -- the
     #    holdout is a *mixture root*, and `evaluate_bpb_mixture` exists only
-    #    because plain `evaluate_bpb` raised on one. `Trainer._val_bpb` swallows
+    #    because plain `evaluate_bpb` raised on one. `Trainer._validate` swallows
     #    every exception by design, so a mistake here does not fail loudly: it
     #    logs `val_bpb: null` behind a WARNING for the whole run. abl-arch
     #    exercises it first, on the same hardware, for free.

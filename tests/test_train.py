@@ -1276,7 +1276,7 @@ def _mixture_val_shards(tmp_path, names=("source-a", "source-b"), n_tokens=4096)
 def test_val_bpb_reads_a_mixture_holdout_root(tmp_path, monkeypatch, capsys):
     """`hero.py` carves a per-source holdout and passes the *root* as
     --val-dir. `evaluate_bpb` opens `<dir>/manifest.json`, which a mixture root
-    does not have, so it raised FileNotFoundError -- and `_val_bpb` swallows
+    does not have, so it raised FileNotFoundError -- and `_validate` swallows
     every exception by design. The four-day run would have logged
     `val_bpb: null` at every interval behind a WARNING, with no val curve at
     all and nothing for the watchdog to act on."""
@@ -1303,6 +1303,79 @@ def test_val_bpb_reads_a_mixture_holdout_root(tmp_path, monkeypatch, capsys):
     for r in records:
         assert r["val_bpb"] is not None and math.isfinite(r["val_bpb"])
         assert r["val_bpb"] > 0
+
+
+def test_metrics_carry_per_source_val_bpb_not_only_the_blend(tmp_path, monkeypatch):
+    """Phase 8 gates a continued-pretraining arm on code BPB and general replay
+    BPB read *independently* -- improve one, hold the other -- and the blend is
+    the one number that cannot answer that: a code gain and a replay regression
+    move it in opposite directions and it reports their sum.
+
+    `evaluate_bpb_mixture` has always done a full holdout pass per source and
+    returned both; the call site took `["val_bpb"]` and dropped the rest, so the
+    per-source cost was paid at every interval of every run and the figures were
+    never written down. This asserts they reach `metrics.jsonl`, keyed by source,
+    beside the blend rather than instead of it."""
+    val_dir = _mixture_val_shards(tmp_path, names=("code-py", "general-replay"))
+    args = _tiny_args(tmp_path / "run", max_steps=1, seq_len=16, micro_batch=2)
+    args.val_dir = val_dir
+    args.val_every_steps = 1
+    args.val_batches = 1
+    args.val_batch_size = 2
+    args.seq_end = 16
+    args.metrics_every_steps = 1
+
+    t = Trainer(args)
+    t._tokenizer = _ByteTokenizer()
+    monkeypatch.setattr("daedalus.data.get_tokenizer", lambda *a, **k: _ByteTokenizer())
+    t.batch_source = FixedBatchSource(
+        [torch.randint(0, t.cfg.vocab_size, (2, 16))])
+    t.fit()
+
+    row = json.loads((tmp_path / "run" / "metrics.jsonl").read_text()
+                     .strip().splitlines()[-1])
+    per_source = row["val_bpb_per_source"]
+    assert set(per_source) == {"code-py", "general-replay"}
+    for name, bpb in per_source.items():
+        assert isinstance(bpb, float) and math.isfinite(bpb) and bpb > 0, name
+    # Beside the blend, not instead of it: the aggregate is what the watchdog
+    # and every existing reader of this file still key on.
+    assert row["val_bpb"] is not None and math.isfinite(row["val_bpb"])
+    # The blend is a convex combination of the parts, so it cannot sit outside
+    # their range -- the check that the two numbers describe one measurement.
+    assert min(per_source.values()) - 1e-9 <= row["val_bpb"] <= max(
+        per_source.values()) + 1e-9
+
+
+def test_a_single_directory_holdout_carries_no_per_source_block(tmp_path, monkeypatch):
+    """One source is not a mixture of one. `evaluate_bpb_mixture` returns `{}`
+    for a `--val-dir` with its own manifest.json, and an empty block in the
+    record would read as a mixture whose sources all failed to score."""
+    val_dir = tmp_path / "flat"
+    writer = ShardWriter(str(val_dir), shard_tokens=4096)
+    writer.write(list(torch.randint(0, PRESETS["tiny"].vocab_size, (4096,)).tolist()))
+    writer.close()
+    writer.write_manifest({"eos_id": 0})
+
+    args = _tiny_args(tmp_path / "run", max_steps=1, seq_len=16, micro_batch=2)
+    args.val_dir = str(val_dir)
+    args.val_every_steps = 1
+    args.val_batches = 1
+    args.val_batch_size = 2
+    args.seq_end = 16
+    args.metrics_every_steps = 1
+
+    t = Trainer(args)
+    t._tokenizer = _ByteTokenizer()
+    monkeypatch.setattr("daedalus.data.get_tokenizer", lambda *a, **k: _ByteTokenizer())
+    t.batch_source = FixedBatchSource(
+        [torch.randint(0, t.cfg.vocab_size, (2, 16))])
+    t.fit()
+
+    row = json.loads((tmp_path / "run" / "metrics.jsonl").read_text()
+                     .strip().splitlines()[-1])
+    assert row["val_bpb"] is not None and math.isfinite(row["val_bpb"])
+    assert "val_bpb_per_source" not in row
 
 
 def test_val_weights_come_from_the_sampler_not_the_holdout(tmp_path):

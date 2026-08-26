@@ -1020,7 +1020,7 @@ def _config_for(args: TrainArgs) -> DaedalusConfig:
         overrides["gradient_checkpointing"] = bool(args.gradient_checkpointing)
     # `None` keeps the preset's own value, which is `None` -- SmolLM2 -- for
     # every shipped preset. Phase 4's probes pass the candidate vocabulary they
-    # were packed under, so `_val_bpb` decodes the holdout with the tokenizer
+    # were packed under, so `_validate` decodes the holdout with the tokenizer
     # that produced its ids rather than with SmolLM2 regardless.
     if args.tokenizer is not None:
         overrides["tokenizer"] = args.tokenizer
@@ -1410,10 +1410,28 @@ class Trainer:
             f"--init-from instead of --resume to fine-tune from its weights "
             f"at step 0.")
 
-    def _val_bpb(self) -> Optional[float]:
-        """Bounded held-out bits-per-byte, or None if validation is off / not
-        due / failed. Never raises: a broken holdout dir must not kill a
-        multi-day run any more than a W&B outage does."""
+    def _validate(self) -> Optional[dict]:
+        """`evaluate_bpb_mixture`'s whole result, or None if validation is off /
+        not due / failed. Never raises: a broken holdout dir must not kill a
+        multi-day run any more than a W&B outage does.
+
+        The result, not `["val_bpb"]` out of it. `evaluate_bpb_mixture` does a
+        full holdout pass **per source** and returns both the per-source figures
+        and the blend of them; the call site took the blend and dropped the rest
+        on the floor, at every eval interval, for the whole of every run so far.
+        Nothing was saved by discarding it -- the per-source passes are where the
+        cost is, and they ran either way.
+
+        What that cost bought matters from phase 8 on. A continued-pretraining
+        arm is gated on code BPB and general replay BPB read *independently* --
+        it has to improve one while holding the other -- and the blend is
+        precisely the one number that cannot answer that: a code gain and a
+        replay regression move it in opposite directions and it reports their
+        sum. Out-of-band scoring (`scripts/bpb_eval.py`) answers it on the
+        finished checkpoint, which is the right instrument for the gate itself;
+        this answers it *during* the run, so an arm whose replay is already past
+        the 1.5% bound says so at its first interval rather than after 1B tokens.
+        """
         args = self.args
         if not args.val_dir or self.step % args.val_every_steps != 0:
             return None
@@ -1445,7 +1463,7 @@ class Trainer:
                 self._tokenizer, device=args.device,
                 batch_size=args.val_batch_size,
                 max_batches=args.val_batches,
-                weights=self._val_weights())["val_bpb"]
+                weights=self._val_weights())
         except Exception as e:
             print(f"WARNING: val_bpb failed at step {self.step} ({e}); continuing")
             return None
@@ -1874,7 +1892,8 @@ class Trainer:
             now = time.time()
             window_tokens = self.tokens_seen - self._last_log_tokens
             window_sec = max(now - self._last_log_time, 1e-9)
-            val_bpb = self._val_bpb()
+            validation = self._validate()
+            val_bpb = validation["val_bpb"] if validation else None
             record = {
                 "step": self.step, "tokens": self.tokens_seen,
                 "loss": stats["loss"], "val_bpb": val_bpb,
@@ -1898,6 +1917,23 @@ class Trainer:
                 # reads metrics.jsonl later will not have `qat_frac` to hand.
                 record["val_forward"] = "quantized" if self._qat_on else "float"
                 record["val_grid"] = qat_mod.grid_id() if self._qat_on else None
+            per_source = (validation or {}).get("per_source_val_bpb") or {}
+            if per_source:
+                # BPB only. `per_source_val_bpb` also carries each source's
+                # holdout token count and its sampling weight, and both are
+                # constant for the whole run -- they are set by the corpus and
+                # by `MixtureBatchSource.probs`, neither of which moves after
+                # `resolve_mixture`. Writing them at every interval would repeat
+                # a constant a few thousand times down `metrics.jsonl` and
+                # through every heartbeat that renders the latest record. They
+                # are already on the W&B run config as `data_mixture`.
+                #
+                # Absent, not empty, for a single-directory `--val-dir`:
+                # `evaluate_bpb_mixture` returns `{}` there because there is
+                # genuinely one source, and an empty block in the record would
+                # read as a mixture whose sources all failed to score.
+                record["val_bpb_per_source"] = {
+                    name: row["val_bpb"] for name, row in sorted(per_source.items())}
             if self._qat_on:
                 # Should fall toward zero as the weights settle onto the grid --
                 # the direct evidence QAT is working. O(params), so only while
