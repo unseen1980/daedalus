@@ -780,6 +780,162 @@ def _build_corpus(a) -> int:
     return 0
 
 
+def _mixture(a) -> int:
+    """Compose the one root a continued-pretraining arm reads, and its weights.
+
+    The code corpus is 65% of that root and is built by `corpus build`; the
+    other 35% is the original pretraining data already on this box. Neither is
+    moved: `--data-dir` needs one directory holding every source, so this links
+    both corpora into one and prints the shares that make the result 65/15/20.
+
+    Everything it decides is written to `--json-out`, including the epochs each
+    source is read for at the budget, because a mixture is only checkable
+    against the thing it was composed for.
+    """
+    from daedalus.codeprep import (code_train_sources, compose_mixture_root,
+                                   mixture_weight_flags, replay_buckets,
+                                   resolve_source_dirs, training_mixture)
+
+    try:
+        with open(a.manifest) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+
+    try:
+        code = code_train_sources(manifest)
+    except ValueError as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+
+    replay_names = sorted(name for members in replay_buckets().values()
+                          for name in members)
+    replay_roots = [root for root in (a.general_train_root, a.general_root)
+                    if root]
+    replay_dirs, missing = resolve_source_dirs(replay_names, roots=replay_roots)
+    try:
+        record = training_mixture(code_sources=code, present=sorted(replay_dirs))
+    except ValueError as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+
+    train_dirs = {key: os.path.join(a.code_root, "train", key) for key in code}
+    train_dirs.update(replay_dirs)
+    holdout_dirs = {
+        key: os.path.join(a.code_root, "holdout", key) for key in code
+        if os.path.exists(os.path.join(a.code_root, "holdout", key,
+                                       "manifest.json"))}
+    # The replay sources only. The code side's holdout is the one the build
+    # carved by repository above, and a general root that happened to carry a
+    # same-named directory must not shadow it.
+    holdout_dirs.update(resolve_source_dirs(
+        sorted(name for name in record["weights"] if name not in code),
+        roots=[a.general_holdout_root])[0])
+
+    print(f"{len(code)} code source(s) at {CORPUS_SHARES['code']:.0%}, "
+          f"{len(replay_dirs)} replayed at "
+          f"{1 - CORPUS_SHARES['code']:.0%} "
+          f"({CORPUS_SHARES['technical']:.0%} technical + "
+          f"{CORPUS_SHARES['general-replay']:.0%} general)")
+    for bucket, members in sorted(record["buckets"].items()):
+        print(f"\n  {bucket} ({record['corpus_shares'][bucket]:.0%})")
+        for name in sorted(members):
+            source_dir = train_dirs.get(name, "")
+            print(f"      {name:34s} {record['weights'][name]:7.4f}   "
+                  f"{source_dir}")
+    for bucket, names in sorted((record.get("absent") or {}).items()):
+        print(f"\n  {bucket}: {', '.join(names)} not on disk; the bucket's "
+              f"share stays in the bucket")
+    if missing:
+        print(f"  looked under {replay_roots}")
+
+    if a.dry_run:
+        print("\n--dry-run: nothing was linked")
+        return 0
+
+    try:
+        composed = {
+            "train": compose_mixture_root(out_root=a.out_root,
+                                          sources=train_dirs, split="train"),
+            "holdout": compose_mixture_root(out_root=a.out_root,
+                                            sources=holdout_dirs,
+                                            split="holdout"),
+        }
+    except (OSError, ValueError) as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+
+    train_root = os.path.join(a.out_root, "train")
+    holdout_root = os.path.join(a.out_root, "holdout")
+
+    # `train.py`'s own resolver, not a second implementation of it: what this
+    # prints has to be what the run will actually sample, including the epoch
+    # cap it applies. Imported here because it pulls in torch, which the rest of
+    # this script does not need.
+    from train import mixture_preflight
+
+    preflight = mixture_preflight(train_root, a.total_tokens,
+                                  weights=record["weights"], verbose=False)
+    print(f"\n  at {a.total_tokens / 1e6:,.0f}M tokens: l1 skew "
+          f"{preflight['l1_skew_pts']:.2f} pts, most repeated "
+          f"{preflight['most_repeated_source']} at "
+          f"{preflight['max_epochs_seen']:.2f} epochs")
+    for name, row in sorted(preflight["per_source"].items()):
+        capped = "  CAPPED" if row["capped"] else ""
+        print(f"      {name:34s} {row['target_share']:7.4f} -> "
+              f"{row['effective_share']:7.4f}  "
+              f"{(row.get('epochs') or 0):5.2f} epochs{capped}")
+    print(f"\n  holdout: {len(composed['holdout'])} source(s) under "
+          f"{holdout_root}")
+    for bucket in sorted(record["buckets"]):
+        unscored = sorted(name for name in record["buckets"][bucket]
+                          if name not in composed["holdout"])
+        if unscored:
+            print(f"      {bucket}: no holdout for {', '.join(unscored)}")
+
+    record.update({
+        "total_tokens": a.total_tokens,
+        "out_root": a.out_root,
+        "train_root": train_root,
+        "holdout_root": holdout_root,
+        "composed": composed,
+        "preflight": preflight,
+        "evidence": {"code_manifest": a.manifest,
+                     "replay_roots": replay_roots,
+                     "general_holdout_root": a.general_holdout_root},
+        "train_flags": ["--data-dir", train_root, "--val-dir", holdout_root,
+                        *mixture_weight_flags(record["weights"])],
+        "caveats": [
+            # Recorded here because this is the artifact the probe scoring reads
+            # its source list from, and the gate it feeds says "general BPB
+            # regression <=1.5%".
+            "data/holdout/stack-edu-python is GitHub Python from the same "
+            "dataset and revision the code bucket streams, and the code "
+            "corpus is repository-split against its own holdout only -- so "
+            "that source cannot serve as a general-retention measurement for "
+            "a model being trained on code. Score general BPB over the "
+            "general-text sources separately from it.",
+        ],
+    })
+    if a.json_out:
+        os.makedirs(os.path.dirname(a.json_out) or ".", exist_ok=True)
+        with open(a.json_out, "w") as f:
+            json.dump(record, f, indent=2, sort_keys=True, default=str)
+            f.write("\n")
+        print(f"\nwrote {a.json_out}")
+
+    print("\ntrain on it with:\n  " + " ".join(record["train_flags"]))
+    if preflight["l1_skew_pts"] > a.max_l1_skew:
+        print(f"\nthe realised mixture is {preflight['l1_skew_pts']:.2f} points "
+              f"from the one asked for, past the {a.max_l1_skew:g}-point limit: "
+              f"{', '.join(preflight['capped_sources'])} cannot fill "
+              f"{a.total_tokens:,} tokens inside the epoch cap",
+              file=sys.stderr)
+        return 3
+    return 0
+
+
 def _cli(argv=None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -957,6 +1113,40 @@ def _cli(argv=None) -> int:
     build.add_argument("--dry-run", action="store_true",
                        help="print the budgets and exit without streaming")
     build.set_defaults(fn=_build_corpus, resume=True)
+
+    mixture = corpus_action.add_parser(
+        "mixture", help="link the built code corpus and the original "
+                        "pretraining data into the one root a run reads, and "
+                        "print the shares that make it 65/15/20")
+    mixture.add_argument("--manifest", default="data/code-shards/manifest.json",
+                         help="`corpus build --manifest` output; an unfinished "
+                              "build is refused rather than composed")
+    mixture.add_argument("--code-root", default="data/code-shards",
+                         help="where `corpus build` wrote <root>/train/<key>")
+    mixture.add_argument(
+        "--general-train-root", default="data/shards-train",
+        help="the holdout-disjoint carve of the original corpus, searched "
+             "first: data/shards still holds the windows data/holdout scores")
+    mixture.add_argument("--general-root", default="data/shards",
+                         help="the original corpus, for the sources that were "
+                              "never carved because they have one shard")
+    mixture.add_argument("--general-holdout-root", default="data/holdout",
+                         help="the general BPB holdout every phase so far has "
+                              "been scored on")
+    mixture.add_argument("--out-root", default="data/code-mixture",
+                         help="the composed root: <root>/train and "
+                              "<root>/holdout, each a directory of symlinks")
+    mixture.add_argument("--total-tokens", type=int, default=250_000_000,
+                         help="the budget the epochs and the cap are reported "
+                              "at -- one probe, not the whole phase")
+    mixture.add_argument("--max-l1-skew", type=float, default=5.0,
+                         help="how far the capped mixture may sit from the one "
+                              "asked for, in percentage points, before this "
+                              "fails")
+    mixture.add_argument("--json-out", default="runs/codeprep/train-mixture.json")
+    mixture.add_argument("--dry-run", action="store_true",
+                         help="print the shares without linking anything")
+    mixture.set_defaults(fn=_mixture)
 
     configs = corpus_action.add_parser(
         "configs", help="list the parquet directories the revision really has")

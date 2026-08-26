@@ -2304,3 +2304,415 @@ def test_a_dry_run_prints_the_budgets_without_reading_a_row(tmp_path, capsys):
     printed = capsys.readouterr().out
     assert "code-python" in printed and "nothing was streamed" in printed
     assert not (tmp_path / "code-shards").exists()
+
+
+# --------------------------------------------------- the training mixture ----
+
+def _mixture_source(key, split, bucket, budget, tokens=None):
+    return {"key": key, "split": split, "bucket": bucket,
+            "token_budget": budget,
+            "tokens": budget if tokens is None else tokens}
+
+
+def _code_manifest(**overrides) -> dict:
+    """A finished two-bucket build's manifest, as `corpus build` writes one."""
+    manifest = {
+        "schema": 1, "total_tokens": 1_000_000_000, "code_tokens": 650_000_000,
+        "corpus_shares": dict(CP.CORPUS_SHARES),
+        "sources": [
+            _mixture_source("code-python", "holdout", "python", 2_000_000),
+            _mixture_source("code-python", "train", "python", 357_500_000),
+            _mixture_source("code-javascript-typescript-javascript-all",
+                            "train", "javascript-typescript", 125_727_256),
+            _mixture_source("code-javascript-typescript-typescript-all",
+                            "train", "javascript-typescript", 166_772_744),
+        ],
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+def _shard_dir(root, name, tokens=100_000_000):
+    """A directory shaped the way `resolve_mixture` and `PackedTokenDataset`
+    read one: the manifest is the file that has to be there."""
+    path = root / name
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "manifest.json").write_text(
+        json.dumps({"total_tokens": tokens, "shards": [], "eos_id": 0}))
+    return path
+
+
+def _general_roots(tmp_path, carved=("fineweb-edu", "dclm-baseline")):
+    """The two general roots this box has: a holdout-disjoint carve of the
+    sources with enough shards to split, and the original corpus for the rest."""
+    shards, train, holdout = (tmp_path / "shards", tmp_path / "shards-train",
+                              tmp_path / "holdout")
+    for name in sorted(n for members in CP.replay_buckets().values()
+                       for n in members):
+        _shard_dir(shards, name)
+    for name in carved:
+        _shard_dir(train, name, tokens=98_000_000)
+        _shard_dir(holdout, name, tokens=2_000_000)
+    return shards, train, holdout
+
+
+def test_the_three_buckets_are_the_shares_the_plan_preregistered():
+    record = CP.training_mixture(
+        code_sources=CP.code_train_sources(_code_manifest()))
+
+    per_bucket = {bucket: sum(record["weights"][name] for name in members)
+                  for bucket, members in record["buckets"].items()}
+    assert per_bucket == pytest.approx({"code": 0.65, "technical": 0.15,
+                                        "general-replay": 0.20}, abs=1e-9)
+    assert sum(record["weights"].values()) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_the_code_bucket_is_divided_the_way_the_corpus_was_built():
+    """By token budget, where python 55 / javascript-typescript 45 and the
+    within-bucket split by measured supply are already encoded -- not by what
+    happens to have landed on disk."""
+    record = CP.training_mixture(
+        code_sources=CP.code_train_sources(_code_manifest()))
+    code = record["buckets"]["code"]
+
+    assert code["code-python"] == pytest.approx(0.55, abs=1e-6)
+    javascript = (code["code-javascript-typescript-javascript-all"]
+                  + code["code-javascript-typescript-typescript-all"])
+    assert javascript == pytest.approx(0.45, abs=1e-6)
+    # The two JS/TS directories are not halves of each other: TypeScript-all
+    # holds 1,443M unique tokens against JavaScript-all's 1,088M.
+    assert (code["code-javascript-typescript-typescript-all"]
+            > code["code-javascript-typescript-javascript-all"])
+
+
+def test_general_replay_is_the_original_mixture_without_its_code_or_technical():
+    """"Original general replay" is the distribution the released model was
+    pretrained on, so it is read off `dataprep.MIXTURE` rather than retyped --
+    minus the sources the other two buckets already serve."""
+    from daedalus.dataprep import MIXTURE
+
+    buckets = CP.replay_buckets()
+    original = {spec.key: spec.share for spec in MIXTURE}
+
+    assert set(buckets["technical"]) == set(CP.TECHNICAL_REPLAY_SOURCES)
+    assert "stack-edu-python" not in buckets["general-replay"]
+    assert set(buckets["general-replay"]) == (
+        set(original) - set(CP.TECHNICAL_REPLAY_SOURCES)
+        - set(CP.CODE_REPLAY_SOURCES))
+    # Relative order and ratios are the original mixture's, only rescaled.
+    ratio = original["fineweb-edu"] / original["dclm-baseline"]
+    assert (buckets["general-replay"]["fineweb-edu"]
+            / buckets["general-replay"]["dclm-baseline"]) == pytest.approx(ratio)
+
+
+def test_replaying_the_original_code_source_would_overrun_the_code_share():
+    """`stack-edu-python` is 9% of the original mixture and is GitHub code from
+    the dataset the code bucket streams. Counted as general replay it would make
+    a corpus whose manifest says 65% code 66.8% code."""
+    from daedalus.dataprep import MIXTURE
+
+    original = {spec.key: spec.share for spec in MIXTURE}
+    general = {name: share for name, share in original.items()
+               if name not in CP.TECHNICAL_REPLAY_SOURCES}
+    leaked = (CP.CORPUS_SHARES["general-replay"]
+              * general["stack-edu-python"] / sum(general.values()))
+
+    assert CP.CORPUS_SHARES["code"] + leaked > 0.665
+
+
+def test_a_source_missing_from_disk_leaves_its_buckets_share_where_it_was():
+    """65/15/20 is the preregistered quantity. A directory that was never built
+    moves share to the rest of *its* bucket, not from prose to code."""
+    present = [name for members in CP.replay_buckets().values()
+               for name in members if name != "finephrase"]
+
+    record = CP.training_mixture(
+        code_sources=CP.code_train_sources(_code_manifest()), present=present)
+
+    assert record["absent"] == {"general-replay": ["finephrase"]}
+    assert "finephrase" not in record["weights"]
+    assert sum(record["weights"][name]
+               for name in record["buckets"]["general-replay"]
+               ) == pytest.approx(0.20, abs=1e-9)
+    assert sum(record["weights"].values()) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_a_bucket_with_a_share_and_no_source_on_disk_is_refused():
+    present = [name for name in CP.replay_buckets()["general-replay"]]
+
+    with pytest.raises(ValueError, match="technical"):
+        CP.training_mixture(
+            code_sources=CP.code_train_sources(_code_manifest()),
+            present=present)
+
+
+def test_a_build_that_is_still_running_is_refused_rather_than_composed():
+    """The failure this closes: the running build had finished Python and was
+    9% into JavaScript. A mixture composed from that manifest trains on 100%
+    Python at a weight that says 55%."""
+    manifest = _code_manifest()
+    for source in manifest["sources"]:
+        if source["key"].endswith("javascript-all"):
+            source["tokens"] = 11_593_381
+
+    with pytest.raises(ValueError, match="still running or this source came up short"):
+        CP.code_train_sources(manifest)
+
+
+def test_a_source_the_build_has_not_reached_yet_is_refused_by_its_absence():
+    """Found by running the dry run against the live corpus, which composed a
+    mixture rather than refusing one. `corpus build` appends to its manifest as
+    each source *finishes*, so the directory it has not started is absent rather
+    than short -- and the bucket check passes anyway, because the bucket's other
+    directory is there. What was composed was 74/26 python to javascript at
+    weights that said 55/45."""
+    manifest = _code_manifest()
+    manifest["sources"] = [source for source in manifest["sources"]
+                           if not source["key"].endswith("typescript-all")]
+
+    with pytest.raises(ValueError, match="has not reached it"):
+        CP.code_train_sources(manifest)
+
+
+def test_the_gap_is_named_in_tokens_rather_than_in_directories():
+    """The manifest cannot say which directory is missing -- there is no entry
+    to name -- so it says how much of the code budget has no entry."""
+    manifest = _code_manifest()
+    manifest["sources"] = [source for source in manifest["sources"]
+                           if not source["key"].endswith("typescript-all")]
+
+    with pytest.raises(ValueError, match="166,772,744 tokens' worth"):
+        CP.code_train_sources(manifest)
+
+
+def test_a_finished_build_totals_its_own_code_budget():
+    """The check above rests on the train budgets being a partition of
+    `code_tokens`, which is what `config_budgets`' largest-remainder split
+    makes them. If that ever stops holding, every finished build is refused."""
+    manifest = _code_manifest()
+
+    assert sum(source["token_budget"] for source in manifest["sources"]
+               if source["split"] == "train") == manifest["code_tokens"]
+    assert CP.code_train_sources(manifest)
+
+
+def test_a_bucket_that_never_reached_the_shards_is_refused_by_name():
+    manifest = _code_manifest()
+    manifest["sources"] = [source for source in manifest["sources"]
+                           if source["bucket"] != "javascript-typescript"]
+
+    with pytest.raises(ValueError, match="javascript-typescript"):
+        CP.code_train_sources(manifest)
+
+
+def test_a_source_that_failed_is_refused_with_its_error():
+    manifest = _code_manifest()
+    manifest["sources"][1]["error"] = "WorkerMemoryExceeded(8.4)"
+
+    with pytest.raises(ValueError, match="WorkerMemoryExceeded"):
+        CP.code_train_sources(manifest)
+
+
+def test_the_weights_are_the_flags_train_py_actually_accepts():
+    """Twelve shares rounded to six places can miss 1.0 by more than
+    `parse_mixture_weights` allows, and its refusal names the sum rather than
+    the rounding."""
+    from train import parse_mixture_weights
+
+    record = CP.training_mixture(
+        code_sources=CP.code_train_sources(_code_manifest()))
+    flags = CP.mixture_weight_flags(record["weights"])
+
+    assert flags[0] == "--mixture-weight"
+    parsed = parse_mixture_weights(flags[1::2])
+    assert parsed == pytest.approx(record["weights"], abs=1e-12)
+
+
+def test_the_composed_root_is_the_mixture_the_trainer_resolves(tmp_path):
+    """The real check on the composition: `resolve_mixture` over the composed
+    root returns the shares that were asked for, over sources that live in two
+    different corpora."""
+    from train import resolve_mixture
+
+    shards, train, _ = _general_roots(tmp_path)
+    code_root = tmp_path / "code-shards"
+    manifest = _code_manifest()
+    code = CP.code_train_sources(manifest)
+    for key, row in code.items():
+        _shard_dir(code_root / "train", key, tokens=row["token_budget"])
+    dirs, missing = CP.resolve_source_dirs(
+        sorted(name for members in CP.replay_buckets().values()
+               for name in members),
+        roots=[str(train), str(shards)])
+    assert missing == []
+    dirs.update({key: str(code_root / "train" / key) for key in code})
+
+    record = CP.training_mixture(code_sources=code, present=sorted(
+        name for name in dirs if not name.startswith("code-")))
+    CP.compose_mixture_root(out_root=str(tmp_path / "mix"), sources=dirs)
+
+    names, target, probs, on_disk = resolve_mixture(
+        str(tmp_path / "mix" / "train"), 250_000_000,
+        weights=record["weights"], verbose=False)
+    assert set(names) == set(record["weights"])
+    assert target == pytest.approx(record["weights"], abs=1e-9)
+    assert on_disk["code-python"] == 357_500_000
+
+
+def test_the_carve_that_the_holdout_was_taken_from_is_preferred(tmp_path):
+    """`data/shards` still holds the windows `data/holdout` scores, and the
+    retention gate that reads them decides whether 1B tokens get spent."""
+    shards, train, _ = _general_roots(tmp_path)
+
+    dirs, missing = CP.resolve_source_dirs(
+        ["fineweb-edu", "finephrase"], roots=[str(train), str(shards)])
+
+    assert dirs["fineweb-edu"] == str(train / "fineweb-edu")
+    # Never carved -- one shard, nothing to hold out -- so it resolves to the
+    # original corpus and is scored by nothing.
+    assert dirs["finephrase"] == str(shards / "finephrase")
+    assert missing == []
+
+
+def test_a_source_that_is_on_no_root_is_reported_not_guessed(tmp_path):
+    shards, train, _ = _general_roots(tmp_path)
+
+    dirs, missing = CP.resolve_source_dirs(
+        ["fineweb-edu", "nemotron-cc"], roots=[str(train), str(shards)])
+
+    assert missing == ["nemotron-cc"] and "nemotron-cc" not in dirs
+
+
+def test_composition_refuses_a_directory_with_no_manifest(tmp_path):
+    """`PackedTokenDataset` opens manifest.json, so an empty or mistyped path
+    fails several layers inside a training run instead of here."""
+    (tmp_path / "empty").mkdir()
+
+    with pytest.raises(ValueError, match="no manifest.json"):
+        CP.compose_mixture_root(out_root=str(tmp_path / "mix"),
+                                sources={"fineweb-edu": str(tmp_path / "empty")})
+
+
+def test_composition_never_replaces_a_real_directory(tmp_path):
+    """The composed root is disposable and the corpora it points at are not."""
+    source = _shard_dir(tmp_path / "shards", "fineweb-edu")
+    real = tmp_path / "mix" / "train" / "fineweb-edu"
+    real.mkdir(parents=True)
+    (real / "keep.bin").write_bytes(b"0")
+
+    with pytest.raises(ValueError, match="refusing to replace"):
+        CP.compose_mixture_root(out_root=str(tmp_path / "mix"),
+                                sources={"fineweb-edu": str(source)})
+    assert (real / "keep.bin").exists()
+
+
+def test_recomposing_onto_a_stale_link_repoints_it(tmp_path):
+    """A composed root is a view. Re-running it after a corpus moves must follow
+    the corpus rather than keep reading the old one."""
+    first = _shard_dir(tmp_path / "old", "fineweb-edu", tokens=1_000)
+    second = _shard_dir(tmp_path / "new", "fineweb-edu", tokens=2_000)
+    out = str(tmp_path / "mix")
+
+    CP.compose_mixture_root(out_root=out, sources={"fineweb-edu": str(first)})
+    composed = CP.compose_mixture_root(out_root=out,
+                                       sources={"fineweb-edu": str(second)})
+
+    assert composed["fineweb-edu"]["relinked"] is True
+    assert composed["fineweb-edu"]["tokens"] == 2_000
+    assert os.path.realpath(composed["fineweb-edu"]["path"]) == str(second)
+
+
+def _mixture_argv(tmp_path, **overrides):
+    argv = ["corpus", "mixture",
+            "--manifest", str(tmp_path / "code-shards" / "manifest.json"),
+            "--code-root", str(tmp_path / "code-shards"),
+            "--general-train-root", str(tmp_path / "shards-train"),
+            "--general-root", str(tmp_path / "shards"),
+            "--general-holdout-root", str(tmp_path / "holdout"),
+            "--out-root", str(tmp_path / "code-mixture"),
+            "--json-out", str(tmp_path / "train-mixture.json"),
+            "--total-tokens", "250000000"]
+    for flag, value in overrides.items():
+        argv += [f"--{flag}"] if value is True else [f"--{flag}", str(value)]
+    return argv
+
+
+def _built_corpus(tmp_path):
+    _general_roots(tmp_path)
+    manifest = _code_manifest()
+    code_root = tmp_path / "code-shards"
+    for source in manifest["sources"]:
+        _shard_dir(code_root / source["split"], source["key"],
+                   tokens=source["tokens"])
+    (code_root / "manifest.json").write_text(json.dumps(manifest))
+    return manifest
+
+
+def test_the_cli_composes_one_root_and_prints_what_to_train_on(
+        tmp_path, capsys):
+    import scripts.codeprep as CLI
+
+    _built_corpus(tmp_path)
+
+    assert CLI._cli(_mixture_argv(tmp_path)) == 0
+
+    printed = capsys.readouterr().out
+    assert "code-python" in printed and "fineweb-edu" in printed
+    record = json.loads((tmp_path / "train-mixture.json").read_text())
+    flags = record["train_flags"]
+    assert flags[:2] == ["--data-dir", str(tmp_path / "code-mixture" / "train")]
+    assert flags[2:4] == ["--val-dir", str(tmp_path / "code-mixture" / "holdout")]
+    # Both corpora reachable under the one root `--data-dir` can name.
+    train_root = tmp_path / "code-mixture" / "train"
+    assert (train_root / "code-python" / "manifest.json").exists()
+    assert (train_root / "fineweb-edu" / "manifest.json").exists()
+    # And the holdout side carries the code sources plus the general holdout
+    # every phase so far has been scored on.
+    holdout_root = tmp_path / "code-mixture" / "holdout"
+    assert sorted(p.name for p in holdout_root.iterdir()) == [
+        "code-python", "dclm-baseline", "fineweb-edu"]
+    assert record["preflight"]["total_run_tokens"] == 250_000_000
+
+
+def test_the_cli_refuses_a_corpus_that_is_still_streaming(tmp_path, capsys):
+    import scripts.codeprep as CLI
+
+    manifest = _built_corpus(tmp_path)
+    manifest["sources"][2]["tokens"] = 11_593_381
+    (tmp_path / "code-shards" / "manifest.json").write_text(json.dumps(manifest))
+
+    rc = CLI._cli(_mixture_argv(tmp_path))
+
+    assert rc == 2
+    assert "REFUSE" in capsys.readouterr().err
+    assert not (tmp_path / "code-mixture").exists()
+
+
+def test_the_cli_dry_run_prints_the_shares_without_linking(tmp_path, capsys):
+    import scripts.codeprep as CLI
+
+    _built_corpus(tmp_path)
+
+    assert CLI._cli(_mixture_argv(tmp_path, **{"dry-run": True})) == 0
+    assert "nothing was linked" in capsys.readouterr().out
+    assert not (tmp_path / "code-mixture").exists()
+
+
+def test_the_cli_fails_a_mixture_the_corpus_cannot_hold_at_the_budget(
+        tmp_path, capsys):
+    """The epoch cap moves shares, and a mixture far from the one asked for is a
+    different experiment. `everyday-conversations` is 403,573 tokens on this box,
+    so a large enough budget caps it and every share moves."""
+    import scripts.codeprep as CLI
+
+    _built_corpus(tmp_path)
+    for name in ("everyday-conversations", "finewiki-en", "cosmopedia-v2",
+                 "finephrase"):
+        _shard_dir(tmp_path / "shards", name, tokens=400_000)
+
+    rc = CLI._cli(_mixture_argv(tmp_path, **{"total-tokens": 3_000_000_000}))
+
+    assert rc == 3
+    assert "past the 5-point limit" in capsys.readouterr().err
+    # Written before the verdict, so a failing compose still leaves the record.
+    assert json.loads((tmp_path / "train-mixture.json").read_text())["preflight"]

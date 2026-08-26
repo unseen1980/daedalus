@@ -1930,3 +1930,325 @@ def merge_gate_manifest(prior: Optional[dict], current: dict,
         "repositories_truncated": truncated,
         "attempts": int(prior.get("attempts") or 1) + int(current.get("attempts") or 1),
     }
+
+
+# --------------------------------------------------- the training mixture ----
+#
+# The code corpus is 65% of what a continued-pretraining arm reads. The other
+# 35% is not built here and cannot be: it is the *original* pretraining data,
+# already on this box as `data/shards`, and replaying it is the whole mechanism
+# by which the general retention gates ("general BPB regression <=1.5%",
+# "five-task mean drop <=1 point") are meant to be passable at all.
+#
+# `train.py`'s `resolve_mixture` reads one root and looks for
+# `<root>/<source>/manifest.json` per weight, so the two corpora have to be
+# reachable under a single directory before `--data-dir` can name them both.
+# `compose_mixture_root` below is that directory, built out of symlinks so no
+# token is copied and nothing is moved out from under the corpus that owns it.
+
+#: The original mixture's technical and mathematical prose -- the plan's 15%
+#: bucket, named by source rather than by share so that "technical" means the
+#: same three directories every time it is divided.
+TECHNICAL_REPLAY_SOURCES = ("finemath-3plus", "finepdfs-edu", "infiwebmath-3plus")
+
+#: Sources of the original mixture that are *code*, and so are served by the
+#: 65% bucket rather than replayed inside the 20% one. Counting
+#: `stack-edu-python` as general replay would put its 9% of the original
+#: mixture on top of the code share -- 66.8% code in a corpus whose manifest,
+#: model card and gate all say 65% -- and it is drawn from
+#: `codeparrot/github-code` at the same revision the code bucket streams, so it
+#: is not even a different corpus.
+CODE_REPLAY_SOURCES = ("stack-edu-python",)
+
+
+def _normalized(weights: Dict[str, float]) -> Dict[str, float]:
+    total = float(sum(weights.values()))
+    if total <= 0:
+        raise ValueError(f"cannot normalize weights summing to {total}")
+    return {name: value / total for name, value in sorted(weights.items())}
+
+
+def replay_buckets(mixture: Optional[Sequence] = None,
+                   present: Optional[Sequence[str]] = None,
+                   ) -> Dict[str, Dict[str, float]]:
+    """The two non-code buckets, as shares *within* each bucket.
+
+    Derived from `dataprep.MIXTURE` rather than retyped, because "original
+    general replay" means the distribution the released model was pretrained on
+    and there is exactly one record of that. Retyping it would leave a second
+    copy to drift, and the drift would be invisible: an arm would train on a
+    replay mixture that no longer matched the model it was replaying for, and
+    every number it produced would still look reasonable.
+
+    Each bucket is renormalized over the sources actually on this box when
+    `present` is given. The renormalization is deliberately *within* the bucket:
+    65/15/20 is the preregistered quantity, so a missing directory must move
+    share to the rest of its own bucket rather than quietly reweight code
+    against prose. What is missing is reported by the caller rather than
+    guessed at here -- see `training_mixture`'s `absent`.
+    """
+    if mixture is None:
+        from daedalus.dataprep import MIXTURE
+
+        mixture = MIXTURE
+    shares = {spec.key: float(spec.share) for spec in mixture}
+    unknown = sorted(set(TECHNICAL_REPLAY_SOURCES) - set(shares))
+    if unknown:
+        raise ValueError(
+            f"the technical bucket names {unknown}, which the original mixture "
+            f"does not contain (it has {sorted(shares)}). The bucket is a "
+            f"subset of the pretraining mixture, so a name that is not in it "
+            f"is a typo or a renamed source, not a new one to build.")
+    buckets = {
+        "technical": {name: share for name, share in shares.items()
+                      if name in TECHNICAL_REPLAY_SOURCES},
+        "general-replay": {name: share for name, share in shares.items()
+                           if name not in TECHNICAL_REPLAY_SOURCES
+                           and name not in CODE_REPLAY_SOURCES},
+    }
+    if present is not None:
+        keep = set(present)
+        buckets = {bucket: {name: share for name, share in members.items()
+                            if name in keep}
+                   for bucket, members in buckets.items()}
+    empty = sorted(bucket for bucket, members in buckets.items() if not members)
+    if empty:
+        raise ValueError(
+            f"no source on disk for {empty}; a bucket with a share and no "
+            f"shards would silently move its share onto the others")
+    return {bucket: _normalized(members) for bucket, members in buckets.items()}
+
+
+def code_train_sources(manifest: dict, *,
+                       shares: Optional[Dict[str, float]] = None,
+                       tolerance: float = 0.99) -> Dict[str, dict]:
+    """`{key: {bucket, token_budget, tokens}}` for the train side of a build.
+
+    Refuses an *unfinished* build rather than composing what has landed so far.
+    A code corpus is streamed one source at a time over hours, so a mixture
+    composed halfway through is a real and reachable mistake: at the moment this
+    was written the running build had finished Python and JavaScript and was
+    40% into TypeScript, and a root composed from that manifest would have
+    trained the probes on a 74/26 split at weights that say 55/45 -- with the
+    arm's own artifacts recording the mixture it *asked* for, which is exactly
+    the failure `parse_mixture_weights` refuses the arithmetic version of.
+
+    Two different things have to be checked to catch that, and the first one
+    alone does not:
+
+    * a source that is **present and short**, which is also the honest
+      shortfall -- a directory that ran out of rows against the budget
+      `corpus headroom` said it could fill. The build already exits non-zero
+      for it; this is the second reader of that fact, at the point where it
+      would otherwise silently become a mixture weight.
+    * a source that is **not there at all**. `corpus build` appends to its
+      manifest as each source finishes, so the one it has not reached yet is
+      absent rather than short, and a bucket with two directories still has an
+      entry for the one that finished. The manifest's own `code_tokens` is what
+      closes this: the train budgets are a partition of it, so a sum that falls
+      short names the gap in tokens even though nothing in the file is missing
+      a value.
+    """
+    shares = CODE_LANGUAGE_SHARES if shares is None else shares
+    rows = [dict(row) for row in (manifest.get("sources") or [])
+            if row.get("split") == "train"]
+    if not rows:
+        raise ValueError("this manifest has no train-side source; nothing to "
+                         "train on")
+
+    problems: List[str] = []
+    for row in rows:
+        key = row.get("key", "<unnamed>")
+        if row.get("error"):
+            problems.append(f"{key}: {row['error']}")
+            continue
+        budget = int(row.get("token_budget") or 0)
+        tokens = int(row.get("tokens") or 0)
+        if budget > 0 and tokens < budget * tolerance:
+            problems.append(
+                f"{key}: {tokens:,} of {budget:,} tokens "
+                f"({tokens / budget:.1%}) -- the build is still running or this "
+                f"source came up short")
+    built = {row.get("bucket") for row in rows}
+    for bucket, share in sorted(shares.items()):
+        if bucket not in built:
+            problems.append(
+                f"bucket {bucket!r} has a {share:.0%} share of the code corpus "
+                f"and no train source in this manifest")
+    planned = int(manifest.get("code_tokens") or 0)
+    budgeted = sum(int(row.get("token_budget") or 0) for row in rows)
+    if planned > 0 and budgeted < planned * tolerance:
+        problems.append(
+            f"the train budgets total {budgeted:,} tokens against this "
+            f"corpus's {planned:,}-token code budget -- {planned - budgeted:,} "
+            f"tokens' worth of directory has no entry yet, so the build has "
+            f"not reached it")
+    if problems:
+        raise ValueError(
+            "refusing to compose a mixture from this code corpus:\n  - "
+            + "\n  - ".join(problems))
+
+    return {row["key"]: {"bucket": row.get("bucket"),
+                         "token_budget": int(row.get("token_budget") or 0),
+                         "tokens": int(row.get("tokens") or 0)}
+            for row in rows}
+
+
+def training_mixture(*, code_sources: Dict[str, dict],
+                     present: Optional[Sequence[str]] = None,
+                     shares: Optional[Dict[str, float]] = None,
+                     mixture: Optional[Sequence] = None) -> dict:
+    """The per-source shares one continued-pretraining arm trains on.
+
+    The code side is divided by each directory's **token budget**, not by what
+    landed on disk. `cap_weights_by_epochs` states the doctrine this follows:
+    "a source's target share is a statement about the *mixture*, not about how
+    much data exists". The budgets are where python 55 / javascript-typescript
+    45 and the measured within-bucket split (`config_budgets`) are already
+    encoded, so weighting by them reproduces the mixture that was planned,
+    measured and manifested. Realised tokens are carried alongside so a
+    shortfall stays visible -- `code_train_sources` has already refused
+    anything worse than 1%.
+
+    Returns the record, not just the weights: a mixture that cannot be read back
+    to the three buckets it came from is a list of twelve numbers nobody can
+    check.
+    """
+    shares = dict(CORPUS_SHARES if shares is None else shares)
+    if abs(sum(shares.values()) - 1.0) > 1e-9:
+        raise ValueError(f"corpus shares must sum to 1.0, got {shares}")
+    if not code_sources:
+        raise ValueError("no code source; the 65% bucket would be empty")
+
+    wanted = replay_buckets(mixture=mixture)
+    replay = replay_buckets(mixture=mixture, present=(
+        present if present is not None
+        else sorted(name for members in wanted.values() for name in members)))
+    absent = {bucket: sorted(set(wanted[bucket]) - set(members))
+              for bucket, members in replay.items()}
+
+    buckets = {"code": _normalized(
+        {key: float(row["token_budget"]) for key, row in code_sources.items()})}
+    buckets.update(replay)
+
+    weights: Dict[str, float] = {}
+    for bucket, members in buckets.items():
+        for name, within in members.items():
+            weights[name] = shares[bucket] * within
+    # The residual goes on the largest share so the emitted set sums to exactly
+    # 1.0 as a float. `parse_mixture_weights` refuses a set that does not, and
+    # it is right to: a set summing to 0.999999 is usually a source left out.
+    largest = max(weights, key=lambda name: (weights[name], name))
+    weights[largest] += 1.0 - sum(weights.values())
+
+    return {
+        "schema": 1,
+        "corpus_shares": shares,
+        "buckets": buckets,
+        "weights": dict(sorted(weights.items())),
+        "absent": {bucket: names for bucket, names in absent.items() if names},
+        "code_sources": dict(sorted(code_sources.items())),
+        "code_basis": "each directory's share of the code budget it was built to",
+        "replay_basis": "the original pretraining mixture's own shares, "
+                        "renormalized within each bucket",
+        "excluded_from_replay": {
+            name: "code; served by the 65% code bucket, and drawn from the "
+                  "same dataset it streams"
+            for name in CODE_REPLAY_SOURCES},
+    }
+
+
+def mixture_weight_flags(weights: Dict[str, float]) -> List[str]:
+    """`["--mixture-weight", "name=share", ...]`, ready to splice into an argv.
+
+    Full float `repr`, which round-trips exactly, rather than a rounded format:
+    twelve shares each rounded to six places can miss 1.0 by more than
+    `parse_mixture_weights` allows, and the refusal it produces names the sum
+    rather than the rounding.
+    """
+    flags: List[str] = []
+    for name, share in sorted(weights.items()):
+        flags += ["--mixture-weight", f"{name}={float(share)!r}"]
+    return flags
+
+
+def resolve_source_dirs(names: Sequence[str], *, roots: Sequence[str],
+                        ) -> Tuple[Dict[str, str], List[str]]:
+    """`({name: dir}, missing)` -- the first root that holds each source.
+
+    Root *order* is the contract, and for the general corpus it is
+    `data/shards-train` before `data/shards`. Those three sources were carved
+    into disjoint train and holdout halves (`make_mixture_holdout_split`) and
+    `data/shards` still holds both halves, so training from it would train on
+    the very windows `data/holdout` scores -- and the retention gate that reads
+    them decides whether 1B tokens get spent. The other seven sources were never
+    carved (one shard each, nothing to hold out), so they resolve to
+    `data/shards` and are scored by nothing.
+    """
+    import os
+
+    found: Dict[str, str] = {}
+    missing: List[str] = []
+    for name in names:
+        for root in roots:
+            if not root:
+                continue
+            candidate = os.path.join(root, name)
+            if os.path.exists(os.path.join(candidate, "manifest.json")):
+                found[name] = candidate
+                break
+        else:
+            missing.append(name)
+    return found, missing
+
+
+def compose_mixture_root(*, out_root: str, sources: Dict[str, str],
+                         split: str = "train") -> Dict[str, dict]:
+    """Link each source's shard directory into `<out_root>/<split>/<key>`.
+
+    Symlinks, not copies: the code corpus alone is 650M tokens and both corpora
+    are already on this disk under owners that keep writing to them. A symlink
+    farm also stays honest under a rebuild -- the composed root is a *view*, so
+    a corpus that grows is read at its new size rather than at the size it had
+    when the mixture was composed.
+
+    Refuses a directory with no `manifest.json`: `PackedTokenDataset` opens that
+    file, so an empty or mistyped path fails several layers down inside a
+    training run instead of here. Refuses to replace a real directory too --
+    the composed root is disposable and the corpora it points at are not.
+    """
+    import json
+    import os
+
+    root = os.path.join(out_root, split)
+    os.makedirs(root, exist_ok=True)
+    composed: Dict[str, dict] = {}
+    for key, source_dir in sorted(sources.items()):
+        manifest_path = os.path.join(source_dir, "manifest.json")
+        if not os.path.exists(manifest_path):
+            raise ValueError(
+                f"{key}: no manifest.json under {source_dir!r}; a mixture root "
+                f"cannot be read from a directory that has none")
+        target = os.path.abspath(source_dir)
+        link = os.path.join(root, key)
+        relinked = False
+        if os.path.islink(link):
+            if os.path.realpath(link) != os.path.realpath(target):
+                os.unlink(link)
+                relinked = True
+        elif os.path.exists(link):
+            raise ValueError(
+                f"{link!r} is a real directory, not a link this root owns; "
+                f"refusing to replace it")
+        if not os.path.exists(link) or relinked:
+            if os.path.islink(link):
+                os.unlink(link)
+            os.symlink(target, link)
+        try:
+            with open(manifest_path) as handle:
+                tokens = int(json.load(handle).get("total_tokens") or 0)
+        except (OSError, ValueError):
+            tokens = 0
+        composed[key] = {"path": link, "target": target, "tokens": tokens,
+                         "relinked": relinked}
+    return composed
