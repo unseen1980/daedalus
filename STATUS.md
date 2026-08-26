@@ -1,17 +1,19 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-26T17:16:20.614597Z`
+> **Action required.** lane inspect: phase8-codeprep-source-probe failed
+
+- Heartbeat: `2026-08-26T17:21:23.434060Z`
 - Phase: `phase8-code-decontam-index`
 - Status: `passed`
-- Source: `vast/daedalus-code-20260824` at `b6306e087dc4`
-- Elapsed: `54.53h` of `144.0h`
-- Finalization window opens in: `81.47h`
+- Source: `vast/daedalus-code-20260824` at `3ead5562702a`
+- Elapsed: `54.61h` of `144.0h`
+- Finalization window opens in: `81.39h`
 - Deadline stage: `active`
 
 ## Lanes
 
 - `evidence`: `phase6-stageb-decode` (passed)
-- `inspect`: `phase8-code-harness-oracle-humaneval` (passed)
+- `inspect`: `phase8-codeprep-source-probe` (failed)
 - `operator`: `phase8-branch-prerequisite` (passed)
 - `retrieval`: `phase6-stagea-retrieval-remeasure` (passed)
 - `selfcheck`: `phase6-lane-selfcheck` (passed)
