@@ -1,11 +1,11 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-26T15:51:51.605688Z`
+- Heartbeat: `2026-08-26T15:56:53.058106Z`
 - Phase: `phase8-code-harness-oracle-mbpp`
 - Status: `passed`
 - Source: `vast/daedalus-improvements-20260824` at `ce4660856679`
-- Elapsed: `53.12h` of `144.0h`
-- Finalization window opens in: `82.88h`
+- Elapsed: `53.2h` of `144.0h`
+- Finalization window opens in: `82.8h`
 - Deadline stage: `active`
 
 ## Latest Metrics
