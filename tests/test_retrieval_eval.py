@@ -7,6 +7,7 @@ argv, the parsing, the determinism settings, and the control gate.
 """
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -227,6 +228,227 @@ def test_conversation_flag_may_be_waived_for_a_binary_that_never_had_one(
 
 SINGLE_TURN_ONLY_HELP = HELP_TEXT.replace("-no-cnv, --no-conversation",
                                           "-st,   --single-turn")
+
+
+PASSTHROUGH_HELP = SINGLE_TURN_ONLY_HELP.replace(
+    "         --simple-io",
+    "         --jinja\n         --chat-template-file FNAME\n         --simple-io")
+
+
+# --------------------------------------------------------- binary capability ---
+
+def test_probe_reports_a_raw_completion_build_as_usable(tmp_path):
+    """The probe answers the question the scoring guards can only refuse.
+
+    `supported_flags` raises on a build that cannot measure a base model, which
+    is right for a run and useless for an operator asking what the build *does*
+    support. There is no approved way to run `llama-cli --help` directly, so
+    without this the only reading of a build's capabilities is a traceback.
+    """
+    from scripts.retrieval_eval import probe_binary
+
+    binary = tmp_path / "llama-cli"
+    binary.write_text("#!/bin/sh\n")
+
+    report = probe_binary(binary, runner=_fake_runner([], stdout=HELP_TEXT))
+
+    assert report["exists"] is True
+    assert report["required_missing"] == []
+    assert report["raw_completion_flags"] == ["-no-cnv", "--no-conversation"]
+    assert report["base_model_route"] == "raw-completion"
+
+
+def test_probe_names_the_passthrough_route_on_a_templated_only_build(tmp_path):
+    """A templated-only build that offers `--jinja` is not actually blocked.
+
+    A pass-through Jinja template renders the messages verbatim, so the
+    templated turn feeds the model the prompt as written. That is the
+    difference between "this box needs llama.cpp rebuilt" and "this box needs a
+    template file", and only the binary's own help can tell them apart.
+    """
+    from scripts.retrieval_eval import probe_binary
+
+    binary = tmp_path / "llama-cli"
+    binary.write_text("#!/bin/sh\n")
+
+    report = probe_binary(binary, runner=_fake_runner([], stdout=PASSTHROUGH_HELP))
+
+    assert report["raw_completion_flags"] == []
+    assert report["single_turn_flags"] == ["-st", "--single-turn"]
+    assert report["passthrough_flags"] == ["--jinja", "--chat-template-file"]
+    assert report["base_model_route"] == "passthrough-template"
+
+
+def test_probe_reports_no_route_when_the_build_offers_neither(tmp_path):
+    """The honest answer stays available: a rebuild really is required."""
+    from scripts.retrieval_eval import probe_binary
+
+    binary = tmp_path / "llama-cli"
+    binary.write_text("#!/bin/sh\n")
+
+    report = probe_binary(binary, runner=_fake_runner([],
+                                                      stdout=SINGLE_TURN_ONLY_HELP))
+
+    assert report["base_model_route"] == "none"
+    assert "single-turn" in report["conversation_help"]
+
+
+def test_probe_lists_sibling_binaries_that_could_complete_a_prompt(tmp_path):
+    """`llama-completion` existing beside `llama-cli` is the cheapest remedy.
+
+    The blocker was recorded as "rebuild llama.cpp" partly because nothing could
+    answer whether the build already shipped a non-UI binary. The directory can.
+    """
+    from scripts.retrieval_eval import probe_binary
+
+    binary = tmp_path / "llama-cli"
+    binary.write_text("#!/bin/sh\n")
+    (tmp_path / "llama-quantize").write_text("#!/bin/sh\n")
+    (tmp_path / "llama-server").write_text("#!/bin/sh\n")
+
+    report = probe_binary(binary, runner=_fake_runner([], stdout=HELP_TEXT))
+
+    assert report["siblings"] == ["llama-cli", "llama-quantize", "llama-server"]
+
+
+def test_probe_reports_a_missing_or_unrunnable_binary_without_raising(tmp_path):
+    """A diagnostic that raises is the failure it exists to explain."""
+    from scripts.retrieval_eval import probe_binary
+
+    absent = probe_binary(tmp_path / "nope")
+    assert absent["exists"] is False and absent["error"]
+
+    binary = tmp_path / "llama-cli"
+    binary.write_text("#!/bin/sh\n")
+
+    def explode(command, **kwargs):
+        raise OSError("Exec format error")
+
+    broken = probe_binary(binary, runner=explode)
+    assert "OSError" in broken["error"]
+
+
+def test_probe_cli_prints_json_without_touching_the_tokenizer(tmp_path, capsys,
+                                                              monkeypatch):
+    """`--probe` must work on a box where the scoring path cannot even start.
+
+    Building the items downloads a tokenizer; a probe asks about a binary. If
+    the probe went through the tokenizer first, the one situation it exists for
+    -- an environment that is not working -- would fail for an unrelated reason.
+    """
+    import scripts.retrieval_eval as module
+
+    binary = tmp_path / "llama-cli"
+    binary.write_text("#!/bin/sh\n")
+
+    def refuse_tokenizer():
+        raise AssertionError("--probe must not build items")
+
+    monkeypatch.setattr("daedalus.data.get_tokenizer", refuse_tokenizer)
+    monkeypatch.setattr(module, "probe_binary",
+                        lambda path, **kw: {"binary": str(path), "probe": "ran"})
+
+    assert module.main(["--backend", "llama-cpp", "--probe",
+                        "--llama-cli", str(binary)]) == 0
+    assert json.loads(capsys.readouterr().out)["probe"] == "ran"
+
+
+# ------------------------------------------------------ pass-through template ---
+
+def test_a_templated_only_build_with_jinja_is_driven_raw(tmp_path, tokenizer):
+    """The pinned UI build can measure a base model after all.
+
+    It advertises `-st`, no `-no-cnv`, *and* `--jinja`/`--chat-template-file`.
+    A pass-through template renders the messages verbatim, so the templated turn
+    hands the model the prompt as written -- on a stock binary, with no rebuild.
+    Refusing here would leave the retrieval column unmeasurable for an
+    environment reason that is not actually true.
+    """
+    from scripts.retrieval_eval import PASSTHROUGH_TEMPLATE, LlamaCppBackend
+
+    calls = []
+    backend = LlamaCppBackend(gguf_path=tmp_path / "m.gguf",
+                              binary=tmp_path / "llama-cli",
+                              runner=_fake_runner(calls, stdout=PASSTHROUGH_HELP))
+    item = make_passkey_items(tokenizer, depths=(256,), per_depth=1, seed=1)[0]
+
+    backend.generate(item)
+
+    command = [call for call in calls if "--help" not in call["command"]][0]["command"]
+    assert "-st" in command
+    assert "--jinja" in command
+    template = command[command.index("--chat-template-file") + 1]
+    assert template.endswith(".jinja")
+    # Written for the call and removed with the prompt file: nothing about this
+    # measurement may depend on a file left behind by an earlier run.
+    assert not os.path.exists(template)
+    assert "role" not in PASSTHROUGH_TEMPLATE
+
+
+def test_a_passthrough_turn_is_recorded_as_raw_completion_and_how(tmp_path):
+    """`raw-completion` for the gate, `raw_completion_via` for the reader.
+
+    The report gate matches `template_mode` exactly, so a pass-through card has
+    to report the mode it actually measured or the column stays unmeasured for
+    no reason. But "raw completion" reached two different ways is two different
+    argv, and a card that cannot say which is not reproducible.
+    """
+    from scripts.retrieval_eval import LlamaCppBackend
+
+    passthrough = LlamaCppBackend(gguf_path=tmp_path / "m.gguf",
+                                  binary=tmp_path / "llama-cli",
+                                  runner=_fake_runner([], stdout=PASSTHROUGH_HELP))
+    assert passthrough.template_mode() == "raw-completion"
+    assert passthrough.raw_completion_via() == "passthrough-template"
+    assert passthrough.uses_passthrough_template() is True
+
+
+def test_a_no_conversation_build_ignores_the_passthrough_route(tmp_path,
+                                                               tokenizer):
+    """`-no-cnv` stays preferred when the build has it.
+
+    Leaving the chat machinery out entirely is fewer moving parts than
+    neutralising it, and it keeps a scorecard's meaning independent of upstream
+    Jinja behaviour. A build offering both must not quietly switch routes.
+    """
+    from scripts.retrieval_eval import LlamaCppBackend
+
+    calls = []
+    both = HELP_TEXT.replace(
+        "         --simple-io",
+        "         --jinja\n         --chat-template-file FNAME\n         --simple-io")
+    backend = LlamaCppBackend(gguf_path=tmp_path / "m.gguf",
+                              binary=tmp_path / "llama-cli",
+                              runner=_fake_runner(calls, stdout=both))
+
+    backend.generate(make_passkey_items(tokenizer, depths=(256,), per_depth=1,
+                                        seed=1)[0])
+
+    command = [call for call in calls if "--help" not in call["command"]][0]["command"]
+    assert "-no-cnv" in command
+    assert "--chat-template-file" not in command
+    assert backend.uses_passthrough_template() is False
+    assert backend.raw_completion_via() == "no-conversation-flag"
+
+
+def test_passthrough_needs_both_flags_not_either(tmp_path, tokenizer):
+    """`--chat-template-file` without a Jinja engine is not applied.
+
+    Half the route is not a route, and accepting it would put the templated
+    zeros back with a scorecard claiming raw completion -- strictly worse than
+    the refusal it replaced.
+    """
+    from scripts.retrieval_eval import LlamaCppBackend
+
+    jinja_only = SINGLE_TURN_ONLY_HELP.replace("         --simple-io",
+                                               "         --jinja\n         --simple-io")
+    backend = LlamaCppBackend(gguf_path=tmp_path / "m.gguf",
+                              binary=tmp_path / "llama-cli",
+                              runner=_fake_runner([], stdout=jinja_only))
+
+    with pytest.raises(RuntimeError, match="chat template"):
+        backend.generate(make_passkey_items(tokenizer, depths=(256,),
+                                            per_depth=1, seed=1)[0])
 
 
 def test_llama_cpp_backend_refuses_a_templated_single_turn_by_default(

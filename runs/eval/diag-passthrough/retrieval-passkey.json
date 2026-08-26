@@ -1,0 +1,57 @@
+{
+  "created_at": "2026-08-26T05:49:26.678598Z",
+  "details": {},
+  "item_count": 1,
+  "item_digest": "52dd1b272e87c51ed0c6a9b2dd9bad96",
+  "kind": "retrieval",
+  "metrics": {
+    "exact_match": 1.0,
+    "exact_match_d256": 1.0,
+    "n": 1.0,
+    "n_d256": 1.0,
+    "query_accuracy": 1.0
+  },
+  "name": "retrieval-passkey",
+  "provenance": {
+    "artifact": {
+      "config": null,
+      "kind": "gguf-q4_0",
+      "path": "/root/daedalus/gguf/hero-base-q4_0.gguf",
+      "revision": null,
+      "sha256": "1d45ce41239b9e03573cd29a7a71dbc550ec443821f3e19d1b4e0042a4a1ec97"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "9b732bf",
+    "runtime": {
+      "backend": "llama-cpp",
+      "chat_template": "{%- for message in messages -%}{{ message['content'] }}{%- endfor -%}",
+      "device": "cpu",
+      "llama_cli": "/opt/llama.cpp/build/bin/llama-cli",
+      "llama_cli_flags": [
+        "--top-k",
+        "-s",
+        "-t",
+        "-ngl",
+        "--no-warmup",
+        "-st",
+        "--single-turn",
+        "--no-display-prompt"
+      ],
+      "max_new_tokens": 24,
+      "raw_completion_via": "passthrough-template",
+      "template_mode": "raw-completion",
+      "threads": 8
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<none>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

@@ -1,0 +1,22 @@
+{
+  "item_count": 1,
+  "item_digest": "52dd1b272e87c51ed0c6a9b2dd9bad96",
+  "items": [
+    {
+      "correct": 1,
+      "depth": 256,
+      "expected": "69688",
+      "extracted": "69688",
+      "id": "passkey-d256-0",
+      "needle_depth_frac": 0.0,
+      "prompt": "There is an important piece of information hidden somewhere in the text below. Read the text and remember the information. The pass key is 69688. Remember it. 69688 is the pass key. There and back again along the same worn path by the wall. The grass is green and the sky above is a pale washed blue. The bread cools on the sill while the kettle begins to sing. The sun rises over the hill and the long shadows retreat. Dust settles on the shelf where the empty jars are kept. Dust settles on the shelf where the empty jars are kept. The grass is green and the sky above is a pale washed blue. A slow river runs past the mill and turns the old wheel. The bread cools on the sill while the kettle begins to sing. Dust settles on the shelf where the empty jars are kept. Here we go again around the garden and back to the gate. The grass is green and the sky above is a pale washed blue. There and back again along the same worn path by the wall. Dust settles on the shelf where the empty jars are kept. Dust settles on the shelf where the empty jars are kept.\nWhat is the pass key? The pass key is",
+      "prompt_tokens": 252,
+      "query_accuracy": 1.0,
+      "response": "69688. Remember it. 69688 is the pass key. There and back",
+      "task": "passkey"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-passkey",
+  "schema": 1
+}

@@ -1,0 +1,22 @@
+{
+  "item_count": 1,
+  "item_digest": "e5017d4f28dcd303751745ae4f30f509",
+  "items": [
+    {
+      "correct": 1,
+      "depth": 256,
+      "expected": "yeoman",
+      "extracted": "yeoman",
+      "id": "mqar-d256-0",
+      "needle_depth_frac": 0.0,
+      "prompt": "Below is a list of keys and their values. Read the list and then answer the queries at the end with the matching value.\nhollow: estuary\nmarble: eagle\nsaffron: lagoon\nfjord: junction\nalcove: island\nfennel: zenith\nindigo: canyon\ncobalt: valley\nnectar: warren\nember: yeoman\nDust settles on the shelf where the empty jars are kept. The wind moves through the tall pines and carries the salt air. There and back again along the same worn path by the wall. Dust settles on the shelf where the empty jars are kept. The grass is green and the sky above is a pale washed blue. The wind moves through the tall pines and carries the salt air. The bread cools on the sill while the kettle begins to sing. There and back again along the same worn path by the wall. A slow river runs past the mill and turns the old wheel. The sun rises over the hill and the long shadows retreat. A slow river runs past the mill and turns the old wheel. The wind moves through the tall pines and carries the salt air.\nQueries:\nmarble: eagle\nember:",
+      "prompt_tokens": 249,
+      "query_accuracy": 1.0,
+      "response": "yeoman\ndust: sand\nsand: sand\nsand: sand\nsand: sand\nsand: sand",
+      "task": "mqar"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-mqar",
+  "schema": 1
+}

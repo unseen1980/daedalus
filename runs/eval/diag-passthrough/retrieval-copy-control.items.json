@@ -1,0 +1,35 @@
+{
+  "item_count": 2,
+  "item_digest": "8453aedaae305b058c961c6696129d29",
+  "items": [
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "nectar harbor kelp",
+      "extracted": "nectar harbor kelp",
+      "id": "copy-control-0",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nnectar harbor kelp\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 1.0,
+      "response": "nectar harbor kelp\nnectar harbor kelp\nnectar harbor kelp\nnectar harbor kelp\nnectar harbor",
+      "task": "copy-control"
+    },
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "juniper violet umber",
+      "extracted": "juniper violet umber",
+      "id": "copy-control-1",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\njuniper violet umber\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 1.0,
+      "response": "juniper violet umber\nThe phrase is:\njuniper violet umber\nThe phrase is:",
+      "task": "copy-control"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-copy-control",
+  "schema": 1
+}

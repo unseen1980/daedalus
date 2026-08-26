@@ -37,6 +37,17 @@ with the template's own `assistant` marker in the output. Phase 6 stage A read
 therefore refuses a build that offers only the templated turn unless the caller
 opts in for a model that is chat-templated anyway, and `template_mode` records
 which mode produced a card.
+
+**A templated-only build is not necessarily a blocked one.** This box's pinned
+`llama-cli` is a UI build: it advertises `-st` and no `-no-cnv`, and the recorded
+remedy was to rebuild llama.cpp with `-DLLAMA_BUILD_UI=OFF`. `--probe` says
+otherwise -- it also advertises `--jinja` and `--chat-template-file`, and a
+pass-through template renders the messages verbatim, so the templated turn feeds
+the model exactly the prompt as written. That is raw completion on a stock,
+unmodified binary, which is the constraint that mattered; no rebuild, and no
+custom build to caveat the results with. The backend takes that route by itself
+when it is the only honest one available, reports `raw-completion`, and records
+`raw_completion_via` plus the template text so the mechanism stays auditable.
 """
 
 from __future__ import annotations
@@ -106,6 +117,35 @@ _SINGLE_TURN_FLAGS = ("-st", "--single-turn")
 # Every way out of an interactive prompt, for the probe and for provenance.
 _CONVERSATION_FLAGS = _NO_CHAT_FLAGS + _SINGLE_TURN_FLAGS
 
+# A pass-through Jinja template renders the messages verbatim, so on a build
+# that offers these two the *templated* turn feeds the model the prompt exactly
+# as written -- raw completion by another route, on a stock binary, with no
+# rebuild. Reported by `probe_binary` because whether this box has that route is
+# the question the retrieval blocker turns on, and it is answerable from
+# `--help` rather than from a guess.
+_PASSTHROUGH_FLAGS = ("--jinja", "--chat-template-file")
+
+# Binaries a llama.cpp build may ship that complete a prompt without a chat UI.
+# The probe reports which of them exist beside `llama-cli`, so "is there another
+# way to run this build" is answered by the directory rather than assumed.
+_COMPLETION_BINARIES = ("llama-completion", "llama-simple", "llama-simple-chat",
+                        "llama-server", "llama-perplexity", "llama-cli",
+                        "llama-quantize", "llama-bench")
+
+# The pass-through template itself. It emits the concatenated message contents
+# and nothing else -- no role markers, and `add_generation_prompt` is ignored
+# rather than answered with an `assistant` header, which is the exact token that
+# gave phase 6 its zeros. With one user message carrying the prompt, the
+# rendered string *is* the prompt, so the templated turn and raw completion
+# become the same bytes.
+#
+# Whitespace control on every delimiter is load-bearing: Jinja emits the literal
+# newlines around a bare `{% for %}` otherwise, and a leading newline before a
+# passkey prompt is a different prompt.
+PASSTHROUGH_TEMPLATE = (
+    "{%- for message in messages -%}{{ message['content'] }}{%- endfor -%}"
+)
+
 # Bare switches, in the order they are appended. The conversation entry is
 # resolved by `_conversation_flag`, which is where the raw/templated choice is
 # made rather than by "first supported wins".
@@ -132,6 +172,81 @@ def _conversation_help_lines(help_text: str, limit: int = 12) -> str:
     lines = [match.group(0).strip()
              for match in _CONVERSATION_HELP.finditer(help_text)]
     return "\n".join(f"  {line}" for line in lines[:limit]) if lines else "  (none)"
+
+
+def _advertises(help_text: str, flag: str) -> bool:
+    """Does this `--help` offer `flag`, as a whole word rather than a substring?
+
+    `-s` is inside `--seed`, `-t` is inside `--temp`; a plain `in` test says yes
+    to both and the binary then rejects the argv. Shared by the backend and the
+    probe so the two cannot answer the same question differently.
+    """
+
+    return bool(re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])", help_text))
+
+
+def probe_binary(binary, *, runner: Callable[..., subprocess.CompletedProcess]
+                 = subprocess.run) -> dict:
+    """What this llama.cpp build can actually be driven as, as data.
+
+    Deliberately non-raising, which is the whole point of having it separate
+    from `supported_flags`. That guard's job is to stop a run that would measure
+    the wrong thing, so on this box's build it raises -- and an operator asking
+    "then what *does* this binary support?" gets an exception instead of an
+    answer, has no approved way to run `llama-cli --help` directly, and is left
+    inferring the build's capabilities from a traceback.
+
+    Phase 6 spent a column on exactly that gap: `-st` and `-no-cnv` were treated
+    as interchangeable for months because nothing recorded, per binary, which
+    modes were on offer. This returns the flag families separately, reports the
+    pass-through-template route that would make a templated-only build usable
+    without a rebuild, and lists the sibling binaries that might complete a
+    prompt without a chat UI at all.
+    """
+
+    path = Path(binary)
+    report: dict = {"binary": str(path), "exists": path.exists()}
+
+    siblings = []
+    if path.parent.is_dir():
+        siblings = sorted(name for name in _COMPLETION_BINARIES
+                          if (path.parent / name).exists())
+    report["siblings"] = siblings
+
+    if not path.exists():
+        report["error"] = "binary does not exist"
+        return report
+
+    try:
+        result = runner([str(path), "--help"], capture_output=True, text=True,
+                        timeout=HELP_TIMEOUT_S, stdin=subprocess.DEVNULL)
+    except Exception as error:  # noqa: BLE001 - a diagnostic reports, never bites
+        report["error"] = f"{type(error).__name__}: {error}"
+        return report
+
+    help_text = (result.stdout or "") + (result.stderr or "")
+    report["help_bytes"] = len(help_text)
+    report["required_missing"] = [flag for flag in _REQUIRED_FLAGS
+                                  if not _advertises(help_text, flag)]
+    report["raw_completion_flags"] = [flag for flag in _NO_CHAT_FLAGS
+                                      if _advertises(help_text, flag)]
+    report["single_turn_flags"] = [flag for flag in _SINGLE_TURN_FLAGS
+                                   if _advertises(help_text, flag)]
+    report["passthrough_flags"] = [flag for flag in _PASSTHROUGH_FLAGS
+                                   if _advertises(help_text, flag)]
+    report["optional_flags"] = [flag for flag in _OPTIONAL_FLAGS
+                                if _advertises(help_text, flag)]
+    # The one line a reader wants: can a *base* model be scored through this
+    # binary as written, and if not, is there a route that needs no rebuild.
+    if report["raw_completion_flags"]:
+        report["base_model_route"] = "raw-completion"
+    elif len(report["passthrough_flags"]) == len(_PASSTHROUGH_FLAGS) \
+            and report["single_turn_flags"]:
+        report["base_model_route"] = "passthrough-template"
+    else:
+        report["base_model_route"] = "none"
+    report["conversation_help"] = _conversation_help_lines(help_text)
+    return report
 
 
 def _tail(stream, limit: int = 800) -> str:
@@ -199,16 +314,20 @@ class LlamaCppBackend:
                              stdin=subprocess.DEVNULL)
         help_text = (result.stdout or "") + (result.stderr or "")
         missing = [flag for flag in _REQUIRED_FLAGS
-                   if not re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])",
-                                    help_text)]
+                   if not _advertises(help_text, flag)]
         if missing:
             raise RuntimeError(
                 f"{self.binary} does not advertise required flags {missing}; "
                 "this does not look like llama-cli")
-        supported = {
-            flag for flag in _REQUIRED_FLAGS + _OPTIONAL_FLAGS
-            if re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])", help_text)
-        }
+        # `_PASSTHROUGH_FLAGS` are probed but deliberately not in
+        # `_OPTIONAL_FLAGS`: `_command` appends them itself, as a pair with the
+        # template path, so listing them among the bare flags would emit a
+        # dangling `--chat-template-file`. `resolved_flags` reads
+        # `_OPTIONAL_FLAGS` for the same reason -- the pass-through route is
+        # reported by `raw_completion_via`, not as a loose switch.
+        supported = {flag for flag in
+                     _REQUIRED_FLAGS + _OPTIONAL_FLAGS + _PASSTHROUGH_FLAGS
+                     if _advertises(help_text, flag)}
         # Modern `llama-cli` starts a chat when the model carries a template,
         # and then waits at its `> ` prompt. With no switch to turn that off,
         # every item burns the full generation timeout and the run learns
@@ -244,11 +363,13 @@ class LlamaCppBackend:
         # opt-in exists because the mode is correct for an *instruct* model,
         # whose scoring is chat-templated anyway.
         if self.require_non_interactive and not self.allow_chat_template and \
-                not any(flag in supported for flag in _NO_CHAT_FLAGS):
+                not any(flag in supported for flag in _NO_CHAT_FLAGS) and \
+                not self._passthrough_available(supported):
             raise RuntimeError(
                 f"{self.binary} advertises only a templated single turn "
-                f"({[f for f in _SINGLE_TURN_FLAGS if f in supported]}) and "
-                f"none of {list(_NO_CHAT_FLAGS)}, so every prompt would reach "
+                f"({[f for f in _SINGLE_TURN_FLAGS if f in supported]}), none "
+                f"of {list(_NO_CHAT_FLAGS)}, and not both of "
+                f"{list(_PASSTHROUGH_FLAGS)}, so every prompt would reach "
                 "the model wrapped in its chat template. That is not a "
                 "base-model completion measurement: on the released base "
                 "weights it scores the copy-control 0.0 here against 1.0 "
@@ -256,7 +377,9 @@ class LlamaCppBackend:
                 "Remedy: build `llama-cli` with -DLLAMA_BUILD_UI=OFF (the UI "
                 "build is what turned conversation on by default and dropped "
                 "the switch), or point --llama-cli at a `llama-completion` "
-                "binary.\n"
+                "binary. Run `--probe` first: a build offering --jinja and "
+                "--chat-template-file needs neither, because a pass-through "
+                "template renders the prompt verbatim.\n"
                 "Pass --allow-chat-template only to score a model whose "
                 "prompts are chat-templated by design, such as an instruct "
                 "checkpoint.\n"
@@ -265,26 +388,66 @@ class LlamaCppBackend:
         self._supported = supported
         return self._supported
 
+    @staticmethod
+    def _passthrough_available(supported) -> bool:
+        """Can a templated-only build still be driven raw, via its own template?
+
+        Both flags, not either: `--chat-template-file` without a Jinja engine is
+        not applied, and `--jinja` alone leaves the model's own template in
+        place. This box's pinned build advertises both (`--probe`), which is why
+        the retrieval column does not in fact need llama.cpp rebuilt.
+        """
+
+        return all(flag in supported for flag in _PASSTHROUGH_FLAGS)
+
+    def uses_passthrough_template(self) -> bool:
+        """True when the raw prompt reaches the model *through* the chat path.
+
+        Only when there is no honest alternative. A build that advertises
+        `-no-cnv` is driven with it, because leaving the chat machinery out
+        entirely is fewer moving parts than neutralising it -- and because an
+        upstream change to Jinja handling must not silently alter what a
+        scorecard measured.
+        """
+
+        supported = self.supported_flags()
+        if any(flag in supported for flag in _NO_CHAT_FLAGS):
+            return False
+        if not self._passthrough_available(supported):
+            return False
+        return any(flag in supported for flag in _SINGLE_TURN_FLAGS)
+
     def _conversation_flag(self) -> Optional[str]:
         """The switch that leaves conversation mode, raw completion preferred.
 
         A single place to make the choice, so `_command` cannot drift from the
         guard above by re-deriving it as "first supported wins" -- which is
         exactly how a templated turn became the default.
+
+        With a pass-through template in play the single-turn flag is back in the
+        candidate list *without* `allow_chat_template`: `-st` then means "one
+        turn, then exit", and the turn it runs is no longer templated.
         """
 
         supported = self.supported_flags()
         candidates = _NO_CHAT_FLAGS + (
-            _SINGLE_TURN_FLAGS if self.allow_chat_template else ())
+            _SINGLE_TURN_FLAGS
+            if self.allow_chat_template or self.uses_passthrough_template()
+            else ())
         return next((flag for flag in candidates if flag in supported), None)
 
     def template_mode(self) -> str:
         """Whether this binary will be driven raw or through a chat template.
 
         Recorded in provenance: two scorecards that differ in this differ in
-        what was measured, and no other field would say so.
+        what was measured, and no other field would say so. A pass-through turn
+        reports `raw-completion` because that is what the model is fed --
+        `raw_completion_via` carries *how*, so the mechanism stays auditable
+        without the gate having to enumerate mechanisms.
         """
 
+        if self.uses_passthrough_template():
+            return "raw-completion"
         flag = self._conversation_flag()
         if flag in _NO_CHAT_FLAGS:
             return "raw-completion"
@@ -292,7 +455,17 @@ class LlamaCppBackend:
             return "chat-single-turn"
         return "unknown"
 
-    def _command(self, prompt_file: str) -> List[str]:
+    def raw_completion_via(self) -> Optional[str]:
+        """Which mechanism produced a raw completion, or None if none did."""
+
+        if self.uses_passthrough_template():
+            return "passthrough-template"
+        if self._conversation_flag() in _NO_CHAT_FLAGS:
+            return "no-conversation-flag"
+        return None
+
+    def _command(self, prompt_file: str,
+                 template_file: Optional[str] = None) -> List[str]:
         supported = self.supported_flags()
         command = [str(self.binary), "-m", str(self.gguf_path),
                    "-f", prompt_file,
@@ -319,6 +492,10 @@ class LlamaCppBackend:
                              None)
             if match is not None:
                 command.append(match)
+        if template_file is not None:
+            # Appended after the bare flags so the template wins over anything
+            # the model's own metadata would have supplied.
+            command += ["--jinja", "--chat-template-file", str(template_file)]
         return command
 
     def resolved_flags(self) -> List[str]:
@@ -340,14 +517,20 @@ class LlamaCppBackend:
         # context.
         handle, prompt_file = tempfile.mkstemp(prefix="daedalus-retrieval-",
                                                suffix=".txt")
+        template_file = None
         try:
             with os.fdopen(handle, "w") as stream:
                 stream.write(item.prompt)
+            if self.uses_passthrough_template():
+                template_handle, template_file = tempfile.mkstemp(
+                    prefix="daedalus-passthrough-", suffix=".jinja")
+                with os.fdopen(template_handle, "w") as stream:
+                    stream.write(PASSTHROUGH_TEMPLATE)
             # A closed stdin, not just the conversation flag. The flag's
             # spelling is upstream's to change; EOF on stdin is not, and it
             # turns "wait for a person who is not there" into a clean exit.
             try:
-                result = self.runner(self._command(prompt_file),
+                result = self.runner(self._command(prompt_file, template_file),
                                      capture_output=True, text=True,
                                      timeout=self.timeout_s,
                                      stdin=subprocess.DEVNULL)
@@ -364,6 +547,8 @@ class LlamaCppBackend:
                 ) from expired
         finally:
             os.unlink(prompt_file)
+            if template_file is not None:
+                os.unlink(template_file)
         if result.returncode != 0:
             raise RuntimeError(
                 f"llama-cli exited {result.returncode} for item {item.id}: "
@@ -560,12 +745,25 @@ def main(argv=None) -> int:
                              "checkpoint, whose prompts are chat-templated by "
                              "design; invalid for base-model completion, where "
                              "it scores the template rather than the model.")
+    parser.add_argument("--probe", action="store_true",
+                        help="report what --llama-cli can be driven as, as "
+                             "JSON, and exit without scoring anything. The "
+                             "scoring guards raise on a build that cannot "
+                             "measure a base model, so this is the only way to "
+                             "read that build's actual capabilities.")
     parser.add_argument("--show-prompt", action="store_true",
                         help="keep llama-cli's prompt echo, so the text the "
                              "binary actually fed the model -- chat template "
                              "included -- can be read back. Diagnostic only: "
                              "the echo lands in the recorded completion.")
     args = parser.parse_args(argv)
+
+    if args.probe:
+        # Before the tokenizer and before the items: a probe asks about the
+        # binary, and a build that cannot be probed is exactly the situation
+        # where downloading a tokenizer first would fail for an unrelated reason.
+        print(json.dumps(probe_binary(args.llama_cli), indent=2, sort_keys=True))
+        return 0
 
     from daedalus.data import get_tokenizer
 
@@ -594,6 +792,12 @@ def main(argv=None) -> int:
         # Which of the two modes produced this card. A scorecard that does not
         # say cannot be told from one measured the other way.
         runtime["template_mode"] = backend.template_mode()
+        runtime["raw_completion_via"] = backend.raw_completion_via()
+        if backend.uses_passthrough_template():
+            # The template is the measurement here: a card scored through a
+            # different pass-through is a different card, and the only way to
+            # check that later is to have kept the text.
+            runtime["chat_template"] = PASSTHROUGH_TEMPLATE
     elif args.backend == "torch":
         if not args.checkpoint:
             parser.error("--checkpoint is required for the torch backend")
