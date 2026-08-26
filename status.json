@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 57.47,
-    "finalization_in_hours": 78.53,
+    "elapsed_hours": 57.55,
+    "finalization_in_hours": 78.45,
     "hard_hours": 144.0,
-    "remaining_hours": 86.53,
+    "remaining_hours": 86.45,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,8 +16,20 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T20:12:42.260050Z",
+  "heartbeat_at": "2026-08-26T20:17:43.870321Z",
   "lanes": {
+    "directive": {
+      "details": {
+        "expected_epochs": "python 55 pct is about 1.2 epochs at the 3B gate and javascript/typescript 45 pct about 0.3, from the committed headroom record. Both are cheaper than the plan they replace, so this is expected to stay SUPPORTED -- but measure it, do not assume it.",
+        "full_directive": "see the phase8-mixture-amendment note of kind user_directive in runs/vast-program/events.jsonl for the reasoning, the epoch estimates, and why this drop must not be recorded as the same kind of finding as the rust drop.",
+        "read_before_building": "do not start the corpus build against the old CODE_LANGUAGE_SHARES. Amend code-run-manifest.json keeping the original split beside the new one, re-run corpus plan and corpus headroom, and confirm SUPPORTED at 250M, 1B and 3B first.",
+        "user_action_required": false,
+        "user_directive": "CODE MIXTURE RETARGETED BY THE USER. code_split_pct becomes python 55, javascript_typescript 45. c_cpp, java, go and shell_sql_other are dropped BY CHOICE, not for availability; rust stays dropped for the availability reason already recorded. The 65/15/20 top-level split is unchanged."
+      },
+      "phase": "phase8-mixture-retarget",
+      "status": "passed",
+      "updated_at": "2026-08-26T20:13:53.161746Z"
+    },
     "evidence": {
       "details": {
         "attempts": 1,
@@ -44,22 +56,30 @@
     },
     "inspect": {
       "details": {
-        "caveat": "all-all counted from 9 of 10 footers after a 429; the two fallback buckets are a flagged lower bound",
-        "commits": [
-          "dd79972",
-          "d602382",
-          "c14b19e"
+        "attempts": 1,
+        "command": [
+          "python",
+          "scripts/codeprep.py",
+          "corpus",
+          "build",
+          "--total-tokens",
+          "1000000",
+          "--max-docs-per-source",
+          "25",
+          "--out-root",
+          "data/code-shards-smoke",
+          "--manifest",
+          "data/code-shards-smoke/manifest.json",
+          "--shard-tokens",
+          "2000000"
         ],
-        "headroom": "runs/codeprep/headroom.json",
-        "next": "the corpus build itself",
-        "plan": "runs/codeprep/source-plan.json",
-        "pr": "https://github.com/unseen1980/daedalus/pull/15",
-        "slice": "the code mixture decision, closed",
-        "verdict": "SUPPORTED at 250M, 1B and 3B total tokens; python at its raised 64.4% share is read 1.4 times at the largest budget against a cap of 4"
+        "returncodes": [
+          0
+        ]
       },
-      "phase": "phase8-codeprep-gate",
+      "phase": "phase8-codeprep-build-smoke",
       "status": "passed",
-      "updated_at": "2026-08-26T19:56:19.522649Z"
+      "updated_at": "2026-08-26T20:15:38.587831Z"
     },
     "operator": {
       "details": {
@@ -118,9 +138,9 @@
   "phase": "phase8-codeprep-gate",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "c14b19e4d64e",
+  "source_sha": "e317c4b2fdef",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "passed",
-  "updated_at": "2026-08-26T19:56:19.522649Z"
+  "updated_at": "2026-08-26T20:15:38.587831Z"
 }
