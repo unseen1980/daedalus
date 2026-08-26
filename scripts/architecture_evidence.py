@@ -86,7 +86,8 @@ from scripts.architecture_report import (DECODE_REPORT,  # noqa: E402
                                          RETRIEVAL_ROOT, TRAINED_CONTEXT,
                                          advanced_selection,
                                          read_decode_passes, read_retrieval,
-                                         selection_notes, templated_cards)
+                                         selection_notes, swept_arms,
+                                         templated_cards)
 from scripts.architecture_sweep import (ARMS, REPORT_ROOT, RUN_ROOT,  # noqa: E402
                                         SHAPES, STAGE_A, ArchArm, StageShape,
                                         arm_checkpoint_path, arm_run_name,
@@ -163,7 +164,7 @@ def _read_json(path: Path) -> dict:
 
 # =================================================================== layout ====
 
-def resolve_arms(args, shape: StageShape
+def resolve_arms(args, shape: StageShape, tag: Optional[str] = None
                  ) -> Tuple[Sequence[ArchArm], Optional[dict]]:
     """The arms this pass measures, and the record of where the list came from.
 
@@ -176,9 +177,21 @@ def resolve_arms(args, shape: StageShape
     No `for_shape`: see the module docstring. A stage selecting its own *training*
     arms from its own results is circular; measuring a different column on the
     arms a BPB screen advanced is the intended use.
+
+    **With neither flag the default is the arms the stage swept, not the arms
+    its shape defines.** Stage A trains its whole grid so the two coincide;
+    stage B trains the four arms stage A advanced out of fifteen, and the shape
+    has no idea which four. Defaulting to `arms_for(shape)` walks the chain into
+    an arm that never trained -- `a8-kv2`, eligible but not selected -- after
+    spending the export and retrieval minutes on the arms ahead of it. That is
+    the failure the scoring pass hit and fixed; the sweep artifact is the record
+    of what ran, so it is what "this stage's arms" means here too.
     """
     if not getattr(args, "arms_from_report", None):
-        return selected_arms(args.arms, arms_for(shape)), None
+        stage_arms = (swept_arms(tag or shape.tag, arms_for(shape),
+                                 args.report_root)
+                      or arms_for(shape))
+        return selected_arms(args.arms, stage_arms), None
     if args.arms:
         raise SystemExit(
             "--arms and --arms-from-report both name the arm list, and the "
@@ -900,7 +913,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     shape = SHAPES[args.shape]
     tag = shape.tag if args.tag is None else args.tag
-    arms, selection = resolve_arms(args, shape)
+    arms, selection = resolve_arms(args, shape, tag)
 
     if args.command == "export":
         report = export_arms(arms, tag=tag, shape=shape,

@@ -16,6 +16,7 @@ Run: python -m pytest tests/test_architecture_evidence.py -v
 """
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional, Sequence
 
 import pytest
@@ -40,7 +41,8 @@ from scripts.architecture_report import (RETRIEVAL_GATE_TASKS,
                                          export_check, read_decode_passes,
                                          read_retrieval,
                                          retrieval_scorecard_path)
-from scripts.architecture_sweep import ARMS_BY_NAME, CONTROL
+from scripts.architecture_sweep import (ARMS_BY_NAME, CONTROL, STAGE_A,
+                                        STAGE_B, arms_for)
 
 
 # --------------------------------------------------------------- fixtures ----
@@ -900,6 +902,61 @@ def _commit_stage_a_report(root, *, selected, verdict="advance", scored=None):
                     "rule": {"floor_pct": 0.5, "max_arms": 3}},
     }, indent=2) + "\n")
     return path
+
+
+def _swept(root, tag, names):
+    """The sweep artifact, as `sweep` writes it: the record of what trained."""
+    path = Path(root) / f"sweep-{tag}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(
+        {"tag": tag, "arms": [{"arm": name} for name in names]}) + "\n")
+    return path
+
+
+def test_a_stage_measures_the_arms_it_trained_not_its_shapes_whole_grid(
+        tmp_path):
+    """The defect the scoring pass hit (a1a2342), one module over and unfixed.
+
+    Stage B trains the four arms stage A advanced; `arms_for(shape)` is fifteen,
+    and eleven of those have no checkpoint and therefore no GGUF. With no
+    `--arms-from-report` the evidence chain would export and score the grid,
+    reaching `a8-kv2` -- eligible at stage A, not selected, never trained --
+    after spending the minutes ahead of it.
+
+    The sweep artifact is the record of what ran, so it supplies the default,
+    exactly as it now does for `score`."""
+    _swept(tmp_path, "stageb", ("a8-kv4", "a3-kv4", "a4-kv4", "a6-kv4"))
+    args = SimpleNamespace(arms=None, arms_from_report=None,
+                           report_root=str(tmp_path))
+
+    arms, selection = evidence.resolve_arms(args, STAGE_B, tag="stageb")
+
+    assert [arm.name for arm in arms] == ["a8-kv4", "a3-kv4", "a4-kv4",
+                                          "a6-kv4"]
+    assert selection is None, "a sweep record is not a screen's selection"
+
+
+def test_a_stage_that_has_not_swept_still_measures_its_whole_grid(tmp_path):
+    """Stage A trains the grid, so its arm set and its shape's are the same
+    thing; the default must not start refusing a stage that has no sweep
+    artifact yet."""
+    args = SimpleNamespace(arms=None, arms_from_report=None,
+                           report_root=str(tmp_path))
+
+    arms, _ = evidence.resolve_arms(args, STAGE_A, tag="stagea")
+
+    assert len(arms) == len(arms_for(STAGE_A))
+
+
+def test_naming_the_arms_still_beats_the_sweep_record(tmp_path):
+    """`--arms` is an explicit instruction; the sweep only supplies a default."""
+    _swept(tmp_path, "stageb", ("a8-kv4", "a3-kv4", "a4-kv4", "a6-kv4"))
+    args = SimpleNamespace(arms="a6-kv4", arms_from_report=None,
+                           report_root=str(tmp_path))
+
+    arms, _ = evidence.resolve_arms(args, STAGE_B, tag="stageb")
+
+    assert [arm.name for arm in arms] == [CONTROL.name, "a6-kv4"]
 
 
 def test_the_retrieval_pass_measures_the_arms_the_report_advanced(
