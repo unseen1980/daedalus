@@ -477,3 +477,170 @@ def test_dpo_logs_continue_the_sft_step_axis(tok):
     steps = [s for s, _ in logger.calls]
     assert steps == [1001, 1002, 1003], steps
     assert all(any(k.startswith("dpo_") for k in rec) for _, rec in logger.calls)
+
+
+# ------------------------------------------------ the held-out preference gate ---
+# Phase 8 step 7 keeps the DPO model over the SFT one only if held-out
+# preference accuracy improves. run_dpo's `accuracy` cannot decide that: it is
+# measured on the pairs it just trained on, and relative to a reference that
+# starts out as a copy of the policy, so it begins at 0.0 and rises on any
+# movement at all.
+
+def _stream(n):
+    """Preference pairs whose first token is their index, so a test can say
+    exactly which ones DPO was handed."""
+    return ({"chosen": ([i, 2, 3, 4], [IGNORE_INDEX, 2, 3, 4]),
+             "rejected": ([i, 5, 6, 7], [IGNORE_INDEX, 5, 6, 7])}
+            for i in range(n))
+
+
+def test_held_out_pairs_are_disjoint_from_the_pairs_dpo_trains_on():
+    """Both sets come off one iterator, so overlap is not possible however the
+    stream is ordered. Two `load_dataset` calls would rely on them agreeing."""
+    held, remaining = post.take_eval_pairs(_stream(10), 3)
+    assert [p["chosen"][0][0] for p in held] == [0, 1, 2]
+    assert [p["chosen"][0][0] for p in remaining] == [3, 4, 5, 6, 7, 8, 9]
+
+
+def test_holding_out_nothing_leaves_the_training_stream_whole():
+    held, remaining = post.take_eval_pairs(_stream(4), 0)
+    assert held == []
+    assert len(list(remaining)) == 4
+
+
+def test_holding_out_more_pairs_than_exist_takes_what_there_is():
+    held, remaining = post.take_eval_pairs(_stream(2), 50)
+    assert len(held) == 2
+    assert list(remaining) == []
+
+
+def test_gate_reports_no_improvement_when_the_round_changed_nothing():
+    """The case the relative metric cannot express. policy == reference is a
+    DPO round that did nothing, and `dpo_loss` calls that accuracy 0.0 -> any
+    movement. Here it is correctly a delta of zero and not an improvement."""
+    import copy
+    from daedalus.config import PRESETS
+    from daedalus.model import Daedalus
+
+    torch.manual_seed(0)
+    reference = Daedalus(PRESETS["tiny"]).eval()
+    policy = copy.deepcopy(reference)
+    pairs = [{"chosen": ([1, 2, 3, 4], [IGNORE_INDEX, 2, 3, 4]),
+              "rejected": ([1, 5, 6, 7], [IGNORE_INDEX, 5, 6, 7])}
+             for _ in range(3)]
+
+    gate = post.evaluate_preference_gate(reference, policy, pairs, pad_id=0,
+                                         micro_batch=2)
+    assert gate["n"] == 3
+    assert gate["delta"]["accuracy"] == 0.0
+    assert gate["accuracy_improved"] is False
+    assert gate["before"]["accuracy"] == gate["after"]["accuracy"]
+
+
+def test_gate_reads_the_before_model_off_the_frozen_reference():
+    """`reference` never moves, so scoring it after the round still answers
+    "what did the SFT model do" -- which is the model the gate keeps if DPO
+    fails to beat it."""
+    import copy
+    from daedalus.config import PRESETS
+    from daedalus.model import Daedalus
+
+    torch.manual_seed(0)
+    reference = Daedalus(PRESETS["tiny"]).eval()
+    policy = copy.deepcopy(reference)
+    with torch.no_grad():                       # stand in for the DPO updates
+        for p in policy.parameters():
+            p.add_(torch.randn_like(p) * 0.05)
+    pairs = [{"chosen": ([1, 2, 3, 4], [IGNORE_INDEX, 2, 3, 4]),
+              "rejected": ([1, 5, 6, 7], [IGNORE_INDEX, 5, 6, 7])}
+             for _ in range(4)]
+
+    gate = post.evaluate_preference_gate(reference, policy, pairs, pad_id=0,
+                                         micro_batch=2)
+    from daedalus.dpo import preference_metrics
+    assert gate["before"] == preference_metrics(reference, pairs, pad_id=0,
+                                                micro_batch=2)
+    assert gate["after"] != gate["before"], "a moved policy must score apart"
+    assert set(gate["delta"]) == {"accuracy", "margin", "accuracy_len_norm",
+                                  "margin_len_norm"}
+
+
+def test_gate_says_it_is_only_half_of_phase_8_step_7():
+    """The other half is execution pass@1, out of band. A caller that reads
+    accuracy_improved alone must not think it read the gate."""
+    import copy
+    from daedalus.config import PRESETS
+    from daedalus.model import Daedalus
+
+    torch.manual_seed(0)
+    reference = Daedalus(PRESETS["tiny"]).eval()
+    gate = post.evaluate_preference_gate(
+        reference, copy.deepcopy(reference),
+        [{"chosen": ([1, 2], [IGNORE_INDEX, 2]),
+          "rejected": ([1, 3], [IGNORE_INDEX, 3])}], pad_id=0)
+    assert "pass@1" in gate["gate"]
+
+
+def test_cli_holds_out_gate_pairs_by_default(captured_train_args, monkeypatch):
+    """Off by default would leave run_dpo's training-pair accuracy as the only
+    reported number, and that is the one that cannot fail."""
+    seen = {}
+    monkeypatch.setattr(
+        post, "_run_dpo_stage",
+        lambda args, tokenizer, trainer, device: seen.update(args=args) or {})
+    captured_train_args(["--init-from", "/ckpt/hero.pt", "--no-wandb", "--dpo",
+                         "--limit", "2", "--micro-batch", "1", "--max-len", "128"])
+    assert seen["args"].dpo_eval_pairs == 128
+    assert seen["args"].dpo_eval_split is None
+
+
+def test_cli_can_take_the_holdout_from_a_real_split(captured_train_args,
+                                                    monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        post, "_run_dpo_stage",
+        lambda args, tokenizer, trainer, device: seen.update(args=args) or {})
+    captured_train_args(["--init-from", "/ckpt/hero.pt", "--no-wandb", "--dpo",
+                         "--dpo-eval-split", "test_prefs",
+                         "--dpo-eval-pairs", "32",
+                         "--limit", "2", "--micro-batch", "1", "--max-len", "128"])
+    assert seen["args"].dpo_eval_split == "test_prefs"
+    assert seen["args"].dpo_eval_pairs == 32
+
+
+def test_dpo_stage_scores_the_gate_on_pairs_it_did_not_train_on(tmp_path, tok,
+                                                                monkeypatch):
+    """End to end through _run_dpo_stage: the holdout comes off the training
+    stream, the round trains on what is left, and dpo-eval.json lands beside
+    the run."""
+    import json
+
+    t = _post_trainer(tmp_path, tok)
+    trained_on = []
+
+    real_run_dpo = post.run_dpo
+
+    def spy(policy, reference, pairs, *a, **kw):
+        pairs = list(pairs)
+        trained_on.extend(p["chosen"][0][0] for p in pairs)
+        return real_run_dpo(policy, reference, iter(pairs), *a, **kw)
+
+    monkeypatch.setattr(post, "run_dpo", spy)
+    monkeypatch.setattr(post, "iter_preference_pairs",
+                        lambda *a, **k: _stream(12))
+    import datasets
+    monkeypatch.setattr(datasets, "load_dataset", lambda *a, **k: [])
+
+    class _A:
+        dpo_dataset, dpo_split, dpo_eval_split = "d", "train", None
+        dpo_eval_pairs, dpo_max_len, max_assistant_chars = 4, 32, 1200
+        dpo_beta, dpo_steps, dpo_micro_batch = 0.1, 2, 2
+        muon_lr, adam_lr = 1e-3, 1e-4
+
+    out = post._run_dpo_stage(_A(), tok, t, "cpu")
+
+    assert trained_on and min(trained_on) >= 4, (
+        f"DPO trained on held-out pairs {sorted(set(trained_on))}")
+    gate = json.load(open(os.path.join(t.run_dir, "dpo-eval.json")))
+    assert gate["n"] == 4
+    assert out["heldout"] == gate

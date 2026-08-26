@@ -16,6 +16,7 @@ from daedalus.dpo import (
     dpo_batch_memory_gb,
     dpo_loss,
     freeze_reference,
+    preference_metrics,
     sequence_logprob,
 )
 from daedalus.model import Daedalus
@@ -175,6 +176,144 @@ def test_freeze_reference_stops_gradients_and_training():
     x = torch.randint(1, PRESETS["tiny"].vocab_size, (1, 8))
     out = sequence_logprob(ref, x, x.clone())
     assert not out.requires_grad, "a trainable reference is a moving baseline"
+
+
+# ------------------------------------------------- held-out preference gate ---
+# Phase 8 step 7 keeps the DPO model only if held-out preference accuracy
+# improves. `dpo_loss`'s `accuracy` cannot answer that: it is relative to the
+# reference, on the pairs just trained on, and the reference starts out as a
+# copy of the policy -- so it begins at exactly 0.0 and any movement at all
+# reads as an improvement.
+
+
+class _FixedLogits:
+    """A model with one fixed next-token distribution, so the ranking a test
+    asks about is arithmetic rather than a property of random init."""
+
+    def __init__(self, logits: torch.Tensor):
+        self._logits = logits
+        self.training = True
+
+    def eval(self):
+        self.training = False
+        return self
+
+    def train(self, mode: bool = True):
+        self.training = mode
+        return self
+
+    def __call__(self, input_ids, return_logits=False):
+        b, t = input_ids.shape
+        return self._logits.view(1, 1, -1).expand(b, t, -1).clone(), None, None
+
+
+def _pair(chosen_ids, rejected_ids, n_prompt=1):
+    def side(ids):
+        return (list(ids), [IGNORE_INDEX] * n_prompt + list(ids[n_prompt:]))
+    return {"chosen": side(chosen_ids), "rejected": side(rejected_ids)}
+
+
+def _model_favouring(token: int, vocab: int = 8) -> _FixedLogits:
+    logits = torch.zeros(vocab)
+    logits[token] = 6.0
+    return _FixedLogits(logits)
+
+
+def test_preference_accuracy_is_absolute_not_relative_to_a_reference():
+    """The defect this metric exists for.
+
+    With policy == reference every DPO margin is identically zero, so
+    `dpo_loss` reports accuracy 0.0 for a model that in fact ranks every pair
+    correctly. Read as "held-out preference accuracy", 0.0 is not merely
+    imprecise -- it is the wrong number about the wrong model.
+    """
+    model = _model_favouring(3)
+    pairs = [_pair([1, 3, 3, 3], [1, 5, 5, 5]) for _ in range(4)]
+
+    got = preference_metrics(model, pairs, pad_id=0, micro_batch=2)
+    assert got["n"] == 4
+    assert got["accuracy"] == 1.0
+    assert got["margin"] > 0
+
+    # the same four pairs through the relative metric, policy == reference
+    zero = torch.zeros(4)
+    _, relative = dpo_loss(zero, zero, zero, zero)
+    assert relative["accuracy"] == 0.0
+
+
+def test_preference_accuracy_falls_when_the_model_prefers_the_rejected_side():
+    """It has to be able to say no, or it is not a gate."""
+    model = _model_favouring(5)
+    pairs = [_pair([1, 3, 3, 3], [1, 5, 5, 5]) for _ in range(3)]
+    got = preference_metrics(model, pairs, pad_id=0, micro_batch=2)
+    assert got["accuracy"] == 0.0
+    assert got["margin"] < 0
+
+
+def test_length_normalised_accuracy_separates_a_preference_from_a_length_shift():
+    """`sequence_logprob` is a sum, so every extra token makes it smaller and a
+    longer response is penalised for its length alone. Here the chosen side is
+    better per token and longer; the sum prefers the short rejected one and the
+    length-normalised control does not."""
+    logits = torch.zeros(8)
+    logits[3] = 0.5                                   # chosen token, mildly liked
+    logits[5] = 0.0                                   # rejected token
+    model = _FixedLogits(logits)
+    pairs = [_pair([1] + [3] * 12, [1] + [5] * 2) for _ in range(3)]
+
+    got = preference_metrics(model, pairs, pad_id=0, micro_batch=3)
+    assert got["accuracy"] == 0.0, "the sum should be dragged down by length"
+    assert got["margin"] < 0
+    assert got["accuracy_len_norm"] == 1.0, "per token, chosen is preferred"
+    assert got["margin_len_norm"] > 0
+
+
+def test_preference_metrics_scores_both_models_on_the_same_pairs():
+    """`pairs` is consumed into a list, so a generator can be handed to two
+    models without the second one silently scoring nothing."""
+    model_a, model_b = _model_favouring(3), _model_favouring(5)
+    pairs = (_pair([1, 3, 3], [1, 5, 5]) for _ in range(3))
+    materialised = list(pairs)
+
+    a = preference_metrics(model_a, iter(materialised), pad_id=0)
+    b = preference_metrics(model_b, iter(materialised), pad_id=0)
+    assert a["n"] == b["n"] == 3
+    assert a["accuracy"] == 1.0 and b["accuracy"] == 0.0
+
+
+def test_preference_metrics_on_no_pairs_reports_nothing_rather_than_zero():
+    """0.0 accuracy over no pairs is a measurement that never happened wearing
+    a failing gate's clothes."""
+    got = preference_metrics(_model_favouring(3), [], pad_id=0)
+    assert got["n"] == 0
+    assert got["accuracy"] is None and got["margin"] is None
+
+
+def test_preference_metrics_leaves_the_model_as_it_found_it():
+    """It is called mid-run on the live policy; leaving it in eval would drop
+    dropout for the rest of the round."""
+    model = _model_favouring(3).train()
+    preference_metrics(model, [_pair([1, 3, 3], [1, 5, 5])], pad_id=0)
+    assert model.training, "training mode must be restored"
+
+    frozen = _model_favouring(3).eval()
+    preference_metrics(frozen, [_pair([1, 3, 3], [1, 5, 5])], pad_id=0)
+    assert not frozen.training, "and eval mode must not be turned into train"
+
+
+def test_preference_metrics_does_not_move_or_grad_the_model():
+    torch.manual_seed(0)
+    model = Daedalus(PRESETS["tiny"])
+    before = [p.detach().clone() for p in model.parameters()]
+    v = PRESETS["tiny"].vocab_size
+    pairs = [_pair([1, 2, 3, 4], [4, 3, 2, 1]) for _ in range(2)]
+
+    got = preference_metrics(model, pairs, pad_id=0, micro_batch=2)
+    assert 0.0 <= got["accuracy"] <= 1.0
+    assert v > 4
+    for a, b in zip(before, model.parameters()):
+        assert torch.equal(a, b)
+    assert all(p.grad is None for p in model.parameters())
 
 
 # ------------------------------------------------------------------ memory ---

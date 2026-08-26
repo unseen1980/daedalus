@@ -35,6 +35,7 @@ training time and shows up only as a model that ignores its prompt.
 """
 import argparse
 import itertools
+import json
 import os
 import random
 import sys
@@ -211,6 +212,62 @@ def iter_preference_pairs(dataset, tokenizer, max_len: int,
             yield pair
 
 
+def take_eval_pairs(pairs: Iterable[dict], n: int) -> Tuple[List[dict], Iterator[dict]]:
+    """Split a preference stream into a held-out head and the training tail.
+
+    Returns `(held_out, remaining)`. Disjoint *by construction*: both come from
+    one iterator, so a pair handed to the evaluation set is one `run_dpo` can
+    never reach. Holding out by any other route -- a second `load_dataset` call,
+    a `--limit`, a seed -- relies on two streams agreeing about order, and when
+    they quietly disagree the gate is scored on pairs the model trained on and
+    reports a number that only says the round memorised its own data.
+
+    The head is not a random sample: a streaming dataset arrives in file order.
+    That is fine for a delta measured on the same pairs before and after, which
+    is all the gate asks, but it is why `--dpo-eval-split` exists for datasets
+    that ship a real held-out split.
+    """
+    it = iter(pairs)
+    return (list(itertools.islice(it, n)) if n > 0 else []), it
+
+
+def evaluate_preference_gate(reference, policy, eval_pairs, *, pad_id: int,
+                             micro_batch: int = 2, device: str = "cpu") -> dict:
+    """Held-out preference accuracy before and after the DPO round.
+
+    `reference` is the before-model, and it costs nothing to say so late: it is
+    a frozen snapshot of the policy taken before the first DPO step and it never
+    moves, so scoring it after the round returns the pre-DPO answer. Measuring
+    "before" up front instead would mean a second forward pass over the same
+    pairs and one more chance to score the two models on different data.
+
+    `accuracy_improved` is *half* of phase 8's rule for keeping the DPO model.
+    The other half is execution pass@1, which is scripts/code_eval.py's job on
+    an exported checkpoint, out of band. A caller that reads this key alone is
+    reading a preference gate, not the gate.
+    """
+    from daedalus.dpo import preference_metrics
+
+    before = preference_metrics(reference, eval_pairs, pad_id=pad_id,
+                                micro_batch=micro_batch, device=device)
+    after = preference_metrics(policy, eval_pairs, pad_id=pad_id,
+                               micro_batch=micro_batch, device=device)
+    keys = ("accuracy", "margin", "accuracy_len_norm", "margin_len_norm")
+    delta = {k: after[k] - before[k] for k in keys
+             if before[k] is not None and after[k] is not None}
+    return {
+        "n": before["n"],
+        "before": before,
+        "after": after,
+        "delta": delta,
+        # Strictly greater: a round that moved nothing has not improved
+        # anything, and `>=` would pass an unchanged model.
+        "accuracy_improved": bool(delta.get("accuracy", 0.0) > 0.0),
+        "gate": "phase 8 step 7 also requires execution pass@1 to improve; "
+                "that is measured out of band by scripts/code_eval.py",
+    }
+
+
 def run_dpo(policy, reference, pairs, optimizers, device: str,
             beta: float = 0.1, max_steps: int = 500, micro_batch: int = 2,
             pad_id: int = 0, log_every: int = 20, logger=None,
@@ -302,11 +359,50 @@ def _run_dpo_stage(args, tokenizer, trainer, device: str) -> dict:
     pairs = iter_preference_pairs(dataset, tokenizer, args.dpo_max_len,
                                   args.max_assistant_chars)
     pad_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
-    return run_dpo(policy, reference, pairs, [muon, adamw], device,
+
+    if args.dpo_eval_split:
+        eval_pairs, _ = take_eval_pairs(
+            iter_preference_pairs(
+                load_dataset(args.dpo_dataset, split=args.dpo_eval_split,
+                             streaming=True),
+                tokenizer, args.dpo_max_len, args.max_assistant_chars),
+            args.dpo_eval_pairs)
+    else:
+        # Off the *training* iterator, before run_dpo sees it, so the two sets
+        # cannot overlap however the stream is ordered.
+        eval_pairs, pairs = take_eval_pairs(pairs, args.dpo_eval_pairs)
+    if eval_pairs:
+        print(f"[dpo] holding out {len(eval_pairs)} pairs for the gate"
+              f"{f' from split {args.dpo_eval_split}' if args.dpo_eval_split else ''}",
+              flush=True)
+
+    last = run_dpo(policy, reference, pairs, [muon, adamw], device,
                    beta=args.dpo_beta, max_steps=args.dpo_steps,
                    micro_batch=args.dpo_micro_batch, pad_id=pad_id,
                    logger=getattr(trainer, "wandb", None),
                    step_offset=trainer.step)
+
+    if eval_pairs:
+        gate = evaluate_preference_gate(
+            reference, policy, eval_pairs, pad_id=pad_id,
+            micro_batch=args.dpo_micro_batch, device=device)
+        path = os.path.join(trainer.run_dir, "dpo-eval.json")
+        with open(path, "w") as handle:
+            json.dump(gate, handle, indent=2, sort_keys=True)
+        print(f"[dpo] held-out preference accuracy "
+              f"{gate['before']['accuracy']:.3f} -> {gate['after']['accuracy']:.3f} "
+              f"on {gate['n']} pairs "
+              f"(length-normalised {gate['before']['accuracy_len_norm']:.3f} -> "
+              f"{gate['after']['accuracy_len_norm']:.3f}); "
+              f"{'improved' if gate['accuracy_improved'] else 'NOT improved'} "
+              f"-> {path}", flush=True)
+        logger = getattr(trainer, "wandb", None)
+        if logger is not None:
+            logger.log({f"dpo_heldout_{k}": v
+                        for k, v in gate["after"].items() if v is not None},
+                       step=trainer.step + args.dpo_steps)
+        last = {**last, "heldout": gate}
+    return last
 
 
 def save_final(trainer, args) -> str:
@@ -374,6 +470,19 @@ def _cli(argv=None):
                    help="DPO materialises logits for 4 forwards per step; see "
                         "daedalus.dpo.dpo_batch_memory_gb before raising this")
     p.add_argument("--dpo-max-len", type=int, default=1024)
+    p.add_argument("--dpo-eval-pairs", type=int, default=128,
+                   help="preference pairs held out of the DPO round to score "
+                        "the gate on. Taken off the head of the training "
+                        "stream, so the round trains on the pairs after them; "
+                        "0 disables the measurement entirely, which leaves the "
+                        "only reported accuracy the one run_dpo computes on "
+                        "its own training pairs relative to a reference it "
+                        "starts out identical to")
+    p.add_argument("--dpo-eval-split", default=None,
+                   help="take the held-out pairs from this split of "
+                        "--dpo-dataset instead of off the training stream. "
+                        "Preferred when the dataset ships a real held-out "
+                        "split; the default costs no such assumption")
     args = p.parse_args(argv)
 
     from datasets import load_dataset
