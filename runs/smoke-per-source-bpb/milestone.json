@@ -1,0 +1,14 @@
+{
+  "revision": "smoke-per-source-bpb-stable-end-step0",
+  "step": 0,
+  "tokens_seen": 0,
+  "total_steps": 1,
+  "decay_frac": 0.45,
+  "lr_mult_at_branch": 0.0,
+  "muon_lr": 0.02,
+  "adam_lr": 0.0003,
+  "config": "tok-probe-49152",
+  "repo": null,
+  "path_in_repo": "milestone/smoke-per-source-bpb/checkpoint.pt",
+  "created_at": 1787760850.1351228
+}
