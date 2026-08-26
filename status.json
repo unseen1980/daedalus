@@ -4,10 +4,10 @@
     "user_action_required": true
   },
   "deadline": {
-    "elapsed_hours": 57.89,
-    "finalization_in_hours": 78.11,
+    "elapsed_hours": 57.97,
+    "finalization_in_hours": 78.03,
     "hard_hours": 144.0,
-    "remaining_hours": 86.11,
+    "remaining_hours": 86.03,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T20:37:52.050528Z",
+  "heartbeat_at": "2026-08-26T20:42:53.624651Z",
   "lanes": {
     "directive": {
       "details": {
@@ -61,20 +61,16 @@
         "attempts": 1,
         "command": [
           "python",
-          "scripts/codeprep.py",
-          "corpus",
-          "build",
-          "--total-tokens",
-          "1000000000",
-          "--dry-run"
+          "-c",
+          "\nimport json\nm = json.load(open('runs/vast-program/code-run-manifest.json'))\ng = m['gates']['probes_250m']\nprint('keys:', sorted(g))\nprint('stop_if:', g['stop_if'])\nprint('preregistered:', g['stop_if_preregistered_wording'])\nprint('reading:', g['disambiguation']['reading_chosen'])\n"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-retarget-dryrun",
+      "phase": "phase8-gate-wording-manifest-check",
       "status": "passed",
-      "updated_at": "2026-08-26T20:29:10.389284Z"
+      "updated_at": "2026-08-26T20:41:13.967522Z"
     },
     "operator": {
       "details": {
@@ -133,9 +129,9 @@
   "phase": "phase8-code-corpus-build",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "5d9b353d3f82",
+  "source_sha": "a611ece8db5f",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
-  "updated_at": "2026-08-26T20:29:36.348434Z"
+  "updated_at": "2026-08-26T20:41:13.967522Z"
 }
