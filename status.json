@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 56.97,
-    "finalization_in_hours": 79.03,
+    "elapsed_hours": 57.05,
+    "finalization_in_hours": 78.95,
     "hard_hours": 144.0,
-    "remaining_hours": 87.03,
+    "remaining_hours": 86.95,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T19:42:31.326995Z",
+  "heartbeat_at": "2026-08-26T19:47:32.772862Z",
   "lanes": {
     "evidence": {
       "details": {
@@ -49,21 +49,17 @@
           "python",
           "scripts/codeprep.py",
           "corpus",
-          "probe",
-          "--config",
-          "all-all",
-          "--rows",
-          "200000",
+          "plan",
           "--json-out",
-          "runs/codeprep/allall-yield.json"
+          "runs/codeprep/source-plan.json"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-codeprep-allall-yield",
+      "phase": "phase8-codeprep-source-plan",
       "status": "passed",
-      "updated_at": "2026-08-26T17:38:11.391440Z"
+      "updated_at": "2026-08-26T19:44:48.553539Z"
     },
     "operator": {
       "details": {
@@ -122,9 +118,9 @@
   "phase": "phase8-codeprep-gate",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "5124c1209000",
+  "source_sha": "dd79972c3c08",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "passed",
-  "updated_at": "2026-08-26T19:36:31.883422Z"
+  "updated_at": "2026-08-26T19:44:48.553539Z"
 }
