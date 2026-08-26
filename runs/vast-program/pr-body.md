@@ -19,7 +19,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 | 4 — Tokenizer lab for V2 | **complete**, 32,768 selected, reading in `runs/tokenizer-lab/v2-tokenizer-migration.md` |
 | 5 — ShortConv channel death prevention | **complete**, **no schedule selected**, verdict in `runs/conv-health/verdict-paired.json`, reading in `runs/conv-health/phase5-conv-decay.md` |
 | 6 — Architecture Pareto proxies | **complete**, **no shape recommended and stage C is a no-go**, verdicts in `runs/architecture/stageb-recommendation.json` and `runs/architecture/stageb-stage-c.json` |
-| 7 — Improved general corpus and mixture | **in progress**, headroom curve, complete decontamination coverage and the acceptance gate measured — reading in `runs/corpus/headroom-curve.md`, `runs/corpus/decontam-index.md` and `runs/corpus/phase7-gate.md`; candidate mixture arms trained and scoring |
+| 7 — Improved general corpus and mixture | **in progress**, steps 1–8 and 10 complete — mixture verdict **keep-baseline** in `runs/corpus/mixture-verdict-probe.json`, acceptance gate in `runs/corpus/phase7-gate.md`, headroom in `runs/corpus/headroom-curve.md`; step 9 demonstrated on a rebuilt source, open at full scale |
 | 8 — Daedalus-Code | not started |
 | 9 — Finalization and reporting | begins no later than T+136h |
 
@@ -166,7 +166,19 @@ Cost to the rebuild, measured rather than assumed: **241 MB resident per datapre
 
 This says nothing about what the released corpus let through — that remains `contam_scan.py`'s measurement and is unchanged.
 
-## Phase 7 — Mixture optimisation: the rule is committed, the arms are training
+## Phase 7 — Mixture optimisation: keep-baseline, and what the arms did separate
+
+**Verdict: `keep-baseline`** (`runs/corpus/mixture-verdict-probe.json`, page beside it). Both candidates are admissible — no floor violation, no source past the 5% regression bound — and neither clears the preregistered 0.5% minimum aggregate gain: quality-heavy 0.081%, derived 0.057%, against a 1.2486 baseline. That is the plan's instruction for a proxy that cannot separate the arms, recorded rather than resolved by advancing the best of a tie.
+
+| arm | aggregate BPB | vs baseline | dclm-baseline | fineweb-edu | stack-edu-python |
+| --- | --- | --- | --- | --- | --- |
+| `baseline` | 1.2486 | — | 1.3828 | 1.2441 | 0.9319 |
+| `quality-heavy` | 1.2476 | +0.081% | 1.4035 | 1.2373 | 0.9005 |
+| `derived` | 1.2479 | +0.057% | 1.3899 | 1.2490 | **0.8879** |
+
+Per source they separate clearly. Both candidates buy code BPB — 0.9319 → 0.9005 → 0.8879, the best of the three going to the arm with the largest code share — and both pay for it on raw web, 1.3828 → 1.4035 and 1.3899. Under the blueprint weighting, which gives raw web 32.6% and code 13.0%, that trade is worth 0.06–0.08%. The tie is a measurement, not an accident of noise: the aggregate is dominated by the two web sources, and a mixture that moves mass toward code is buying the smallest of the three weights.
+
+
 
 `daedalus/mixture_opt.py` is the decision half — arms, derivation, floors, selection — and it costs nothing to run, so all of it landed **before a single arm had been scored**. A rule that arrives in the same commit as the numbers it judges is indistinguishable from one fitted to them.
 
@@ -186,6 +198,8 @@ Floors are fractions of the blueprint rather than invented absolutes, so the sam
 **Preflight refuses three failures the epoch-cap flag cannot tell apart**, all before the GPU is touched: a source the arm names that has no shards — which `resolve_mixture` renormalizes away and reports as *zero* skew, because `target_probs` is taken after that renormalization; a sampled mixture more than a thousandth of a point of L1 from the arm's own; and an arm that would re-read a source at or past the four-epoch cap, where the mixture is preserved and the repetition is what makes the arm unusable.
 
 One trap worth stating because it would have quietly decided the phase: `train.py`'s in-run `val_bpb` weights the holdout by the mixture each run samples, which is right for one run and useless across arms — six models scored on six different corpora. The comparison is `scripts/bpb_eval.py` under one fixed weighting for every arm, written into the sweep artifact so it can be checked rather than assumed.
+
+### How the arms were trained and read
 
 The four reference arms (baseline plus one specialist per source) trained at phase 4's LM probe recipe re-used unchanged — `tok-probe-49152`, 200,015,872 tokens, 1,526 whole steps of 131,072 — so throughput, memory headroom and schedule shape are measured facts on this box rather than estimates. All four completed; `runs/corpus/mixture-sweep-reference.json` records each arm's sampled mixture beside the one it names, at 0.0 points of L1 skew and 0.26 epochs per source at the baseline.
 
