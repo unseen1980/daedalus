@@ -19,7 +19,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 | 4 — Tokenizer lab for V2 | **complete**, 32,768 selected, reading in `runs/tokenizer-lab/v2-tokenizer-migration.md` |
 | 5 — ShortConv channel death prevention | **complete**, **no schedule selected**, verdict in `runs/conv-health/verdict-paired.json`, reading in `runs/conv-health/phase5-conv-decay.md` |
 | 6 — Architecture Pareto proxies | **complete**, **no shape recommended and stage C is a no-go**, verdicts in `runs/architecture/stageb-recommendation.json` and `runs/architecture/stageb-stage-c.json` |
-| 7 — Improved general corpus and mixture | **in progress**, headroom curve measured — reading in `runs/corpus/headroom-curve.md` |
+| 7 — Improved general corpus and mixture | **in progress**, headroom curve and complete decontamination coverage measured — reading in `runs/corpus/headroom-curve.md` and `runs/corpus/decontam-index.md` |
 | 8 — Daedalus-Code | not started |
 | 9 — Finalization and reporting | begins no later than T+136h |
 
@@ -142,6 +142,29 @@ Two things the numbers do not say. The **aggregate lies**: at 1T the corpus-leve
 Supply is measured, not assumed — realized tokens plus a lower bound on what is reachable in untouched files at the density the source itself achieved. Two silent traps are pinned by regression tests with the real numbers: a shard manifest's `total_tokens` describes the *fetched subset* while `subset_of` describes the whole build (479M against 5.19B for `fineweb-edu`), and a manifest with no stream position must never reach the density arithmetic, which would place it at file 0 and read `stack-edu-python`'s 1.2B as ~13B. Cross-checks: `fineweb-edu` measures 1,424B against a published ~1.3T, `dclm-baseline` 3,746B against a published multi-trillion corpus.
 
 The curve exits 0 even when short. "This corpus does not support 1T at four epochs" is a result; a non-zero exit would mark the phase failed and make moving the bar the cheapest way to pass it.
+
+## Phase 7 — Decontamination: 47.5% of scored items covered, now 100%
+
+`daedalus/eval_index.py` builds the index once, sorted and content-addressed, beside the item counts, splits and revisions it came from; `run_dataprep --eval-index PATH [--eval-index-digest SHA]` loads it and records `decontam_index` in the corpus manifest. Reading in `runs/corpus/decontam-index.md`.
+
+| | items indexed | scored split | covered |
+| --- | ---: | ---: | ---: |
+| `hellaswag` | 2,000 → **10,042** | 10,042 | 19.9% → **100%** |
+| `arc_easy` | 2,000 → **2,376** | 2,376 | 84.2% → **100%** |
+| `piqa` / `openbookqa` / `winogrande` | 3,605 | 3,605 | 100% |
+| **total** | 7,605 → **16,023** | 16,023 | 47.5% → **100%** |
+
+**1,371,773 13-grams against 214,682** — 6.39x from 2.11x the items, because the missing coverage was HellaSwag's and HellaSwag items are the long ones. Against what the released corpus was actually filtered with (183,359 grams, ARC-Easy and OpenBookQA on `validation`) it is **7.5x** larger and the first index built on the splits the model is scored on. The 214,682 reproduces `scripts/contam_scan.py`'s recorded figure for the same limit from independent code, which is why the larger number reads as a measurement rather than as the tool's opinion of itself.
+
+The 2,000-item limit was the visible hole. The one underneath it is that **nothing recorded which index a source was filtered against**: `334c86c` moved two tasks onto their scored splits mid-build, and establishing which sources predate it meant rebuilding the index at the old splits and matching a gram count that happened to be in a log. That worked once; it is not a procedure. An index derived at run start is a function of what `datasets` returned that day and what `TASK_SPLITS` said that week, neither of which was written down — so it is now an input the build is *given*.
+
+The refusals are the deliverable. `eval.load_all_tasks` skips an unavailable benchmark with a warning, which is right for scoring and wrong here: a HellaSwag outage yields an index that looks fine, filters nothing against HellaSwag, and leaves no trace in the corpus. `build_index` refuses a missing task, a task at zero items, a split other than the scored one, a limit — and a task that merely came back **short**, which none of the others can see. The Hub is read unauthenticated on this box, so a rate-limited split returns fewer items rather than failing; `EXPECTED_ITEMS` pins the five sizes so a truncated index cannot be built, marked complete, digested and used while its own provenance asserts the opposite. A partial index stops `run_dataprep` rather than being recorded. `coverage_problems` re-asks the same questions of a frozen file later, when a task may have been added or a split grown.
+
+Two properties make the digest an identity rather than a timestamp: the file is sorted, and gzip's header carries neither mtime nor source filename — without the second, the same index written to two paths produced two different files, which `test_the_file_on_disk_is_a_function_of_the_set_alone` caught on its first run.
+
+Cost to the rebuild, measured rather than assumed: **241 MB resident per dataprep worker**, against a 4.0 GB cap on a ~2.6–2.9 GB baseline, leaving ~0.9–1.2 GB of margin at `--max-workers 4`.
+
+This says nothing about what the released corpus let through — that remains `contam_scan.py`'s measurement and is unchanged.
 
 ## Control plane
 
