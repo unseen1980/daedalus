@@ -1,13 +1,13 @@
 {
   "attention": {
-    "blocker": "lane inspect: phase8-mixture-dry-run-2 failed",
-    "user_action_required": true
+    "blocker": "",
+    "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 58.22,
-    "finalization_in_hours": 77.78,
+    "elapsed_hours": 58.31,
+    "finalization_in_hours": 77.69,
     "hard_hours": 144.0,
-    "remaining_hours": 85.78,
+    "remaining_hours": 85.69,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T20:57:58.541740Z",
+  "heartbeat_at": "2026-08-26T21:02:59.895189Z",
   "lanes": {
     "directive": {
       "details": {
@@ -62,20 +62,16 @@
         "attempts": 1,
         "command": [
           "python",
-          "scripts/codeprep.py",
-          "corpus",
-          "mixture",
-          "--dry-run",
-          "--json-out",
-          ""
+          "-c",
+          "\nimport json\nm = json.load(open('runs/vast-program/code-run-manifest.json'))\nprint(json.dumps(m['base_model'], indent=2, sort_keys=True)[:1600])\n"
         ],
         "returncodes": [
-          2
+          0
         ]
       },
-      "phase": "phase8-mixture-dry-run-2",
-      "status": "failed",
-      "updated_at": "2026-08-26T20:57:17.015572Z"
+      "phase": "phase8-base-model-read",
+      "status": "passed",
+      "updated_at": "2026-08-26T21:00:33.876617Z"
     },
     "operator": {
       "details": {
@@ -137,6 +133,6 @@
   "source_sha": "e278d2ad65e5",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
-  "status": "running",
-  "updated_at": "2026-08-26T20:57:17.015572Z"
+  "status": "passed",
+  "updated_at": "2026-08-26T21:02:51.550020Z"
 }
