@@ -149,6 +149,20 @@ def test_extract_code_keeps_a_flush_left_comment_inside_a_continued_body():
     assert "return total" in solution
 
 
+def test_extract_code_keeps_a_module_level_constant_the_answer_uses():
+    """Dropping what precedes the first `def` discards exactly this, and the
+    item then fails on a name the model did define."""
+    from scripts.code_eval import extract_code
+
+    solution = extract_code(
+        MBPP_PROMPT,
+        "VOWELS = 'aeiou'\n\ndef count_vowels(s):\n"
+        "    return sum(c in VOWELS for c in s)\n")
+
+    assert "VOWELS = 'aeiou'" in solution
+    assert "def count_vowels(s):" in solution
+
+
 def test_extract_code_keeps_a_decorated_definition_whole():
     from scripts.code_eval import extract_code
 

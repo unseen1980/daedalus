@@ -190,13 +190,6 @@ _DEFINITION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
                      ast.Import, ast.ImportFrom)
 
 
-def _node_start(node) -> int:
-    """The first line of a definition, decorators included."""
-
-    return min([node.lineno]
-               + [d.lineno for d in getattr(node, "decorator_list", [])])
-
-
 def _standalone_program(completion: str) -> str:
     """The definitions out of a completion that is a program in its own right.
 
@@ -224,17 +217,22 @@ def _standalone_program(completion: str) -> str:
     except SyntaxError:
         return _standalone_program_by_lines(completion)
 
-    first = last = None
+    seen_definition = last = None
     for node in module.body:
         if isinstance(node, _DEFINITION_NODES):
-            first = node if first is None else first
+            seen_definition = True
             last = node
-        elif first is not None:
-            break
-    if first is None:
+        elif seen_definition:
+            break                      # the model's own tests, or a worked example
+    if last is None:
         return completion.rstrip()
+    # Everything up to the last definition, not from the first one. A module
+    # this harness could parse contains no prose, so the only thing dropping
+    # what precedes the first `def` can do is discard a module-level constant
+    # or a decorator the answer needs -- a solved item scored wrong, which is
+    # the failure this whole function keeps producing.
     lines = completion.split("\n")
-    return "\n".join(lines[_node_start(first) - 1:last.end_lineno]).rstrip()
+    return "\n".join(lines[:last.end_lineno]).rstrip()
 
 
 def _standalone_program_by_lines(completion: str) -> str:
