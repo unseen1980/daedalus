@@ -34,13 +34,16 @@ if _ROOT not in sys.path:
 
 from daedalus.codeprep import (CODE_LANGUAGE_SHARES,  # noqa: E402
                                DEFAULT_CODE_INDEX_PATH, DEFAULT_CODE_N,
-                               DEFAULT_HOLDOUT_FRAC, GITHUB_CODE_LANGUAGES,
+                               DEFAULT_HOLDOUT_FRAC, DEFAULT_INTERLEAVE_PASSES,
+                               GITHUB_CODE_LANGUAGES, INTERLEAVED_CONFIG,
                                IncompleteIndex, IndexDigestMismatch,
                                GITHUB_CODE_DATASET, GITHUB_CODE_REVISION,
-                               build_code_index, code_coverage_problems,
-                               config_near_misses, github_code_configs,
-                               load_index, missing_configs, probe_languages,
-                               probe_problems, sidecar_path, write_index)
+                               MIN_BUCKET_SHARE, build_code_index,
+                               code_coverage_problems, config_near_misses,
+                               github_code_configs, load_index, missing_configs,
+                               plan_problems, probe_languages, probe_problems,
+                               probe_record, sidecar_path, source_plan,
+                               write_index)
 
 
 def _report(provenance: dict) -> str:
@@ -243,6 +246,74 @@ def _probe(a) -> int:
     return 0
 
 
+def _plan_report(plan: dict) -> str:
+    interleaved = plan["interleaved"]
+    lines = [
+        f"  budget {plan['interleave_passes']:g} pass(es) of "
+        f"{interleaved['config']} per byte of code corpus; buckets under "
+        f"{plan['min_bucket_share']:.1%} are dropped",
+        f"  measured over {interleaved['rows_read'] or 0:,} rows, "
+        f"{(interleaved['admitted_bytes'] or 0) / 1e6:,.1f} MB admitted, "
+        f"{interleaved['stream_amplification']} rows streamed per row kept",
+        "",
+        f"  {'bucket':24s} {'plan':>7s} {'source':>13s} {'share':>7s} "
+        f"{'needs':>9s}  why",
+    ]
+    for bucket, entry in sorted(plan["buckets"].items(),
+                                key=lambda kv: -kv[1]["plan_share"]):
+        required = entry.get("required_passes")
+        lines.append(
+            f"  {bucket:24s} {entry['plan_share']:>6.1%} "
+            f"{entry['source']:>13s} {entry['share']:>6.1%} "
+            f"{'-' if required is None else f'{required:>8.1f}x'}  "
+            f"{entry['reason']}")
+    lines.append("")
+    lines.append(f"  redistributed {plan['redistributed']:.1%} onto the buckets "
+                 f"with directories of their own")
+    return "\n".join(lines)
+
+
+def _plan(a) -> int:
+    try:
+        with open(a.configs_json) as f:
+            available = json.load(f).get("available") or {}
+        with open(a.probe_json) as f:
+            report = json.load(f)
+    except OSError as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+    record = probe_record(report, a.interleaved)
+    if record is None:
+        # Not an empty directory: a report that never measured it. Reading the
+        # two apart is the whole point of the fallback measurement.
+        print(f"REFUSE: {a.probe_json} contains no probe of {a.interleaved!r}; "
+              f"run `corpus probe --config {a.interleaved}` first",
+              file=sys.stderr)
+        return 2
+    try:
+        plan = source_plan(available=available, interleaved=record,
+                           passes=a.passes, min_share=a.min_share)
+    except ValueError as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+    problems = plan_problems(plan)
+    plan["problems"] = problems
+    plan["evidence"] = {"configs": a.configs_json, "probe": a.probe_json}
+    print(_plan_report(plan))
+    if a.json_out:
+        os.makedirs(os.path.dirname(a.json_out) or ".", exist_ok=True)
+        with open(a.json_out, "w") as f:
+            json.dump(plan, f, indent=2, sort_keys=True)
+            f.write("\n")
+        print(f"\nwrote {a.json_out}")
+    if problems:
+        print("\nthis plan cannot be built as written:", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 3
+    return 0
+
+
 def _cli(argv=None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -298,6 +369,31 @@ def _cli(argv=None) -> int:
     probe.add_argument("--holdout-frac", type=float, default=DEFAULT_HOLDOUT_FRAC)
     probe.add_argument("--json-out", default=None)
     probe.set_defaults(fn=_probe)
+
+    plan = corpus_action.add_parser(
+        "plan", help="the mixture this revision can actually serve, from the "
+                     "directory listing and the interleaved probe")
+    plan.add_argument("--configs-json", default="runs/codeprep/github-code-configs.json",
+                      help="`corpus configs --json-out` output: which "
+                           "directories the revision really carries")
+    plan.add_argument("--probe-json", default="runs/codeprep/allall-yield.json",
+                      help=f"`corpus probe --config {INTERLEAVED_CONFIG} "
+                           f"--json-out` output: what the interleaved directory "
+                           f"admits per language")
+    plan.add_argument("--interleaved", default=INTERLEAVED_CONFIG,
+                      help="directory the bucketless buckets fall back to")
+    plan.add_argument(
+        "--passes", type=float, default=DEFAULT_INTERLEAVE_PASSES,
+        help=f"interleaved bytes the build may admit per byte of code corpus "
+             f"(default {DEFAULT_INTERLEAVE_PASSES:g}). Every bucket's "
+             f"`required_passes` is recorded, so another budget re-derives the "
+             f"mixture without re-reading a row")
+    plan.add_argument("--min-share", type=float, default=MIN_BUCKET_SHARE,
+                      help=f"below this share of the code mixture a bucket is "
+                           f"dropped by name rather than carried "
+                           f"(default {MIN_BUCKET_SHARE:.3f})")
+    plan.add_argument("--json-out", default=None)
+    plan.set_defaults(fn=_plan)
 
     configs = corpus_action.add_parser(
         "configs", help="list the parquet directories the revision really has")

@@ -468,6 +468,46 @@ GITHUB_CODE_LANGUAGES = {
 assert set(GITHUB_CODE_LANGUAGES) == set(CODE_LANGUAGE_SHARES), \
     "every code bucket needs a source and every source needs a share"
 
+#: The `language` values each bucket is, in the interleaved directory's own
+#: vocabulary rather than the plan's. Compared case-folded (`normalize_language`),
+#: because this dataset writes `GO` and `FORTRAN` upper-case and `Rust` and
+#: `Python` not, and an exact match against the plan's spelling would refuse
+#: every row -- which is what naming `GO-all` from a language list already did to
+#: four directories.
+GITHUB_CODE_BUCKET_LANGUAGES = {
+    "python": ("Python",),
+    "javascript-typescript": ("JavaScript", "TypeScript"),
+    "c-cpp": ("C", "C++"),
+    "rust": ("Rust",),
+    "go": ("GO",),
+    "java": ("Java",),
+    "shell-sql-other": ("Shell", "SQL"),
+}
+
+assert set(GITHUB_CODE_BUCKET_LANGUAGES) == set(CODE_LANGUAGE_SHARES), \
+    "every code bucket needs its language names and every one needs a share"
+
+#: The directory that carries every language at once, and the only source on the
+#: pinned revision for the four buckets with no directory of their own.
+INTERLEAVED_CONFIG = "all-all"
+
+#: Below this share of the code mixture a bucket is dropped rather than carried.
+#: A bucket reduced to a fraction of a percent is a few million tokens of a
+#: language in a multi-billion-token corpus: too little to teach the language and
+#: enough to make a model card claim it. Dropping it by name is the honest
+#: version of the same outcome.
+MIN_BUCKET_SHARE = 0.005
+
+#: Interleaved-directory bytes the build may admit per byte of code corpus it
+#: produces. One pass means the fallback stream costs as much again as the entire
+#: rest of the code corpus, which is already a large concession for the 18% of
+#: the mixture that has no directory of its own.
+#:
+#: It is a parameter rather than a verdict: `source_plan` records every bucket's
+#: `required_passes`, so the same measurement re-derives the mixture at any other
+#: budget without re-reading a row.
+DEFAULT_INTERLEAVE_PASSES = 1.0
+
 GITHUB_CODE_DATASET = "codeparrot/github-code"
 
 #: The parquet-converted revision, as `dataprep.MIXTURE`'s `stack-edu-python`
@@ -1052,6 +1092,224 @@ def probe_problems(report: dict) -> List[str]:
                 problems.append(
                     f"{name} carries {len(unknown)} licence value(s) this "
                     f"module does not classify: {', '.join(repr(u) for u in unknown[:8])}")
+    return problems
+
+
+def probe_record(report: dict, config: str) -> Optional[dict]:
+    """The one directory's record inside a `probe_languages` report.
+
+    A report keys its records by *bucket*, and the interleaved directory was
+    probed with `--config`, which files it under `"unbucketed"`. Searching by the
+    config name finds it either way, so the plan does not have to know which of
+    the two ways its own evidence was gathered.
+    """
+    for entry in (report.get("languages") or {}).values():
+        for record in entry.get("configs") or []:
+            if record.get("config") == config:
+                return record
+    return None
+
+
+def interleaved_bucket_yield(record: dict, *,
+                             buckets: Optional[Dict[str, Tuple[str, ...]]] = None,
+                             ) -> dict:
+    """What one pass over the interleaved directory admits, per bucket.
+
+    The measurement a fallback share is budgeted from. `record` is a
+    `probe_source` record for `INTERLEAVED_CONFIG`, and the number taken from it
+    is each bucket's fraction of the *admitted* bytes -- what survived the
+    licence gate -- because a share can only be filled from rows the corpus is
+    allowed to contain. The histogram of rows offered says something else and
+    overstates every bucket, unevenly: the gate refuses about a third of this
+    dataset and nothing makes it refuse at the same rate in every language.
+
+    Refuses a record probed before per-language yield was recorded rather than
+    defaulting it to zero, which would silently drop every fallback bucket.
+    """
+    buckets = buckets if buckets is not None else GITHUB_CODE_BUCKET_LANGUAGES
+    admitted = record.get("admitted_languages")
+    if admitted is None:
+        raise ValueError(
+            f"the probe of {record.get('config')!r} recorded no per-language "
+            f"yield, so no fallback share can be budgeted from it; re-probe it")
+    total = sum(entry["bytes"] for entry in admitted.values())
+    measured: Dict[str, dict] = {}
+    for bucket, names in sorted(buckets.items()):
+        wanted = sorted({normalize_language(name) for name in names})
+        rows = sum(admitted.get(name, {}).get("rows", 0) for name in wanted)
+        admitted_bytes = sum(admitted.get(name, {}).get("bytes", 0)
+                             for name in wanted)
+        measured[bucket] = {
+            "languages": wanted,
+            "rows": rows,
+            "bytes": admitted_bytes,
+            "byte_fraction": (admitted_bytes / total) if total else 0.0,
+        }
+    return {
+        "config": record.get("config"),
+        "rows_read": record.get("rows_read"),
+        "admitted_bytes": total,
+        # Rows streamed per row kept, over the whole directory. The fallback
+        # pays this on top of its own rarity: the budget below is counted in
+        # admitted bytes, and this is what those bytes cost to read.
+        "stream_amplification": record.get("stream_amplification"),
+        "buckets": measured,
+    }
+
+
+def source_plan(*, available: Dict[str, int], interleaved: dict,
+                passes: float = DEFAULT_INTERLEAVE_PASSES,
+                shares: Optional[Dict[str, float]] = None,
+                configs: Optional[Dict[str, Tuple[str, ...]]] = None,
+                buckets: Optional[Dict[str, Tuple[str, ...]]] = None,
+                min_share: float = MIN_BUCKET_SHARE) -> dict:
+    """The code mixture this revision can actually serve, and at what shares.
+
+    The plan's seven buckets assume seven per-language directories. Four of the
+    ten directories they name do not exist on the parquet-converted revision --
+    Go, Rust, Shell and SQL were never converted, with no near miss on spelling
+    -- which is 18% of the code portion with no source of its own. The
+    interleaved `all-all` directory does carry all of them, so the open question
+    was never "are the rows there" but "what does reaching them cost", and that
+    is a rate this takes from a measurement rather than from the plan's table.
+
+    Three outcomes per bucket, in one pass over the same evidence:
+
+    * every directory it names exists -- served from them at its plan share;
+    * no directory, but the interleaved yield reaches at least `min_share` under
+      the budget -- served from `INTERLEAVED_CONFIG` filtered to its languages,
+      at whatever share the yield reaches, capped at the plan's;
+    * no directory and the yield does not reach `min_share` -- dropped by name.
+
+    What the capped and dropped buckets cannot serve is redistributed
+    proportionally over the buckets that have their own directories, following
+    `dataprep.GATED_SUBSTITUTION_NOTES` for the general corpus's gated sources.
+    It cannot go to the fallback buckets: they are capped *because* the rows are
+    not there, so handing them a larger target only moves where the shortfall is
+    discovered from this function to a build that quietly comes up short.
+
+    The result sums to 1.0 over the code portion and every input to it is
+    recorded, so the decision is re-derivable rather than asserted.
+    """
+    shares = shares if shares is not None else CODE_LANGUAGE_SHARES
+    configs = configs if configs is not None else GITHUB_CODE_LANGUAGES
+    buckets = buckets if buckets is not None else GITHUB_CODE_BUCKET_LANGUAGES
+    if passes < 0:
+        raise ValueError(f"interleave passes must not be negative, got {passes}")
+    measured = interleaved_bucket_yield(interleaved, buckets=buckets)
+
+    entries: Dict[str, dict] = {}
+    for bucket, plan_share in sorted(shares.items()):
+        named = list(configs.get(bucket, ()))
+        absent = [config for config in named if config not in available]
+        entry: dict = {"plan_share": plan_share, "configs": named,
+                       "missing_configs": absent}
+        if not absent:
+            entry.update({
+                "source": "directories", "share": plan_share,
+                "reason": "every directory this bucket names exists on the "
+                          "revision",
+            })
+            entries[bucket] = entry
+            continue
+        yielded = measured["buckets"][bucket]
+        fraction = yielded["byte_fraction"]
+        reachable = passes * fraction
+        entry.update({
+            "source_config": INTERLEAVED_CONFIG,
+            "languages": yielded["languages"],
+            "interleaved_rows": yielded["rows"],
+            "interleaved_bytes": yielded["bytes"],
+            "yield_fraction": fraction,
+            "reachable_share": reachable,
+            # What the budget would have to be for this bucket to reach its plan
+            # share. The one number that makes the drop re-derivable: nothing
+            # here is unreachable in principle, only at a price, and this is the
+            # price.
+            "required_passes": (plan_share / fraction) if fraction else None,
+        })
+        if reachable < min_share:
+            entry.update({
+                "source": "dropped", "share": 0.0,
+                "reason": f"{fraction:.3%} of the interleaved directory reaches "
+                          f"{reachable:.3%} of the code mixture at {passes:g} "
+                          f"pass(es), under the {min_share:.1%} floor",
+            })
+        else:
+            entry.update({
+                "source": "interleaved", "share": min(plan_share, reachable),
+                "reason": f"{fraction:.3%} of the interleaved directory reaches "
+                          f"{min(plan_share, reachable):.3%} of the code "
+                          f"mixture at {passes:g} pass(es)",
+            })
+        entries[bucket] = entry
+
+    shortfall = sum(entry["plan_share"] - entry["share"]
+                    for entry in entries.values())
+    absorbers = {bucket: entry for bucket, entry in entries.items()
+                 if entry["source"] == "directories"}
+    weight = sum(entry["plan_share"] for entry in absorbers.values())
+    for bucket, entry in absorbers.items():
+        entry["redistributed"] = (shortfall * entry["plan_share"] / weight
+                                  if weight else 0.0)
+        entry["share"] = entry["plan_share"] + entry["redistributed"]
+
+    for entry in entries.values():
+        entry["share"] = round(entry["share"], 6)
+
+    return {
+        "interleave_passes": passes,
+        "min_bucket_share": min_share,
+        "interleaved": {
+            "config": measured["config"],
+            "available": INTERLEAVED_CONFIG in available,
+            "rows_read": measured["rows_read"],
+            "admitted_bytes": measured["admitted_bytes"],
+            "stream_amplification": measured["stream_amplification"],
+            # The fraction of what the fallback stream reads that it keeps.
+            # Its reciprocal is the read amplification the budget buys.
+            "kept_fraction": round(sum(entry["yield_fraction"]
+                                       for entry in entries.values()
+                                       if entry["source"] == "interleaved"), 6),
+        },
+        "buckets": entries,
+        "shares": {bucket: entry["share"] for bucket, entry in entries.items()
+                   if entry["share"] > 0},
+        "redistributed": round(shortfall, 6),
+    }
+
+
+def plan_problems(plan: dict) -> List[str]:
+    """Everything in a plan that a corpus build must not be run on.
+
+    A dropped or capped bucket is not one of them: those are the decision this
+    plan exists to make, recorded per bucket with the budget that would reverse
+    it. What is a problem is a plan that cannot be built *as written* -- the
+    fallback directory missing, a fallback language the directory carries no
+    admitted row of (the spelling failure that already cost four directories,
+    and which looks exactly like absence), or shares that do not add up.
+    """
+    problems: List[str] = []
+    interleaved = plan.get("interleaved") or {}
+    buckets = plan.get("buckets") or {}
+    fallbacks = {bucket: entry for bucket, entry in buckets.items()
+                 if entry.get("source") in ("interleaved", "dropped")}
+    if fallbacks and not interleaved.get("available"):
+        problems.append(
+            f"{len(fallbacks)} bucket(s) fall back to {INTERLEAVED_CONFIG!r} and "
+            f"the revision does not carry that directory either")
+    for bucket, entry in sorted(fallbacks.items()):
+        if not entry.get("interleaved_rows"):
+            problems.append(
+                f"{bucket} has no directory of its own and the interleaved one "
+                f"admitted no row of {', '.join(entry.get('languages') or [])}; "
+                f"check the spelling against the probe's language histogram "
+                f"before reading this as absence")
+    total = sum(entry["share"] for entry in buckets.values())
+    if buckets and abs(total - 1.0) > 1e-6:
+        problems.append(
+            f"the planned shares sum to {total:.6f}, not 1.0; the shortfall from "
+            f"{plan.get('redistributed')} was not fully redistributed")
     return problems
 
 
