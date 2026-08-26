@@ -74,6 +74,31 @@ SCHEMA = 1
 DEFAULT_N = 13
 DEFAULT_INDEX_PATH = "data/decontam/eval-index-13gram.txt.gz"
 
+#: Items in each scored split, measured 2026-08-26 against the repos in
+#: `eval.TASK_LOADERS` (`allenai/ai2_arc` ARC-Easy `test`, `Rowan/hellaswag`
+#: `validation`, `ybisk/piqa` `validation`, `allenai/openbookqa` `test`,
+#: `allenai/winogrande` `validation`).
+#:
+#: A count is here because "every item" is otherwise unfalsifiable. The Hub is
+#: read unauthenticated on this box, and a rate-limited or partly-downloaded
+#: split comes back *short* rather than failing -- so an index built from it
+#: would be smaller, be marked complete, get a digest, and filter the corpus
+#: while its own provenance asserted the opposite. Every other guard in this
+#: module catches a task that is missing, empty or on the wrong split; none of
+#: them catches a task that is merely truncated, which is the failure the
+#: 2,000-item limit already was.
+#:
+#: A legitimate upstream change to a split's size fails this too, loudly, and
+#: naming both numbers. That is the intended reading: what the size of a scored
+#: benchmark is is not something to discover afterwards from a corpus.
+EXPECTED_ITEMS = {
+    "hellaswag": 10_042,
+    "arc_easy": 2_376,
+    "piqa": 1_838,
+    "openbookqa": 500,
+    "winogrande": 1_267,
+}
+
 
 class IncompleteIndex(RuntimeError):
     """Raised when an index would not cover every scored item and split.
@@ -138,6 +163,7 @@ def build_index(n: int = DEFAULT_N, limit: Optional[int] = None,
                 loader: Optional[Callable] = None,
                 expected_tasks: Optional[List[str]] = None,
                 expected_splits: Optional[Dict[str, str]] = None,
+                expected_items: Optional[Dict[str, int]] = None,
                 allow_partial: bool = False,
                 now: Callable[[], str] = _utcnow,
                 ) -> Tuple[Set[str], dict]:
@@ -153,6 +179,7 @@ def build_index(n: int = DEFAULT_N, limit: Optional[int] = None,
         tasks, splits = _default_tasks()
         expected_tasks = expected_tasks if expected_tasks is not None else tasks
         expected_splits = expected_splits if expected_splits is not None else splits
+    expected_items = EXPECTED_ITEMS if expected_items is None else expected_items
 
     sources: Dict[str, dict] = {}
     loaded = loader(limit=limit, sources=sources)
@@ -180,6 +207,12 @@ def build_index(n: int = DEFAULT_N, limit: Optional[int] = None,
             problems.append(
                 f"task {name!r} was indexed on split {got!r} but is scored on "
                 f"{want!r}")
+        # Skipped under a limit, which truncates every task by construction.
+        wanted_items = expected_items.get(name) if limit is None else None
+        if wanted_items is not None and len(examples) != wanted_items:
+            problems.append(
+                f"task {name!r} loaded {len(examples):,} items but its scored "
+                f"split holds {wanted_items:,}")
         candidates = [ctx + " " + cont for ex in examples
                       for ctx, cont in ex.candidates]
         texts += candidates
@@ -218,6 +251,7 @@ def build_index(n: int = DEFAULT_N, limit: Optional[int] = None,
 def coverage_problems(provenance: dict,
                       expected_tasks: Optional[List[str]] = None,
                       expected_splits: Optional[Dict[str, str]] = None,
+                      expected_items: Optional[Dict[str, int]] = None,
                       ) -> List[str]:
     """Everything wrong with an index *as described by its own sidecar*.
 
@@ -231,6 +265,7 @@ def coverage_problems(provenance: dict,
         tasks, splits = _default_tasks()
         expected_tasks = expected_tasks if expected_tasks is not None else tasks
         expected_splits = expected_splits if expected_splits is not None else splits
+    expected_items = EXPECTED_ITEMS if expected_items is None else expected_items
 
     problems: List[str] = []
     if provenance.get("schema") != SCHEMA:
@@ -245,6 +280,10 @@ def coverage_problems(provenance: dict,
             continue
         if not meta.get("items"):
             problems.append(f"task {name!r} contributed no items")
+        elif expected_items.get(name) not in (None, meta.get("items")):
+            problems.append(
+                f"task {name!r} was indexed at {meta['items']:,} items but its "
+                f"scored split now holds {expected_items[name]:,}")
         want = expected_splits.get(name)
         got = meta.get("split")
         if want is not None and got != want:

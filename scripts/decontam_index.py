@@ -18,6 +18,7 @@ measurement of what the *unfrozen*, limited index let through.
 import argparse
 import json
 import os
+import resource
 import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,13 +62,22 @@ def _build(a) -> int:
 
 
 def _verify(a) -> int:
+    # `run_dataprep` forks one worker per source group and each carries the
+    # index, so what it costs resident is a per-worker number against a 4.0 GB
+    # cap on a ~2.9 GB baseline -- close enough to the cap to be worth
+    # measuring rather than assuming. Reported as a delta across the load; the
+    # high-water mark alone would include the interpreter.
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     try:
         ngrams, provenance = load_index(a.out, expect_digest=a.expect_digest)
     except (OSError, IndexDigestMismatch) as e:
         print(f"REFUSE: {e}", file=sys.stderr)
         return 2
+    after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     print(f"{a.out}: {len(ngrams):,} {provenance['n']}-grams")
     print(_report(provenance))
+    print(f"  resident cost of holding it: {(after - before) / 1024:,.0f} MB "
+          f"(paid once per dataprep worker)")
     problems = coverage_problems(provenance)
     if problems:
         print("\nthis index no longer covers what the model is scored on:",

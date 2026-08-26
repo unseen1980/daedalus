@@ -1585,15 +1585,19 @@ def _frozen_index(tmp_path, texts=("alpha " * 20,), complete=True):
     """A real written index, so these tests exercise the loader rather than a
     stub of it -- the digest check is the thing under test."""
     from daedalus.data import build_eval_ngram_index
-    from daedalus.eval_index import index_digest, write_index
+    from daedalus.eval_index import EXPECTED_ITEMS, index_digest, write_index
 
     ngrams = build_eval_ngram_index(list(texts), n=13)
     provenance = {
         "schema": 1, "n": 13, "limit": None if complete else 2000,
         "complete": complete, "ngrams": len(ngrams),
         "digest": index_digest(ngrams), "built_at": "2026-08-26T00:00:00Z",
-        "tasks": {name: {"items": 10, "candidates": 40, "split": split,
-                         "repo": f"org/{name}", "config": None, "revision": None}
+        # Real item counts and real splits: `run_dataprep` runs the coverage
+        # check against today's tasks, so a stub with round numbers in it would
+        # be refused for the right reason and prove nothing about the wiring.
+        "tasks": {name: {"items": EXPECTED_ITEMS[name], "candidates": 4 * EXPECTED_ITEMS[name],
+                         "split": split, "repo": f"org/{name}", "config": None,
+                         "revision": None}
                   for name, split in [("hellaswag", "validation"),
                                       ("arc_easy", "test"),
                                       ("piqa", "validation"),
@@ -1626,7 +1630,7 @@ def test_a_frozen_index_is_used_and_recorded_in_the_manifest(tmp_path, monkeypat
     assert record["path"] == path
     assert record["complete"] is True
     assert record["splits"]["arc_easy"] == "test"
-    assert record["items"]["hellaswag"] == 10
+    assert record["items"]["hellaswag"] == 10_042
 
 
 @_NEEDS_FORK

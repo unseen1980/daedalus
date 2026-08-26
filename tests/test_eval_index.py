@@ -67,6 +67,7 @@ def _build(**kw):
     kw.setdefault("loader", _loader())
     kw.setdefault("expected_tasks", TASKS)
     kw.setdefault("expected_splits", SPLITS)
+    kw.setdefault("expected_items", {})      # sized per test, not per benchmark
     kw.setdefault("now", lambda: "2026-08-26T00:00:00Z")
     return EI.build_index(n=13, **kw)
 
@@ -115,6 +116,35 @@ def test_a_limit_is_refused_unless_it_is_asked_for_explicitly():
 
     _, prov = _build(limit=2, allow_partial=True)
     assert prov["complete"] is False and prov["limit"] == 2
+
+
+def test_a_truncated_task_is_refused_even_though_it_loaded():
+    """The failure none of the other guards catch. The Hub is read
+    unauthenticated here, and a rate-limited split comes back short rather than
+    failing -- so a smaller index would be built, marked complete, digested and
+    used, with its own provenance asserting the opposite."""
+    with pytest.raises(EI.IncompleteIndex) as exc:
+        _build(expected_items={"hellaswag": 10_042})
+    message = str(exc.value)
+    assert "hellaswag" in message and "10,042" in message and "3" in message
+
+
+def test_the_expected_counts_describe_the_real_scored_splits():
+    """Pinned so a change to a benchmark's size is a decision someone makes
+    here rather than a number a rebuild quietly adopts."""
+    assert EI.EXPECTED_ITEMS == {"hellaswag": 10_042, "arc_easy": 2_376,
+                                 "piqa": 1_838, "openbookqa": 500,
+                                 "winogrande": 1_267}
+    import eval as E
+    assert set(EI.EXPECTED_ITEMS) == set(E.TASK_LOADERS)
+
+
+def test_a_limit_does_not_trip_the_item_count_guard():
+    """A partial index is short in every task by construction; refusing it for
+    being short would make `allow_partial` unusable."""
+    _, prov = _build(limit=2, allow_partial=True,
+                     expected_items={"hellaswag": 10_042})
+    assert prov["tasks"]["hellaswag"]["items"] == 2
 
 
 def test_every_gap_is_reported_at_once():
@@ -231,22 +261,33 @@ def test_a_written_index_still_matches_the_documents_it_indexed(tmp_path):
 
 def test_coverage_problems_reads_a_frozen_index_against_todays_tasks():
     _, prov = _build()
-    assert EI.coverage_problems(prov, TASKS, SPLITS) == []
+    assert EI.coverage_problems(prov, TASKS, SPLITS, {}) == []
 
     grown = TASKS + ["winogrande"]
-    problems = EI.coverage_problems(prov, grown, {**SPLITS, "winogrande": "validation"})
+    problems = EI.coverage_problems(prov, grown,
+                                    {**SPLITS, "winogrande": "validation"}, {})
     assert any("winogrande" in p for p in problems)
 
-    moved = EI.coverage_problems(prov, TASKS, {**SPLITS, "arc_easy": "validation"})
+    moved = EI.coverage_problems(prov, TASKS,
+                                 {**SPLITS, "arc_easy": "validation"}, {})
     assert any("arc_easy" in p for p in moved)
+
+
+def test_coverage_problems_flags_an_index_a_split_has_since_outgrown():
+    """A frozen index goes stale silently: the corpus it filtered is unchanged,
+    but the benchmark it was built from is not the one being scored."""
+    _, prov = _build()
+    problems = EI.coverage_problems(prov, TASKS, SPLITS, {"hellaswag": 10_042})
+    assert any("hellaswag" in p and "10,042" in p for p in problems)
 
 
 def test_coverage_problems_flags_a_partial_index():
     _, prov = _build(limit=2, allow_partial=True)
-    assert any("partial" in p for p in EI.coverage_problems(prov, TASKS, SPLITS))
+    assert any("partial" in p
+               for p in EI.coverage_problems(prov, TASKS, SPLITS, {}))
 
 
-def test_manifest_record_carries_the_identity_and_the_coverage(tmp_path):
+def test_manifest_record_carries_the_identity_and_the_coverage():
     _, prov = _build()
     record = EI.manifest_record(prov, path="data/decontam/eval-index-13gram.txt.gz")
     assert record["digest"] == prov["digest"]
