@@ -286,6 +286,20 @@ The blend reproduces from the parts under the sampler's own weights — 3.540292
 
 `train.py` is a shared file, so this is on the optimization branch by the plan's own rule for shared work, and it forward-merges into the code branch.
 
+## Phase 8 groundwork: the DPO gate's accuracy began at 0.000 and rose on any movement at all
+
+Phase 8 step 7 keeps the DPO model over the SFT one only if **held-out preference accuracy improves**. That number could not be measured. The only accuracy anything reported was `dpo_loss`'s — `(π_c − π_r) − (ref_c − ref_r) > 0`, computed on the pairs the step had just trained on, against a reference `_run_dpo_stage` builds by deepcopying the policy before step 1. Policy == reference makes every margin identically zero, so it **starts at exactly 0.000** and any movement, in any direction, reads as an improvement. A gate that cannot return *no* is not a gate, and this one would have kept the DPO model unconditionally.
+
+`daedalus.dpo.preference_metrics` is the absolute version: the fraction of pairs where the model itself puts more probability on the chosen response than on the rejected one. One model, no reference, so it can be read for the SFT model and the DPO model separately and compared — which is how the plan writes the rule, and the comparison the relative metric cannot express.
+
+**Two accuracies, on purpose.** `sequence_logprob` is a sum, so every extra token subtracts from it and a longer response is penalised for its length alone; UltraFeedback's chosen responses are typically the longer ones, so the sum-based accuracy can sit below 0.5 on a perfectly sound model. That bias is constant across before/after on the same pairs and cancels in the delta, so `accuracy` stays primary — it is what DPO optimises. `accuracy_len_norm` divides each side by its own supervised-token count and is the control: a gain in one and not the other is a length shift wearing a preference gain's clothes. Pinned by a test where the chosen side is better per token and four times longer, and the two disagree **0.0 against 1.0**.
+
+**Held out by splitting one iterator.** `take_eval_pairs` returns the head and the tail, so a pair handed to the gate is one `run_dpo` can never reach. A second `load_dataset` call would instead rely on two streams agreeing about order, and when they quietly disagree the gate scores pairs the round trained on and reports that it memorised its own data. `--dpo-eval-split` covers datasets that ship a real held-out split. The before-model is the frozen reference read *after* the round — it is a snapshot taken before the first step and it never moves, so this costs no second pass and removes the chance of scoring the two models on different pairs.
+
+`--dpo-eval-pairs` defaults to **128**, which shifts the DPO training stream by 128 pairs out of one far larger than the ~1000 a 500-step round consumes. Off by default would leave the misleading training-pair number as the only accuracy anyone reads, which is the failure being removed.
+
+This is **half** of step 7. Execution pass@1 is the other half and stays `scripts/code_eval.py` on an exported checkpoint, out of band; `runs/<name>/dpo-eval.json` says so in its own `gate` field rather than leaving a reader to assume `accuracy_improved` is the gate. `post.py` and `daedalus/dpo.py` are shared files, so this is on the optimization branch by the plan's rule for shared work and forward-merges into the code branch.
+
 ## Control plane
 
 `daedalus/program_state.py` holds an atomic snapshot beside an append-only timeline; `scripts/vast_program.py` owns phases, one-process leases, and deadline gates; `scripts/boot_resume.py` resumes only an approved incomplete marker; `scripts/github_progress.py` publishes a sanitized heartbeat from an isolated worktree; `ops/vast/run-approved` is the only shell, Git, PR, and evaluation surface an engineering session may use, and it refuses default-branch pushes, PR merges, secret paths, and arbitrary shell fragments.
