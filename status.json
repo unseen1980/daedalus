@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 45.0,
-    "finalization_in_hours": 91.0,
+    "elapsed_hours": 45.08,
+    "finalization_in_hours": 90.92,
     "hard_hours": 144.0,
-    "remaining_hours": 99.0,
+    "remaining_hours": 98.92,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,13 +16,13 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T07:44:24.964955Z",
+  "heartbeat_at": "2026-08-26T07:49:26.500306Z",
   "metrics": {},
   "phase": "phase6-stagec-go-no-go",
   "schema": 1,
   "source_branch": "vast/daedalus-improvements-20260824",
-  "source_sha": "8be489c52353",
+  "source_sha": "1893ce5e950e",
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "passed",
-  "updated_at": "2026-08-26T07:21:57.056226Z"
+  "updated_at": "2026-08-26T07:49:01.271933Z"
 }
