@@ -1,0 +1,76 @@
+{
+  "conditions": {
+    "deadline": {
+      "finalizes_at": "2026-08-30T02:44:35.993665Z",
+      "hours_available": 92.00857815333333,
+      "hours_needed": 7.789926777415805,
+      "note": "7.8 hours needed against 92.0 before finalization opens",
+      "stage": "active",
+      "status": "pass"
+    },
+    "discrimination": {
+      "arms": 4,
+      "explained_spread_pct": 0.8435117639194704,
+      "exponent": 0.34,
+      "measured_spread_pct": 0.2644531082461263,
+      "narrowest": "a8-kv4",
+      "note": "BPB spans only 0.26 points across 4 arms, inside the 0.84 points their 2.48% parameter spread could explain on its own; the ordering is not separable from the grid's matching residual at this scale",
+      "param_spread_pct": 2.4809169527043244,
+      "status": "fail",
+      "widest": "a4-kv4"
+    },
+    "finalists": {
+      "blocked": [
+        "a3-kv4",
+        "a4-kv4",
+        "a6-kv4",
+        "a8-kv4"
+      ],
+      "dropped_from_frontier": [],
+      "eligible": [],
+      "frontier": [],
+      "max_arms": 2,
+      "note": "every non-control arm is blocked (['a3-kv4', 'a4-kv4', 'a6-kv4', 'a8-kv4']); a measured failure does not reopen at four times the budget",
+      "selected": [],
+      "status": "fail",
+      "unscored": [],
+      "verdicts": {
+        "a3-kv4": "blocked",
+        "a4-kv4": "blocked",
+        "a6-kv4": "blocked",
+        "a8-kv4": "blocked"
+      }
+    }
+  },
+  "control": "a8-kv4",
+  "created_at": "2026-08-26T06:44:05.112336Z",
+  "finalists": [],
+  "go_would_have_required": {
+    "deadline": "92.0 hours before finalization to cover 7.8",
+    "discrimination": "a measured BPB spread wider than 0.84 points, against the 0.26 observed",
+    "finalists": "at least one non-control arm not blocked, of 4 gated"
+  },
+  "note": "stage-b does not hand on a stage C: ['discrimination', 'finalists'] unmet. This is a preregistered negative result and not a deferral -- the numbers that decided it are in `conditions`, and the shapes stand on the evidence already gathered. Re-running the decision at a looser condition after seeing this would be threshold-tuning.",
+  "read": {
+    "recommendation": "runs/architecture/stageb-recommendation.json",
+    "report": "runs/architecture/stageb-report.json",
+    "state": "runs/vast-program/state.json"
+  },
+  "shape": {
+    "name": "stage-b",
+    "total_tokens": 251658240
+  },
+  "stage_c": {
+    "extra_hours": 1.0,
+    "hours_needed": 7.789926777415805,
+    "max_arms": 2,
+    "total_tokens": 1006632960,
+    "training_hours": 6.789926777415805
+  },
+  "tag": "stageb",
+  "unmet": [
+    "discrimination",
+    "finalists"
+  ],
+  "verdict": "no-go"
+}

@@ -1,0 +1,678 @@
+{
+  "arms": [
+    {
+      "arm": "a8-kv4",
+      "checks": {
+        "bpb": {
+          "bpb_delta_pct": 0.0,
+          "credited_bpb_delta_pct": 0.0,
+          "floor_pct": 0.5,
+          "note": "BPB +0.00% against the control, within the 0.5% floor",
+          "status": "pass"
+        },
+        "decode": {
+          "artifact_MB": 101.18,
+          "artifact_growth_pct": 0.0,
+          "artifact_source": "measured",
+          "control_artifact_MB": 101.18,
+          "depths": {
+            "0": {
+              "arm_file_mb": 101.18,
+              "arm_stdev": 3.07,
+              "arm_tok_s": 241.59,
+              "control_file_mb": 101.18,
+              "control_stdev": 3.07,
+              "control_tok_s": 241.59,
+              "delta_pct": 0.0,
+              "ratio": 1.0,
+              "threads": 8
+            },
+            "2048": {
+              "arm_file_mb": 101.18,
+              "arm_stdev": 1.47,
+              "arm_tok_s": 207.72,
+              "control_file_mb": 101.18,
+              "control_stdev": 1.47,
+              "control_tok_s": 207.72,
+              "delta_pct": 0.0,
+              "ratio": 1.0,
+              "threads": 8
+            }
+          },
+          "long_context_advantage_pct": 0.0,
+          "max_artifact_growth_pct": 5.0,
+          "max_decode_loss_pct": 5.0,
+          "note": "artifact +0.0%, decode +0.0% at depth 0 and +0.0% at 2048; the ratio to the control moves +0.0% with depth",
+          "status": "pass"
+        },
+        "export": {
+          "artifact_kinds": [
+            "gguf-q4_0"
+          ],
+          "note": "stock llama.cpp loaded and generated from ['gguf-q4_0']",
+          "status": "pass"
+        },
+        "kv": {
+          "at_or_under_preferred": false,
+          "ceiling": 6144,
+          "kv_bytes_per_context_token": 8192,
+          "note": "8,192 KV bytes per context token, over the 6,144 ceiling",
+          "preferred": 4096,
+          "status": "fail"
+        },
+        "retrieval": {
+          "cells": [
+            {
+              "control_exact_match": 0.96,
+              "depth": 256,
+              "drop_points": 0.0,
+              "exact_match": 0.96,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 1.0,
+              "depth": 512,
+              "drop_points": 0.0,
+              "exact_match": 1.0,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 1.0,
+              "depth": 1024,
+              "drop_points": 0.0,
+              "exact_match": 1.0,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.62,
+              "depth": 2048,
+              "drop_points": 0.0,
+              "exact_match": 0.62,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.08,
+              "depth": 256,
+              "drop_points": 0.0,
+              "exact_match": 0.08,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.04,
+              "depth": 512,
+              "drop_points": 0.0,
+              "exact_match": 0.04,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 1024,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 2048,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            }
+          ],
+          "max_drop_points": 2.0,
+          "note": "2 of 8 task/depth cells could not carry the 2-point gate; retention is not demonstrated at this scale",
+          "status": "no-power"
+        }
+      },
+      "failed": [
+        "kv"
+      ],
+      "is_control": true,
+      "preset": "arch-b-a8-kv4",
+      "reason": "failed ['kv'] against the preregistered gate; ['retrieval'] also unproven",
+      "unproven": [
+        "retrieval"
+      ],
+      "verdict": "blocked"
+    },
+    {
+      "arm": "a6-kv4",
+      "checks": {
+        "bpb": {
+          "bpb_delta_pct": 0.07030376946544793,
+          "credited_bpb_delta_pct": 0.40770847503323604,
+          "floor_pct": 0.5,
+          "note": "BPB +0.07% against the control, within the 0.5% floor",
+          "status": "pass"
+        },
+        "decode": {
+          "artifact_MB": 102.08,
+          "artifact_growth_pct": 0.8895038545166944,
+          "artifact_source": "measured",
+          "control_artifact_MB": 101.18,
+          "depths": {
+            "0": {
+              "arm_file_mb": 102.08,
+              "arm_stdev": 8.46,
+              "arm_tok_s": 243.57,
+              "control_file_mb": 101.18,
+              "control_stdev": 3.07,
+              "control_tok_s": 241.59,
+              "delta_pct": 0.8195703464547331,
+              "ratio": 1.0081957034645472,
+              "threads": 8
+            },
+            "2048": {
+              "arm_file_mb": 102.08,
+              "arm_stdev": 5.78,
+              "arm_tok_s": 216.19,
+              "control_file_mb": 101.18,
+              "control_stdev": 1.47,
+              "control_tok_s": 207.72,
+              "delta_pct": 4.077604467552474,
+              "ratio": 1.0407760446755248,
+              "threads": 8
+            }
+          },
+          "long_context_advantage_pct": 3.2315493012932794,
+          "max_artifact_growth_pct": 5.0,
+          "max_decode_loss_pct": 5.0,
+          "note": "artifact +0.9%, decode +0.8% at depth 0 and +4.1% at 2048; the ratio to the control moves +3.2% with depth",
+          "status": "pass"
+        },
+        "export": {
+          "artifact_kinds": [
+            "gguf-q4_0"
+          ],
+          "note": "stock llama.cpp loaded and generated from ['gguf-q4_0']",
+          "status": "pass"
+        },
+        "kv": {
+          "at_or_under_preferred": false,
+          "ceiling": 6144,
+          "kv_bytes_per_context_token": 6144,
+          "note": "6,144 KV bytes per context token, at or under the 6,144 ceiling",
+          "preferred": 4096,
+          "status": "pass"
+        },
+        "retrieval": {
+          "cells": [
+            {
+              "control_exact_match": 0.96,
+              "depth": 256,
+              "drop_points": 14.000000000000002,
+              "exact_match": 0.82,
+              "items": 50,
+              "note": "+14.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 1.0,
+              "depth": 512,
+              "drop_points": 18.000000000000004,
+              "exact_match": 0.82,
+              "items": 50,
+              "note": "+18.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 1.0,
+              "depth": 1024,
+              "drop_points": 19.999999999999996,
+              "exact_match": 0.8,
+              "items": 50,
+              "note": "+20.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.62,
+              "depth": 2048,
+              "drop_points": 2.0000000000000018,
+              "exact_match": 0.6,
+              "items": 50,
+              "note": "+2.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.08,
+              "depth": 256,
+              "drop_points": -14.000000000000002,
+              "exact_match": 0.22,
+              "items": 50,
+              "note": "-14.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.04,
+              "depth": 512,
+              "drop_points": -1.9999999999999998,
+              "exact_match": 0.06,
+              "items": 50,
+              "note": "-2.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 1024,
+              "drop_points": -6.0,
+              "exact_match": 0.06,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 2048,
+              "drop_points": -4.0,
+              "exact_match": 0.04,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            }
+          ],
+          "max_drop_points": 2.0,
+          "note": "passkey at depth 1024 is 20.0 points under the control, past the 2-point gate",
+          "status": "fail"
+        }
+      },
+      "failed": [
+        "retrieval"
+      ],
+      "is_control": false,
+      "preset": "arch-b-a6-kv4",
+      "reason": "failed ['retrieval'] against the preregistered gate",
+      "unproven": [],
+      "verdict": "blocked"
+    },
+    {
+      "arm": "a4-kv4",
+      "checks": {
+        "bpb": {
+          "bpb_delta_pct": 0.2644531082461263,
+          "credited_bpb_delta_pct": 0.9392625193817026,
+          "floor_pct": 0.5,
+          "note": "BPB +0.26% against the control, within the 0.5% floor",
+          "status": "pass"
+        },
+        "decode": {
+          "artifact_MB": 102.98,
+          "artifact_growth_pct": 1.7790077090334029,
+          "artifact_source": "measured",
+          "control_artifact_MB": 101.18,
+          "depths": {
+            "0": {
+              "arm_file_mb": 102.98,
+              "arm_stdev": 8.54,
+              "arm_tok_s": 245.42,
+              "control_file_mb": 101.18,
+              "control_stdev": 3.07,
+              "control_tok_s": 241.59,
+              "delta_pct": 1.5853305186472884,
+              "ratio": 1.0158533051864729,
+              "threads": 8
+            },
+            "2048": {
+              "arm_file_mb": 102.98,
+              "arm_stdev": 4.09,
+              "arm_tok_s": 226.46,
+              "control_file_mb": 101.18,
+              "control_stdev": 1.47,
+              "control_tok_s": 207.72,
+              "delta_pct": 9.021760061621418,
+              "ratio": 1.090217600616214,
+              "threads": 8
+            }
+          },
+          "long_context_advantage_pct": 7.320377366502795,
+          "max_artifact_growth_pct": 5.0,
+          "max_decode_loss_pct": 5.0,
+          "note": "artifact +1.8%, decode +1.6% at depth 0 and +9.0% at 2048; the ratio to the control moves +7.3% with depth",
+          "status": "pass"
+        },
+        "export": {
+          "artifact_kinds": [
+            "gguf-q4_0"
+          ],
+          "note": "stock llama.cpp loaded and generated from ['gguf-q4_0']",
+          "status": "pass"
+        },
+        "kv": {
+          "at_or_under_preferred": true,
+          "ceiling": 6144,
+          "kv_bytes_per_context_token": 4096,
+          "note": "4,096 KV bytes per context token, at or under the 6,144 ceiling and at or under the preferred 4,096",
+          "preferred": 4096,
+          "status": "pass"
+        },
+        "retrieval": {
+          "cells": [
+            {
+              "control_exact_match": 0.96,
+              "depth": 256,
+              "drop_points": 41.99999999999999,
+              "exact_match": 0.54,
+              "items": 50,
+              "note": "+42.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 1.0,
+              "depth": 512,
+              "drop_points": 26.0,
+              "exact_match": 0.74,
+              "items": 50,
+              "note": "+26.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 1.0,
+              "depth": 1024,
+              "drop_points": 6.000000000000005,
+              "exact_match": 0.94,
+              "items": 50,
+              "note": "+6.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.62,
+              "depth": 2048,
+              "drop_points": 18.0,
+              "exact_match": 0.44,
+              "items": 50,
+              "note": "+18.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.08,
+              "depth": 256,
+              "drop_points": -10.0,
+              "exact_match": 0.18,
+              "items": 50,
+              "note": "-10.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.04,
+              "depth": 512,
+              "drop_points": -6.000000000000001,
+              "exact_match": 0.1,
+              "items": 50,
+              "note": "-6.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 1024,
+              "drop_points": -4.0,
+              "exact_match": 0.04,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 2048,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            }
+          ],
+          "max_drop_points": 2.0,
+          "note": "passkey at depth 256 is 42.0 points under the control, past the 2-point gate",
+          "status": "fail"
+        }
+      },
+      "failed": [
+        "retrieval"
+      ],
+      "is_control": false,
+      "preset": "arch-b-a4-kv4",
+      "reason": "failed ['retrieval'] against the preregistered gate",
+      "unproven": [],
+      "verdict": "blocked"
+    },
+    {
+      "arm": "a3-kv4",
+      "checks": {
+        "bpb": {
+          "bpb_delta_pct": 0.18438337221455853,
+          "credited_bpb_delta_pct": 1.027895136134029,
+          "floor_pct": 0.5,
+          "note": "BPB +0.18% against the control, within the 0.5% floor",
+          "status": "pass"
+        },
+        "decode": {
+          "artifact_MB": 103.43,
+          "artifact_growth_pct": 2.2237596362917573,
+          "artifact_source": "measured",
+          "control_artifact_MB": 101.18,
+          "depths": {
+            "0": {
+              "arm_file_mb": 103.43,
+              "arm_stdev": 3.38,
+              "arm_tok_s": 249.69,
+              "control_file_mb": 101.18,
+              "control_stdev": 3.07,
+              "control_tok_s": 241.59,
+              "delta_pct": 3.352787780951196,
+              "ratio": 1.033527877809512,
+              "threads": 8
+            },
+            "2048": {
+              "arm_file_mb": 103.43,
+              "arm_stdev": 22.5,
+              "arm_tok_s": 212.44,
+              "control_file_mb": 101.18,
+              "control_stdev": 1.47,
+              "control_tok_s": 207.72,
+              "delta_pct": 2.272289620643173,
+              "ratio": 1.0227228962064316,
+              "threads": 8
+            }
+          },
+          "long_context_advantage_pct": -1.0454465559246229,
+          "max_artifact_growth_pct": 5.0,
+          "max_decode_loss_pct": 5.0,
+          "note": "artifact +2.2%, decode +3.4% at depth 0 and +2.3% at 2048; the ratio to the control moves -1.0% with depth",
+          "status": "pass"
+        },
+        "export": {
+          "artifact_kinds": [
+            "gguf-q4_0"
+          ],
+          "note": "stock llama.cpp loaded and generated from ['gguf-q4_0']",
+          "status": "pass"
+        },
+        "kv": {
+          "at_or_under_preferred": true,
+          "ceiling": 6144,
+          "kv_bytes_per_context_token": 3072,
+          "note": "3,072 KV bytes per context token, at or under the 6,144 ceiling and at or under the preferred 4,096",
+          "preferred": 4096,
+          "status": "pass"
+        },
+        "retrieval": {
+          "cells": [
+            {
+              "control_exact_match": 0.96,
+              "depth": 256,
+              "drop_points": 38.0,
+              "exact_match": 0.58,
+              "items": 50,
+              "note": "+38.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 1.0,
+              "depth": 512,
+              "drop_points": 34.0,
+              "exact_match": 0.66,
+              "items": 50,
+              "note": "+34.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 1.0,
+              "depth": 1024,
+              "drop_points": 28.000000000000004,
+              "exact_match": 0.72,
+              "items": 50,
+              "note": "+28.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.62,
+              "depth": 2048,
+              "drop_points": 21.999999999999996,
+              "exact_match": 0.4,
+              "items": 50,
+              "note": "+22.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.08,
+              "depth": 256,
+              "drop_points": -26.0,
+              "exact_match": 0.34,
+              "items": 50,
+              "note": "-26.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.04,
+              "depth": 512,
+              "drop_points": -10.0,
+              "exact_match": 0.14,
+              "items": 50,
+              "note": "-10.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 1024,
+              "drop_points": -2.0,
+              "exact_match": 0.02,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 2048,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            }
+          ],
+          "max_drop_points": 2.0,
+          "note": "passkey at depth 256 is 38.0 points under the control, past the 2-point gate",
+          "status": "fail"
+        }
+      },
+      "failed": [
+        "retrieval"
+      ],
+      "is_control": false,
+      "preset": "arch-b-a3-kv4",
+      "reason": "failed ['retrieval'] against the preregistered gate",
+      "unproven": [],
+      "verdict": "blocked"
+    }
+  ],
+  "blocked": [
+    "a8-kv4",
+    "a6-kv4",
+    "a4-kv4",
+    "a3-kv4"
+  ],
+  "caveats": [
+    "A ranking measured on 159M-parameter proxies over 252M tokens is a ranking at that scale. Depth, attention fraction and KV-head choices do not extrapolate cleanly to a materially larger successor; the deliverable is a set to sanity-check a decision, not a configuration to copy.",
+    "Parameter and byte accounting and KV bytes per context token transfer more reliably than the quality ranking does: the first is arithmetic and the second is a deployment constraint that binds harder as the model grows.",
+    "Apple Silicon decode is pending the Mac run. The decode column here is this box's CPU, which fixes the shape of the curve and not the number a user would feel."
+  ],
+  "control": "a8-kv4",
+  "created_at": "2026-08-26T06:43:21.985301Z",
+  "decode_report": "runs/architecture/decode-stageb.json",
+  "gate": {
+    "bpb_floor_pct": 0.5,
+    "columns": [
+      "bpb",
+      "retrieval",
+      "kv",
+      "export",
+      "decode"
+    ],
+    "kv_ceiling": 6144,
+    "kv_preferred": 4096,
+    "max_artifact_growth_pct": 5.0,
+    "max_decode_loss_pct": 5.0,
+    "retrieval_max_drop_points": 2.0,
+    "retrieval_min_items_per_depth": 50,
+    "trained_context": 2048
+  },
+  "holdout_source": "fineweb-edu",
+  "note": "no shape clears every preregistered column, so this phase recommends none. That is a statement about the evidence, not about the shapes: see `unproven` for the columns still to be measured.",
+  "pareto_set": [],
+  "retrieval_root": "runs/architecture/retrieval",
+  "shape": {
+    "name": "stage-b",
+    "seq_len": 2048,
+    "steps": 3840,
+    "total_tokens": 251658240
+  },
+  "tag": "stageb",
+  "unproven": [],
+  "verdict": "no-recommendation"
+}

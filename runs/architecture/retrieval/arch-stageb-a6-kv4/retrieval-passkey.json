@@ -1,0 +1,63 @@
+{
+  "created_at": "2026-08-26T06:30:16.463472Z",
+  "details": {},
+  "item_count": 200,
+  "item_digest": "18988ce7c19aa7618f900c8652e58a8e",
+  "kind": "retrieval",
+  "metrics": {
+    "exact_match": 0.76,
+    "exact_match_d1024": 0.8,
+    "exact_match_d2048": 0.6,
+    "exact_match_d256": 0.82,
+    "exact_match_d512": 0.82,
+    "n": 200.0,
+    "n_d1024": 50.0,
+    "n_d2048": 50.0,
+    "n_d256": 50.0,
+    "n_d512": 50.0,
+    "query_accuracy": 0.76
+  },
+  "name": "retrieval-passkey",
+  "provenance": {
+    "artifact": {
+      "config": null,
+      "kind": "gguf-q4_0",
+      "path": "runs/architecture/evidence/arch-stageb-a6-kv4/model-q4_0.gguf",
+      "revision": null,
+      "sha256": "b3ddf0ea518db27269a8a838dca1da940e7de96fd591004935e5d7b839cf7a6f"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "d66fa46",
+    "runtime": {
+      "backend": "llama-cpp",
+      "chat_template": "{%- for message in messages -%}{{ message['content'] }}{%- endfor -%}",
+      "device": "cpu",
+      "llama_cli": "/opt/llama.cpp/build/bin/llama-cli",
+      "llama_cli_flags": [
+        "--top-k",
+        "-s",
+        "-t",
+        "-ngl",
+        "--no-warmup",
+        "-st",
+        "--single-turn",
+        "--no-display-prompt"
+      ],
+      "max_new_tokens": 24,
+      "raw_completion_via": "passthrough-template",
+      "template_mode": "raw-completion",
+      "threads": 8
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<none>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

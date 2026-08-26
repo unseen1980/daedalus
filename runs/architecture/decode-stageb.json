@@ -1,0 +1,110 @@
+{
+  "passes": [
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 0,
+      "rounds": 3,
+      "models": {
+        "arch-stageb-a8-kv4": {
+          "path": "runs/architecture/evidence/arch-stageb-a8-kv4/model-q4_0.gguf",
+          "file_mb": 101.18,
+          "samples": [
+            238.05,
+            243.21,
+            243.51
+          ],
+          "mean": 241.59,
+          "stdev": 3.07
+        },
+        "arch-stageb-a3-kv4": {
+          "path": "runs/architecture/evidence/arch-stageb-a3-kv4/model-q4_0.gguf",
+          "file_mb": 103.43,
+          "samples": [
+            246.26,
+            249.76,
+            253.03
+          ],
+          "mean": 249.69,
+          "stdev": 3.38
+        },
+        "arch-stageb-a4-kv4": {
+          "path": "runs/architecture/evidence/arch-stageb-a4-kv4/model-q4_0.gguf",
+          "file_mb": 102.98,
+          "samples": [
+            253.13,
+            236.24,
+            246.9
+          ],
+          "mean": 245.42,
+          "stdev": 8.54
+        },
+        "arch-stageb-a6-kv4": {
+          "path": "runs/architecture/evidence/arch-stageb-a6-kv4/model-q4_0.gguf",
+          "file_mb": 102.08,
+          "samples": [
+            246.54,
+            234.03,
+            250.15
+          ],
+          "mean": 243.57,
+          "stdev": 8.46
+        }
+      }
+    },
+    {
+      "threads": 8,
+      "n_gen": 128,
+      "depth": 2048,
+      "rounds": 3,
+      "models": {
+        "arch-stageb-a8-kv4": {
+          "path": "runs/architecture/evidence/arch-stageb-a8-kv4/model-q4_0.gguf",
+          "file_mb": 101.18,
+          "samples": [
+            207.6,
+            206.31,
+            209.24
+          ],
+          "mean": 207.72,
+          "stdev": 1.47
+        },
+        "arch-stageb-a3-kv4": {
+          "path": "runs/architecture/evidence/arch-stageb-a3-kv4/model-q4_0.gguf",
+          "file_mb": 103.43,
+          "samples": [
+            220.71,
+            186.98,
+            229.64
+          ],
+          "mean": 212.44,
+          "stdev": 22.5
+        },
+        "arch-stageb-a4-kv4": {
+          "path": "runs/architecture/evidence/arch-stageb-a4-kv4/model-q4_0.gguf",
+          "file_mb": 102.98,
+          "samples": [
+            230.66,
+            222.49,
+            226.24
+          ],
+          "mean": 226.46,
+          "stdev": 4.09
+        },
+        "arch-stageb-a6-kv4": {
+          "path": "runs/architecture/evidence/arch-stageb-a6-kv4/model-q4_0.gguf",
+          "file_mb": 102.08,
+          "samples": [
+            217.73,
+            221.04,
+            209.8
+          ],
+          "mean": 216.19,
+          "stdev": 5.78
+        }
+      }
+    }
+  ],
+  "note": "stage-B decode, 8 of 24 threads; GPU idle, no other lane running, no scoring or training pass on the box",
+  "metric": "llama-bench decode tok/s (-p 0), alternating rounds; absolute values depend on concurrent box load and are comparable only within one invocation -- the ratio is the durable number"
+}

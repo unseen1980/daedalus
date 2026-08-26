@@ -1,0 +1,57 @@
+{
+  "created_at": "2026-08-26T06:21:51.299599Z",
+  "details": {},
+  "item_count": 8,
+  "item_digest": "b73405a898a64c1dc5d980bcaeddd1f7",
+  "kind": "retrieval",
+  "metrics": {
+    "exact_match": 0.0,
+    "exact_match_d0": 0.0,
+    "n": 8.0,
+    "n_d0": 8.0,
+    "query_accuracy": 0.0
+  },
+  "name": "retrieval-copy-control",
+  "provenance": {
+    "artifact": {
+      "config": null,
+      "kind": "gguf-q4_0",
+      "path": "runs/architecture/evidence/arch-stageb-a3-kv4/model-q4_0.gguf",
+      "revision": null,
+      "sha256": "df67e330caf5c79e399cb1b9521f74336946e8272a7ae0c20ec021fc455aece7"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "d66fa46",
+    "runtime": {
+      "backend": "llama-cpp",
+      "chat_template": "{%- for message in messages -%}{{ message['content'] }}{%- endfor -%}",
+      "device": "cpu",
+      "llama_cli": "/opt/llama.cpp/build/bin/llama-cli",
+      "llama_cli_flags": [
+        "--top-k",
+        "-s",
+        "-t",
+        "-ngl",
+        "--no-warmup",
+        "-st",
+        "--single-turn",
+        "--no-display-prompt"
+      ],
+      "max_new_tokens": 24,
+      "raw_completion_via": "passthrough-template",
+      "template_mode": "raw-completion",
+      "threads": 8
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<none>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}
