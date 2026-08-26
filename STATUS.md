@@ -2,12 +2,12 @@
 
 > **Action required.** 3 repair continuations failed on phase phase8-codeprep-gate
 
-- Heartbeat: `2026-08-26T18:26:57.804927Z`
+- Heartbeat: `2026-08-26T18:32:00.593710Z`
 - Phase: `phase8-codeprep-gate`
 - Status: `blocked`
 - Source: `vast/daedalus-code-20260824` at `5124c1209000`
-- Elapsed: `55.71h` of `144.0h`
-- Finalization window opens in: `80.29h`
+- Elapsed: `55.79h` of `144.0h`
+- Finalization window opens in: `80.21h`
 - Deadline stage: `active`
 
 ## Lanes
