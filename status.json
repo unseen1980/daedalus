@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 51.7,
-    "finalization_in_hours": 84.3,
+    "elapsed_hours": 51.78,
+    "finalization_in_hours": 84.22,
     "hard_hours": 144.0,
-    "remaining_hours": 92.3,
+    "remaining_hours": 92.22,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T14:26:26.371635Z",
+  "heartbeat_at": "2026-08-26T14:31:27.866108Z",
   "metrics": {},
   "phase": "phase8-code-harness-oracle-mbpp",
   "schema": 1,
