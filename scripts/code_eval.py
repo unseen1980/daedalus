@@ -491,6 +491,12 @@ def run_in_sandbox(solution: str, test_code: str, *,
 # different input and be scored against it.
 _PLUS_TEMPLATE = '''
 import copy as _copy, math as _math
+# The inputs below are written with `repr`, and `repr(float("inf"))` is `inf` --
+# a *name*, not a literal. Without these two, every problem whose extended
+# inputs reach the floating-point extremes died on `NameError: name 'inf' is
+# not defined` before a single comparison ran. Invisible until the base suite
+# started passing, because the extended suite only runs on top of it.
+from math import inf, nan
 
 _reference_source = {reference}
 _reference_namespace = {{}}
@@ -668,7 +674,12 @@ def evaluate_problems(problems: Dict[str, dict], backend, *,
             "syntax_valid": int(syntax_valid),
             "category": base["category"] if not base_passed
             else (plus["category"] if plus and not plus_passed else None),
-            "detail": base["detail"] if not base_passed else "",
+            # Whichever suite failed, not only the base one. An extended-suite
+            # failure used to record its category with an empty detail, so the
+            # `NameError` above could not be diagnosed from the scorecard at
+            # all -- the run had to be reproduced by hand to see the message.
+            "detail": base["detail"] if not base_passed
+            else (plus["detail"] if plus and not plus_passed else ""),
             "syntax_error": syntax_message,
             "completion": completion,
             "solution": solution,

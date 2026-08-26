@@ -720,6 +720,50 @@ def test_an_input_the_reference_rejects_must_be_rejected_by_the_candidate():
 
 
 @pytest.mark.slow
+def test_extended_inputs_at_the_floating_point_extremes_are_runnable():
+    """Inputs are written into the test program with `repr`, and
+    `repr(float('inf'))` is `inf` -- a name, not a literal. Every problem whose
+    extended inputs reach infinity or NaN died on `NameError` before a single
+    comparison ran, and it stayed invisible because the extended suite only
+    runs on top of a passing base suite."""
+    from scripts.code_eval import evaluate_problems
+
+    solution = "def smaller(a, b):\n    return min(a, b)\n"
+    problems = {
+        "Mbpp/404": {
+            "task_id": "Mbpp/404",
+            "prompt": '"""\nThe smaller of two numbers.\n"""\n',
+            "entry_point": "smaller",
+            "canonical_solution": solution,
+            "base_input": [[1, 2]],
+            "plus_input": [[float("-inf"), 1e100], [float("nan"), 1.0], [2, 3]],
+            "atol": 0,
+        },
+    }
+
+    records = evaluate_problems(problems, ScriptedBackend({"Mbpp/404": solution}),
+                                timeout_s=10.0)
+
+    assert records[0]["plus_passed"] == 1, records[0]["detail"][-400:]
+
+
+@pytest.mark.slow
+def test_an_extended_suite_failure_records_why_it_failed():
+    """It used to record a category with an empty detail, so a harness defect
+    in the extended suite could not be diagnosed from the scorecard at all."""
+    from scripts.code_eval import evaluate_problems
+
+    problems = _fake_mbpp_problems()
+    backend = ScriptedBackend({
+        "Mbpp/2": "def add(a, b):\n    return a + b if a >= 0 else 99\n"})
+
+    records = evaluate_problems(problems, backend, timeout_s=10.0)
+
+    assert records[0]["base_passed"] == 1 and records[0]["plus_passed"] == 0
+    assert "plus input" in records[0]["detail"]
+
+
+@pytest.mark.slow
 def test_the_oracle_backend_returns_the_datasets_own_solution():
     """An oracle pass measures the harness, so it must run the reference
     through the same extraction and sandbox a candidate goes through."""
@@ -895,6 +939,25 @@ def test_the_real_mbpp_plus_schema_is_the_one_this_harness_reads():
         ("def ", "import ", "from ")), repr(problem["canonical_solution"][:200])
     assert problem["prompt"].lstrip().startswith('"""'), \
         repr(problem["prompt"][:200])
+
+
+@pytest.mark.slow
+def test_the_real_mbpp_reference_passes_an_input_it_rejects_itself():
+    """`Mbpp/404` is `min(a, b)` and one extended input is `[None, 3]`, which
+    the reference refuses. Pinned to the dataset rather than to a fixture,
+    because the fixture version of this passed while the real one did not."""
+    pytest.importorskip("evalplus", reason="evalplus absent")
+    from scripts.code_eval import load_problems, run_in_sandbox, test_program_for
+
+    problem = load_problems("mbpp-plus")["Mbpp/404"]
+    reference = f"{problem['prompt']}{problem['canonical_solution']}"
+
+    verdict = run_in_sandbox(reference, test_program_for(problem, "plus"),
+                             timeout_s=30.0)
+
+    assert verdict["status"] == "passed", (
+        f"the reference failed its own extended suite -- "
+        f"{verdict['category']}: {verdict['detail'][-600:]}")
 
 
 @pytest.mark.slow
