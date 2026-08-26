@@ -340,6 +340,42 @@ def score_arm(arm: ArchArm, *, holdout_root: str, tag: str = "stagea",
             "checkpoint_sha256": digest}
 
 
+def swept_arms(tag: str, arms: Sequence[ArchArm] = ARMS,
+               report_root: str = REPORT_ROOT) -> Optional[List[ArchArm]]:
+    """The arms `sweep-<tag>.json` records this stage as having trained.
+
+    Stage A trains the whole grid, so its arm set and the shape's are the same
+    thing and nothing here matters. Stage B does not: it trains what stage A
+    *advanced*, four arms out of fifteen, and the shape has no idea which four.
+    Scoring `arms_for(shape)` then walks into an arm that was never trained --
+    `a8-kv2`, eligible but not selected -- and `score_arm` raises on the missing
+    checkpoint, correctly, having already spent 26 GPU-minutes on the three arms
+    it reached first and leaving the fourth unscored.
+
+    The sweep artifact is the record of what ran, so it is what "this stage's
+    arms" should mean. Returns None when there is no artifact, which keeps a
+    stage that has not swept yet on the shape's grid and keeps stage A's
+    behaviour byte-identical.
+    """
+
+    path = Path(report_root) / f"sweep-{tag}.json"
+    if not path.exists():
+        return None
+    try:
+        with path.open() as handle:
+            swept = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    names = [entry.get("arm") for entry in (swept.get("arms") or ())]
+    by_name = {arm.name: arm for arm in arms}
+    # Order is preserved from the sweep, which already ran control-first, rather
+    # than re-derived: the control has to be scored first for the same reason it
+    # is trained first, and an unknown name is dropped rather than raising --
+    # a renamed grid must not make an existing stage unscoreable.
+    selected = [by_name[name] for name in names if name in by_name]
+    return selected or None
+
+
 def score_arms(arms: Sequence[ArchArm] = ARMS, **kwargs) -> dict:
     """Score every arm, control first, leaving each scorecard as it lands.
 
@@ -1401,7 +1437,12 @@ def main(argv=None) -> int:
     tag = shape.tag if args.tag is None else args.tag
 
     if args.command == "score":
-        report = score_arms(selected_arms(args.arms, arms_for(shape)),
+        # `--arms` still wins; the sweep artifact only supplies the default, so
+        # a stage is scored on the arms it trained rather than on its shape's
+        # whole grid.
+        stage_arms = (swept_arms(tag, arms_for(shape), args.report_root)
+                      or arms_for(shape))
+        report = score_arms(selected_arms(args.arms, stage_arms),
                             holdout_root=args.holdout_root,
                             tag=tag, run_root=args.run_root,
                             out_dir=args.scorecard_root, source=args.source,

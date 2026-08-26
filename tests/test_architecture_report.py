@@ -36,7 +36,8 @@ from scripts.architecture_report import (GATE_COLUMNS, MATCHED_HOLDOUT_SOURCE,
                                          render_recommendation_markdown,
                                          report_path, retrieval_check,
                                          score_arm, scorecard_path, scored_from,
-                                         select_stage_b, selection_notes)
+                                         select_stage_b, selection_notes,
+                                         swept_arms)
 from scripts.architecture_report import main as architecture_report_main
 from scripts.architecture_sweep import (ARMS, ARMS_BY_NAME, CONTROL, STAGE_A,
                                         STAGE_B, arm_checkpoint_path)
@@ -516,6 +517,47 @@ def test_score_arm_refuses_an_arm_with_no_checkpoint(tmp_path):
     with pytest.raises(FileNotFoundError, match="no checkpoint"):
         score_arm(ARMS_BY_NAME["a2-kv1"], holdout_root=str(tmp_path),
                   run_root=str(tmp_path), out_dir=str(tmp_path))
+
+
+def test_a_stage_is_scored_on_the_arms_it_actually_trained(tmp_path):
+    """Stage B trains what stage A advanced, not what its shape enumerates.
+
+    Scoring `arms_for(shape)` walked into `a8-kv2` -- eligible at stage A but
+    not selected, so never trained -- and `score_arm` raised on the missing
+    checkpoint after 26 GPU-minutes on the three arms ahead of it, leaving the
+    fourth trained arm unscored. The sweep artifact is the record of what ran,
+    so it is what "this stage's arms" has to mean.
+    """
+    report_root = tmp_path / "architecture"
+    report_root.mkdir(parents=True)
+    (report_root / "sweep-stageb.json").write_text(json.dumps(
+        {"arms": [{"arm": "a8-kv4"}, {"arm": "a3-kv4"}, {"arm": "a4-kv4"}]}))
+
+    selected = swept_arms("stageb", ARMS, str(report_root))
+
+    assert [arm.name for arm in selected] == ["a8-kv4", "a3-kv4", "a4-kv4"], \
+        "control first, in the order the sweep trained them"
+    assert "a8-kv2" not in [arm.name for arm in selected]
+
+
+def test_a_stage_with_no_sweep_artifact_keeps_the_whole_grid(tmp_path):
+    """Stage A trains its whole grid, so its behaviour must not move.
+
+    None rather than an empty list: "no artifact" and "an artifact naming no
+    arm this grid knows" both have to fall back to the shape, or a renamed grid
+    would silently score nothing and report success.
+    """
+    report_root = tmp_path / "architecture"
+    report_root.mkdir(parents=True)
+
+    assert swept_arms("stagea", ARMS, str(report_root)) is None
+
+    (report_root / "sweep-stagea.json").write_text(json.dumps(
+        {"arms": [{"arm": "a99-kv9"}]}))
+    assert swept_arms("stagea", ARMS, str(report_root)) is None
+
+    (report_root / "sweep-stageb.json").write_text("{ truncated")
+    assert swept_arms("stageb", ARMS, str(report_root)) is None
 
 
 def test_score_arm_measures_a_full_pass_over_the_matched_source(tmp_path):
