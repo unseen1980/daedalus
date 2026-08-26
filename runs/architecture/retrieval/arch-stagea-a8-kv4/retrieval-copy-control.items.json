@@ -1,0 +1,113 @@
+{
+  "item_count": 8,
+  "item_digest": "97ab6d7938a1f79c975e64ff9b204584",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "nectar harbor kelp",
+      "extracted": "nectar harbor algae",
+      "id": "copy-control-0",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nnectar harbor kelp\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "nectar harbor algae\nThe word \"nectar\" is used to describe the plant that is found in the forest",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "juniper violet umber",
+      "extracted": "- 1. The word is:",
+      "id": "copy-control-1",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\njuniper violet umber\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "- 1. The word is:\n- 2. The word is:\n- 3. The",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "willow gable granite",
+      "extracted": "The word \"c\" is:",
+      "id": "copy-control-2",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nwillow gable granite\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 0.0,
+      "response": "The word \"c\" is:\nThe word \"c\" is:\nThe word \"c\" is:",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "granite esker dapple",
+      "extracted": "- n. A",
+      "id": "copy-control-3",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\ngranite esker dapple\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "- n. A\n- n. A\n- n. A\n- n. A\n- n.",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "xenon esker lichen",
+      "extracted": "xenon esker",
+      "id": "copy-control-4",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nxenon esker lichen\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "xenon esker\nxenon esker\nxenon esker\nxenon esker",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "amber gable prairie",
+      "extracted": "The tree is a tree with a long, thick, thick, thick, thick, thick, thick, thick,",
+      "id": "copy-control-5",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\namber gable prairie\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "The tree is a tree with a long, thick, thick, thick, thick, thick, thick, thick,",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "hollow lantern xenon",
+      "extracted": "a. The word \"h\" is used to describe the word \"h\" in the word \"h\" in",
+      "id": "copy-control-6",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nhollow lantern xenon\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 0.0,
+      "response": "a. The word \"h\" is used to describe the word \"h\" in the word \"h\" in",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "indigo gable fennel",
+      "extracted": "a. a b. a b. a b. a b. a b. a b. a b.",
+      "id": "copy-control-7",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nindigo gable fennel\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "a. a b. a b. a b. a b. a b. a b. a b.",
+      "task": "copy-control"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-copy-control",
+  "schema": 1
+}

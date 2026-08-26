@@ -1,5 +1,7 @@
 {
-  "state_at_note": "TWO LANES RUNNING. main = phase6-stageb-scoring-retry, detached ~06:18Z, GPU. retrieval = phase6-stagea-retrieval-remeasure, detached 05:53Z, CPU (8 of 24 threads), estimated 9h so ~15:00Z. Neither may be relaunched. The evidence lane is free.",
+  "state_at_note": "TWO LANES RUNNING. main = phase6-stageb-scoring-retry, detached ~06:18Z, GPU, one arm to score. retrieval = phase6-stagea-retrieval-remeasure, detached 05:53Z, CPU (8 of 24 threads), 2 of 4 arms done by 06:00Z. Neither may be relaunched. The evidence lane is free.",
+
+  "first_real_retrieval_numbers": "Stage-A control a8-kv4, passkey, remeasured through the pass-through path: 0.34 / 0.26 / 0.22 / 0.02 at depths 256/512/1024/2048. Every one of those cells read 0.0 before. Monotonic decay collapsing at the 2048 trained-context boundary -- the shape a passkey curve should have. This is the first real number the retrieval column has carried in phase 6.",
 
   "headline": "THE RETRIEVAL BLOCKER IS CLEARED, AND IT NEVER NEEDED THE REBUILD. The recorded remedy was to rebuild llama-cli with -DLLAMA_BUILD_UI=OFF, filed as an operator step with no approved wrapper. The same pinned build advertises --jinja and --chat-template-file, and a pass-through Jinja template renders the messages verbatim -- so the -st turn feeds the model exactly the prompt as written. Stock binary, unmodified, which is the constraint that actually mattered.",
 
@@ -21,9 +23,9 @@
 
   "next_4": "Stage A's recommendation still reads unproven on retrieval and will until the remeasure lands (~15:00Z), after which rerun `--tag stagea recommend`. Do not regenerate it before then; it would just rewrite the same verdicts.",
 
-  "next_5": "Phase 7's corpus rebuild is CPU and disk work. It does NOT contend with the GPU but it DOES contend with the retrieval lane's 8 CPU threads and with any decode pass. 16 threads are free, so it is the natural occupant of the evidence lane once stage-B export/retrieval are done.",
+  "next_5": "Phase 7's corpus rebuild is CPU and disk work. It does NOT contend with the GPU but it DOES contend with any decode pass, which is a timing measurement. Run decode first -- it is minutes -- then give phase 7 the evidence lane.",
 
-  "cost_note": "The retrieval evaluator loads the model fresh for every item -- 408 items per arm at per_depth 50 -- so an arm is ~2.3h of CPU, and the whole 4-arm pass ~9h. That is the honest cost of the measurement, not a defect to work around, but it is why stage-B retrieval should start before phase 7 rather than after.",
+  "cost_note": "IGNORE the 9h estimate this phase was launched with -- it was mine and it was wrong by more than an order of magnitude. The control arm's 408 items took 4 minutes on a quiet box; a later arm took ~28 minutes while the GPU scoring retry and a full pytest run were competing for CPU. So budget minutes to tens of minutes per arm, and expect contention, not concurrency, to be what sets the number. Stage-B retrieval is therefore cheap and does not have to be sequenced ahead of phase 7.",
 
   "launcher_status": "The two launcher fixes the standing prompt asks for are in and tested: run-phase --detach starts a phase in its own session via start_new_session (d551ade, 3e22382) and refuses an undetached phase at or past 0.25h (9f81cd7); run_with_resume resumes an interrupted run on relaunch, not just on retry (3ed93a2), and architecture_sweep, conv_health and qat_recovery all go through it. 54 focused tests green. Nothing further is needed before phases 5-8.",
 
