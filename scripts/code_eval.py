@@ -569,7 +569,21 @@ def evaluate_problems(problems: Dict[str, dict], backend, *,
         base_passed = int(base["status"] == "passed")
         plus_passed = 0
         plus = None
-        if base_passed:
+        # A handful of MBPP+ problems ship an empty `plus_input`: EvalPlus has
+        # no extended inputs for them. The extended suite is the base inputs
+        # *union* the extra ones, so for these it simply is the base suite, and
+        # a base pass is the whole of it.
+        #
+        # Crediting an empty suite is the exact defect this file was burned by,
+        # and the only thing that makes it legitimate here is that the *dataset*
+        # is empty rather than the harness failing to find the tests -- so it is
+        # counted rather than inferred, per item and in the metrics, and it is
+        # reached only through `plus_input` being genuinely absent. A problem
+        # missing its reference or prompt still raises.
+        plus_absent = int(not problem.get("plus_input"))
+        if base_passed and plus_absent:
+            plus_passed = 1
+        elif base_passed:
             # EvalPlus's rule: the extended suite only counts on top of a
             # passing base suite, so `plus` can never exceed `base`.
             plus = run_in_sandbox(solution, test_program_for(problem, "plus"),
@@ -580,6 +594,7 @@ def evaluate_problems(problems: Dict[str, dict], backend, *,
             "id": task_id,
             "base_passed": base_passed,
             "plus_passed": plus_passed,
+            "plus_inputs_absent": plus_absent,
             "syntax_valid": int(syntax_valid),
             "category": base["category"] if not base_passed
             else (plus["category"] if plus and not plus_passed else None),
@@ -602,6 +617,12 @@ def summarize_code(records: List[dict]) -> Dict[str, float]:
         "pass@1": sum(record["base_passed"] for record in records) / total,
         "pass@1_plus": sum(record["plus_passed"] for record in records) / total,
         "syntax_valid": sum(record["syntax_valid"] for record in records) / total,
+        # How much of `pass@1_plus` was credited from the base suite because
+        # the dataset ships no extended inputs for that problem. Always
+        # reported, including as 0.0: "checked, none" is a different statement
+        # from a key that is absent.
+        "plus_inputs_absent": float(
+            sum(record.get("plus_inputs_absent", 0) for record in records)),
     }
     for record in records:
         category = record.get("category")

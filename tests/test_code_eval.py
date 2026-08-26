@@ -565,6 +565,59 @@ def test_a_wrong_mbpp_answer_fails_the_suite_it_is_scored_against():
 
 
 @pytest.mark.slow
+def test_a_problem_with_no_extended_inputs_is_credited_from_its_base_suite():
+    """Some MBPP+ problems ship an empty `plus_input`. The extended suite is
+    the base inputs union the extra ones, so for those it *is* the base suite.
+
+    Found by the full oracle run, three hundred problems past where a smoke
+    stopped: raising here made one problem in the dataset fail the whole run.
+    """
+    from scripts.code_eval import evaluate_problems
+
+    problems = _fake_mbpp_problems()
+    problems["Mbpp/2"]["plus_input"] = []
+    backend = ScriptedBackend({"Mbpp/2": "def add(a, b):\n    return a + b\n"})
+
+    records = evaluate_problems(problems, backend, timeout_s=10.0)
+
+    assert records[0]["base_passed"] == 1
+    assert records[0]["plus_passed"] == 1
+    assert records[0]["plus_inputs_absent"] == 1
+
+
+@pytest.mark.slow
+def test_an_absent_extended_suite_cannot_rescue_a_failing_base_suite():
+    """The credit is for a suite the dataset does not ship, never for one the
+    candidate failed."""
+    from scripts.code_eval import evaluate_problems
+
+    problems = _fake_mbpp_problems()
+    problems["Mbpp/2"]["plus_input"] = []
+    backend = ScriptedBackend({"Mbpp/2": "def add(a, b):\n    return a - b\n"})
+
+    records = evaluate_problems(problems, backend, timeout_s=10.0)
+
+    assert records[0]["base_passed"] == 0
+    assert records[0]["plus_passed"] == 0
+
+
+def test_summarize_code_counts_the_items_with_no_extended_inputs():
+    """`pass@1_plus` is partly credited from base for those items, so the
+    number that says how many must travel with it."""
+    from scripts.code_eval import summarize_code
+
+    metrics = summarize_code([
+        {"id": "a", "base_passed": 1, "plus_passed": 1, "syntax_valid": 1,
+         "category": None, "plus_inputs_absent": 1},
+        {"id": "b", "base_passed": 1, "plus_passed": 1, "syntax_valid": 1,
+         "category": None, "plus_inputs_absent": 0},
+    ])
+
+    assert metrics["plus_inputs_absent"] == 1.0
+    assert metrics["pass@1_plus"] == 1.0
+
+
+@pytest.mark.slow
 def test_the_oracle_backend_returns_the_datasets_own_solution():
     """An oracle pass measures the harness, so it must run the reference
     through the same extraction and sandbox a candidate goes through."""
