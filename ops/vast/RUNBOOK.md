@@ -142,6 +142,17 @@ program's own services (and only those):
 daedalus-approved reload-service daedalus_progress
 ```
 
+The same install also unblocks `pr-find`, which is how a session learns the pull
+request number it needs for `pr-edit`. Without it, `runs/vast-program/pr-body.md`
+is kept current by session after session and never applied, because the number
+lives on the progress branch and guessing one is a write to somebody else's pull
+request:
+
+```bash
+daedalus-approved pr-find     # "<number> open main <url>" for this branch
+daedalus-approved pr-edit <number> runs/vast-program/pr-body.md
+```
+
 ## Failure drills
 
 Both should pass before any phase spends real GPU hours.

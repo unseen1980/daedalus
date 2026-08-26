@@ -237,6 +237,43 @@ def test_pr_edit_uses_the_rest_endpoint_the_run_token_can_reach():
     assert "/pulls/${number}" in wrapper
 
 
+def test_pr_find_is_a_read_and_is_how_a_session_learns_the_number():
+    """`pr-edit` needs a number no engineering session could reach -- the PR is
+    opened by the controller and its URL lives on the progress branch -- so a
+    current body kept being written and never applied. The lookup has to be a
+    GET: the alternative to guessing a number must not itself be able to open or
+    retarget a pull request."""
+
+    wrapper = (ROOT / "ops/vast/run-approved").read_text()
+
+    assert "    pr-find)" in wrapper
+    section = wrapper.split("    pr-find)", 1)[1].split(";;", 1)[0]
+    assert "gh api" in section
+    assert "select(.head.ref ==" in section
+    for forbidden in ("-X PATCH", "-X POST", "-X PUT", "-X DELETE", "pr create"):
+        assert forbidden not in section, (
+            f"pr-find must be read-only; found {forbidden!r}")
+
+
+def test_pr_find_refuses_to_answer_from_a_branch_it_may_not_touch(tmp_path):
+    wrapper = ROOT / "ops/vast/run-approved"
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repository,
+                   check=True)
+    runtime = tmp_path / "runtime.env"
+    runtime.write_text("")
+    environment = os.environ.copy()
+    environment.update({"DAEDALUS_REPO": str(repository),
+                        "DAEDALUS_RUNTIME_ENV": str(runtime)})
+
+    result = subprocess.run([str(wrapper), "pr-find"], capture_output=True,
+                            text=True, env=environment)
+
+    assert result.returncode != 0
+    assert "refusing branch main" in result.stderr
+
+
 def test_evaluation_entry_points_are_reachable_through_the_wrapper():
     wrapper = (ROOT / "ops/vast/run-approved").read_text()
 
@@ -295,6 +332,8 @@ def test_runbook_covers_the_traps_an_operator_will_hit():
     assert "supervisorctl start daedalus_session_keeper" in runbook
     assert "install_supervisor.sh" in runbook
     assert "Operation not permitted" in runbook
+    # Five sessions kept pr-body.md current and could not apply it.
+    assert "daedalus-approved pr-find" in runbook
 
 
 def test_phase_four_prompt_compares_bpb_not_token_perplexity():

@@ -194,6 +194,25 @@ case "${command_name}" in
         branch=$(current_branch)
         exec gh pr create --draft --base "${base}" --head "${branch}" --title "${title}" --body "${body}"
         ;;
+    pr-find)
+        # `pr-edit` needs a number, and until now nothing an engineering
+        # session could reach knew one: the PR is opened by the controller, its
+        # URL lives on the progress branch, and `runs/vast-program/pr-body.md`
+        # carries the body without the number. Five sessions in a row wrote a
+        # current body they could not apply, and the alternative -- guessing a
+        # number -- is a write to somebody else's pull request.
+        #
+        # Read-only by construction: a GET against the pulls list, filtered to
+        # the branch this checkout is on, so it cannot open, close or retarget
+        # anything. Prints "<number> <state> <base> <url>" per match, nothing
+        # when there is none.
+        require_source_branch
+        require_gh
+        branch=$(current_branch)
+        exec gh api \
+            "repos/${GITHUB_REPOSITORY:-unseen1980/daedalus}/pulls?state=open&per_page=100" \
+            --jq ".[] | select(.head.ref == \"${branch}\") | \"\(.number) \(.state) \(.base.ref) \(.html_url)\""
+        ;;
     pr-edit)
         require_gh
         number=${1:-}
