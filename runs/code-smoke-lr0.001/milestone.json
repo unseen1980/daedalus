@@ -1,0 +1,14 @@
+{
+  "revision": "code-smoke-lr0.001-stable-end-step0",
+  "step": 0,
+  "tokens_seen": 0,
+  "total_steps": 4,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 0.0,
+  "muon_lr": 0.001,
+  "adam_lr": 1.5e-05,
+  "config": "daedalus-150m",
+  "repo": null,
+  "path_in_repo": "milestone/code-smoke-lr0.001/checkpoint.pt",
+  "created_at": 1787778480.1504235
+}
