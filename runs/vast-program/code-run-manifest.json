@@ -58,8 +58,33 @@
   },
   "mixture": {
     "code_pct": 65, "technical_math_prose_pct": 15, "general_replay_pct": 20,
-    "code_split_pct": {"python": 55, "javascript_typescript": 12, "c_cpp": 10,
-                       "rust": 8, "go": 6, "java": 5, "shell_sql_other": 4},
+    "code_split_pct": {"python": 55, "javascript_typescript": 45},
+    "code_split_pct_preregistered": {"python": 55, "javascript_typescript": 12,
+                                     "c_cpp": 10, "rust": 8, "go": 6, "java": 5,
+                                     "shell_sql_other": 4},
+    "code_split_pct_amendments": [
+      {
+        "at": "2026-08-26T20:13:31Z",
+        "kind": "source-availability finding",
+        "dropped": ["rust"],
+        "authority": "measurement",
+        "why": "codeparrot/github-code's parquet revision converted no Rust directory, and the interleaved all-all directory carries Rust at 0.336% of what the licence gate admits -- 23.8 passes of the fallback stream to reach an 8% share, against a one-pass budget. Under the 0.5% floor it is dropped by name rather than carried at a fraction of a percent.",
+        "evidence": ["runs/codeprep/github-code-configs.json",
+                     "runs/codeprep/allall-yield.json",
+                     "runs/codeprep/source-plan.json"]
+      },
+      {
+        "at": "2026-08-26T20:13:31Z",
+        "kind": "deliberate scope choice -- NOT an availability finding",
+        "dropped": ["c_cpp", "java", "go", "shell_sql_other"],
+        "authority": "USER DECISION, given directly to the operator and recorded verbatim as the phase8-mixture-amendment user_directive in runs/vast-program/events.jsonl",
+        "why": "the code portion is retargeted to Python and JavaScript/TypeScript only, to focus the artifact. These four buckets were reachable: c_cpp and java have their own directories on the revision, go and shell_sql_other cleared the 0.5% floor from the interleaved directory, and corpus headroom verified every one of them SUPPORTED at 250M, 1B and 3B inside the four-epoch cap. Conflating this with the rust drop would misdescribe both -- rust could not be served, these could and were not asked for.",
+        "why_javascript_typescript_absorbs_it": "it has the headroom. At its 14.1% share JS/TS measured 2,531M unique tokens and 0.1 epochs at the 3B gate, so 45% is roughly 0.3 epochs -- far inside the cap.",
+        "why_python_stays_at_55": "the measured plan had drifted Python to 64.4% because all four unreachable buckets were non-Python and the shortfall redistributed proportionally. Both gate benchmarks are Python-only, so that drift was a reporting hazard. Directing the freed share into JavaScript/TypeScript returns Python to exactly its preregistered 55% and removes the eval-language concentration problem rather than deepening it.",
+        "timing": "taken before any corpus was built and before any training number existed; the cost was one CPU re-run of corpus plan and corpus headroom",
+        "unchanged": "the 65/15/20 top-level split, the frozen decontamination index, the admission gate, the by-repository split, the preregistered gates, and the base checkpoint -- none of them depend on which languages are in the mixture"
+      }
+    ],
     "holdout": "split by repository, never by file or by packed window",
     "decontamination": "HumanEval+ and MBPP+ prompts, reference solutions, tests and repository metadata",
     "licences": "permissive only, with repository identity, commit/revision and licence recorded per document"

@@ -812,11 +812,17 @@ def test_a_clean_probe_has_nothing_to_report():
     assert CP.probe_problems(report) == []
 
 
-def test_the_probe_covers_every_bucket_the_plan_gives_a_share_to():
+def test_the_probe_covers_every_bucket_the_dataset_has_a_directory_for():
+    """Every bucket, not only the ones the mixture still asks for: the probe
+    measures the dataset, and the four buckets the user dropped by choice are
+    the ones whose evidence has to stay reproducible after they leave the
+    mixture. They are reported at share 0.0 rather than omitted."""
     report = CP.probe_languages(rows=5, stream=_stream(_github_rows(5)))
 
-    assert set(report["languages"]) == set(CP.CODE_LANGUAGE_SHARES)
+    assert set(report["languages"]) == set(CP.GITHUB_CODE_LANGUAGES)
     assert sum(e["share"] for e in report["languages"].values()) == pytest.approx(1.0)
+    assert report["languages"]["go"]["share"] == 0.0
+    assert report["languages"]["python"]["share"] == 0.55
 
 
 def test_an_unknown_bucket_is_refused_rather_than_silently_skipped():
@@ -1050,8 +1056,25 @@ def _allall(bytes_by_language=None, **overrides) -> dict:
     return record
 
 
+def _plan(**kwargs) -> dict:
+    """A plan over the *preregistered* seven buckets.
+
+    These tests are about the fallback and drop logic -- what the interleaved
+    directory can serve, and what it cannot -- and that logic only has anything
+    to decide when the mixture asks for buckets with no directory of their own.
+    The live `CODE_LANGUAGE_SHARES` no longer does: the user retargeted the code
+    portion to Python and JavaScript/TypeScript, both of which have directories.
+    Pinning these to the preregistered table keeps the measurement that proved
+    rust unreachable exercised rather than deleted along with the buckets.
+    """
+    kwargs.setdefault("shares", CP.PREREGISTERED_CODE_LANGUAGE_SHARES)
+    kwargs.setdefault("available", AVAILABLE)
+    kwargs.setdefault("interleaved", _allall())
+    return CP.source_plan(**kwargs)
+
+
 def test_a_bucket_whose_directories_all_exist_is_served_from_them():
-    plan = CP.source_plan(available=AVAILABLE, interleaved=_allall())
+    plan = _plan()
 
     entry = plan["buckets"]["javascript-typescript"]
     assert entry["source"] == "directories"
@@ -1063,7 +1086,7 @@ def test_a_bucket_with_no_directory_is_capped_at_what_a_pass_actually_yields():
     """Go is reachable out of the interleaved directory and its 6% is not. A
     plan that kept the 6% would be a build that streams to exhaustion and comes
     up short, discovering here what this function is for."""
-    plan = CP.source_plan(available=AVAILABLE, interleaved=_allall())
+    plan = _plan()
 
     entry = plan["buckets"]["go"]
     assert entry["source"] == "interleaved"
@@ -1079,7 +1102,7 @@ def test_a_bucket_with_no_directory_is_capped_at_what_a_pass_actually_yields():
 def test_a_bucket_too_rare_to_reach_a_usable_share_is_dropped_by_name():
     """0.3% of the code mixture is a few million tokens of Rust: too little to
     teach it and enough for a model card to claim it."""
-    plan = CP.source_plan(available=AVAILABLE, interleaved=_allall())
+    plan = _plan()
 
     entry = plan["buckets"]["rust"]
     assert entry["source"] == "dropped"
@@ -1095,7 +1118,7 @@ def test_what_the_fallback_cannot_serve_is_redistributed_over_the_directories():
     the buckets that have a source, proportionally to their plan shares. It
     cannot go to the capped ones -- they are capped because the rows are not
     there."""
-    plan = CP.source_plan(available=AVAILABLE, interleaved=_allall())
+    plan = _plan()
 
     shortfall = 0.08 + (0.06 - 0.028) + (0.04 - 0.010)
     assert plan["redistributed"] == pytest.approx(shortfall, abs=1e-6)
@@ -1117,12 +1140,12 @@ def test_the_budget_is_a_parameter_so_one_measurement_serves_any_of_them():
     """Nothing here is unreachable in principle, only at a price. At a budget
     that pays Rust's price every bucket is served in full and nothing is
     redistributed -- from the same rows, without reading another."""
-    plan = CP.source_plan(available=AVAILABLE, interleaved=_allall(),
-                          passes=27.0)
+    plan = _plan(passes=27.0)
 
     assert plan["buckets"]["rust"]["source"] == "interleaved"
-    assert plan["shares"] == {bucket: pytest.approx(share, abs=1e-6)
-                              for bucket, share in CP.CODE_LANGUAGE_SHARES.items()}
+    assert plan["shares"] == {
+        bucket: pytest.approx(share, abs=1e-6)
+        for bucket, share in CP.PREREGISTERED_CODE_LANGUAGE_SHARES.items()}
     assert plan["redistributed"] == pytest.approx(0.0, abs=1e-9)
 
 
@@ -1133,21 +1156,17 @@ def test_a_fallback_language_the_directory_carries_none_of_is_a_problem():
     without_rust = {name: count for name, count in _ALLALL_BYTES.items()
                     if name != "rust"}
 
-    plan = CP.source_plan(available=AVAILABLE,
-                          interleaved=_allall(without_rust))
+    plan = _plan(interleaved=_allall(without_rust))
 
     assert plan["buckets"]["rust"]["interleaved_rows"] == 0
     problems = CP.plan_problems(plan)
     assert any("check the spelling" in problem for problem in problems)
-    assert not any("check the spelling" in problem for problem in
-                   CP.plan_problems(CP.source_plan(available=AVAILABLE,
-                                                   interleaved=_allall())))
+    assert not any("check the spelling" in problem
+                   for problem in CP.plan_problems(_plan()))
 
 
 def test_a_plan_whose_fallback_directory_is_missing_too_is_a_problem():
-    plan = CP.source_plan(
-        available={name: 10 for name in AVAILABLE if name != "all-all"},
-        interleaved=_allall())
+    plan = _plan(available={name: 10 for name in AVAILABLE if name != "all-all"})
 
     assert any("does not carry that directory" in problem
                for problem in CP.plan_problems(plan))
@@ -1162,7 +1181,7 @@ def test_the_fallback_share_is_measured_after_the_licence_gate_not_before():
                     "languages": {"Rust": 597, "GO": 3654}}
 
     with pytest.raises(ValueError, match="no per-language yield"):
-        CP.source_plan(available=AVAILABLE, interleaved=offered_only)
+        _plan(interleaved=offered_only)
 
 
 def test_the_plan_reads_the_directory_out_of_a_report_probed_either_way():
@@ -1190,11 +1209,18 @@ def test_the_cli_plans_from_the_two_measurements_already_on_disk(
                    "--probe-json", str(probe_json), "--json-out", out])
 
     assert rc == 0
-    printed = capsys.readouterr().out
-    assert "rust" in printed and "dropped" in printed
     written = json.load(open(out))
-    assert written["buckets"]["rust"]["source"] == "dropped"
+    # The retargeted mixture: two buckets, both served from their own
+    # directories, so nothing falls back and nothing is redistributed. The
+    # fallback and drop logic is still exercised against the preregistered
+    # seven-bucket table above -- see `_plan`.
+    assert set(written["shares"]) == {"python", "javascript-typescript"}
+    assert all(entry["source"] == "directories"
+               for entry in written["buckets"].values())
+    assert written["redistributed"] == pytest.approx(0.0, abs=1e-6)
     assert sum(written["shares"].values()) == pytest.approx(1.0, abs=1e-6)
+    printed = capsys.readouterr().out
+    assert "python" in printed and "javascript-typescript" in printed
 
 
 # ------------------------------------------------------------ the supply ---
@@ -1206,7 +1232,7 @@ def _directory_probe(config, *, rows_read=2_000, admitted_bytes=8_000_000):
 
 
 def _supply_inputs(**row_overrides):
-    plan = CP.source_plan(available=AVAILABLE, interleaved=_allall())
+    plan = _plan()
     probes = {config: _directory_probe(config)
               for config in ("Python-all", "JavaScript-all", "TypeScript-all",
                              "C-all", "C++-all", "Java-all")}
@@ -1621,7 +1647,7 @@ def test_the_probe_leaves_with_its_verdict_instead_of_dying_in_teardown(
 
 
 def _plan_with_supply():
-    plan = CP.source_plan(available=AVAILABLE, interleaved=_allall())
+    plan = _plan()
     probes = {config: _directory_probe(config)
               for config in ("Python-all", "JavaScript-all", "TypeScript-all",
                              "C-all", "C++-all", "Java-all")}

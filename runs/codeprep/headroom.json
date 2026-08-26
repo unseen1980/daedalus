@@ -4,58 +4,16 @@
       "budget": 162500000,
       "sources": [
         {
-          "basis": "354,000 rows of C-all at 3,940 admitted bytes/row read + 389,000 rows of C++-all at 6,105 admitted bytes/row read",
-          "budget": 162500000,
-          "epoch_cap": 4.0,
-          "epochs": 0.01445502946513721,
-          "growth_x": 0.0036137573662843024,
-          "key": "c-cpp",
-          "needed_tokens": 19037688,
-          "note": "",
-          "over_cap": false,
-          "share": 0.117155,
-          "shortfall_tokens": 0,
-          "unique_tokens": 1317028654
-        },
-        {
-          "basis": "lower bound -- 547,000 rows of all-all (9 of 10 files read) at 128 admitted bytes/row read",
-          "budget": 162500000,
-          "epoch_cap": 4.0,
-          "epochs": 0.1894303742850041,
-          "growth_x": 0.047357562853310074,
-          "key": "go",
-          "needed_tokens": 4625075,
-          "note": "",
-          "over_cap": false,
-          "share": 0.028462,
-          "shortfall_tokens": 0,
-          "unique_tokens": 24415699
-        },
-        {
-          "basis": "828,000 rows of Java-all at 2,828 admitted bytes/row read",
-          "budget": 162500000,
-          "epoch_cap": 4.0,
-          "epochs": 0.011635287999439164,
-          "growth_x": 0.002908821388683254,
-          "key": "java",
-          "needed_tokens": 9518762,
-          "note": "",
-          "over_cap": false,
-          "share": 0.058577,
-          "shortfall_tokens": 0,
-          "unique_tokens": 818094232
-        },
-        {
           "basis": "605,000 rows of JavaScript-all at 5,146 admitted bytes/row read + 369,000 rows of TypeScript-all at 11,192 admitted bytes/row read",
           "budget": 162500000,
           "epoch_cap": 4.0,
-          "epochs": 0.009026344339973619,
-          "growth_x": 0.002256585887437707,
+          "epochs": 0.028892520837131935,
+          "growth_x": 0.007223130209282984,
           "key": "javascript-typescript",
-          "needed_tokens": 22845062,
+          "needed_tokens": 73125000,
           "note": "",
           "over_cap": false,
-          "share": 0.140585,
+          "share": 0.45,
           "shortfall_tokens": 0,
           "unique_tokens": 2530931808
         },
@@ -63,39 +21,25 @@
           "basis": "641,000 rows of Python-all at 4,113 admitted bytes/row read",
           "budget": 162500000,
           "epoch_cap": 4.0,
-          "epochs": 0.1136735156918878,
-          "growth_x": 0.028418378108745215,
+          "epochs": 0.09702868569960159,
+          "growth_x": 0.024257171424900397,
           "key": "python",
-          "needed_tokens": 104706875,
+          "needed_tokens": 89375000,
           "note": "",
           "over_cap": false,
-          "share": 0.64435,
+          "share": 0.55,
           "shortfall_tokens": 0,
           "unique_tokens": 921119351
-        },
-        {
-          "basis": "lower bound -- 547,000 rows of all-all (9 of 10 files read) at 49 admitted bytes/row read",
-          "budget": 162500000,
-          "epoch_cap": 4.0,
-          "epochs": 0.1894286401793255,
-          "growth_x": 0.04735710642904723,
-          "key": "shell-sql-other",
-          "needed_tokens": 1766538,
-          "note": "",
-          "over_cap": false,
-          "share": 0.010871,
-          "shortfall_tokens": 0,
-          "unique_tokens": 9325612
         }
       ],
       "totals": {
-        "binding_epochs": 0.1894303742850041,
-        "binding_source": "go",
-        "corpus_epochs": 0.028909882058006924,
+        "binding_epochs": 0.09702868569960159,
+        "binding_source": "python",
+        "corpus_epochs": 0.047073462273680054,
         "needed_tokens": 162500000,
         "shortfall_tokens": 0,
         "sources_over_cap": 0,
-        "unique_tokens": 5620915356,
+        "unique_tokens": 3452051159,
         "verdict": "SUPPORTED"
       }
     },
@@ -103,58 +47,16 @@
       "budget": 650000000,
       "sources": [
         {
-          "basis": "354,000 rows of C-all at 3,940 admitted bytes/row read + 389,000 rows of C++-all at 6,105 admitted bytes/row read",
-          "budget": 650000000,
-          "epoch_cap": 4.0,
-          "epochs": 0.057820116341979,
-          "growth_x": 0.014455028705852288,
-          "key": "c-cpp",
-          "needed_tokens": 76150750,
-          "note": "",
-          "over_cap": false,
-          "share": 0.117155,
-          "shortfall_tokens": 0,
-          "unique_tokens": 1317028654
-        },
-        {
-          "basis": "lower bound -- 547,000 rows of all-all (9 of 10 files read) at 128 admitted bytes/row read",
-          "budget": 650000000,
-          "epoch_cap": 4.0,
-          "epochs": 0.7577214971400164,
-          "growth_x": 0.1894303742850041,
-          "key": "go",
-          "needed_tokens": 18500300,
-          "note": "",
-          "over_cap": false,
-          "share": 0.028462,
-          "shortfall_tokens": 0,
-          "unique_tokens": 24415699
-        },
-        {
-          "basis": "828,000 rows of Java-all at 2,828 admitted bytes/row read",
-          "budget": 650000000,
-          "epoch_cap": 4.0,
-          "epochs": 0.04654115444246281,
-          "growth_x": 0.011635287999439164,
-          "key": "java",
-          "needed_tokens": 38075050,
-          "note": "",
-          "over_cap": false,
-          "share": 0.058577,
-          "shortfall_tokens": 0,
-          "unique_tokens": 818094232
-        },
-        {
           "basis": "605,000 rows of JavaScript-all at 5,146 admitted bytes/row read + 369,000 rows of TypeScript-all at 11,192 admitted bytes/row read",
           "budget": 650000000,
           "epoch_cap": 4.0,
-          "epochs": 0.03610537815011727,
-          "growth_x": 0.009026344339973619,
+          "epochs": 0.11557008334852774,
+          "growth_x": 0.028892520837131935,
           "key": "javascript-typescript",
-          "needed_tokens": 91380250,
+          "needed_tokens": 292500000,
           "note": "",
           "over_cap": false,
-          "share": 0.140585,
+          "share": 0.45,
           "shortfall_tokens": 0,
           "unique_tokens": 2530931808
         },
@@ -162,39 +64,25 @@
           "basis": "641,000 rows of Python-all at 4,113 admitted bytes/row read",
           "budget": 650000000,
           "epoch_cap": 4.0,
-          "epochs": 0.4546940627675512,
-          "growth_x": 0.1136735156918878,
+          "epochs": 0.38811474279840635,
+          "growth_x": 0.09702868569960159,
           "key": "python",
-          "needed_tokens": 418827500,
+          "needed_tokens": 357500000,
           "note": "",
           "over_cap": false,
-          "share": 0.64435,
+          "share": 0.55,
           "shortfall_tokens": 0,
           "unique_tokens": 921119351
-        },
-        {
-          "basis": "lower bound -- 547,000 rows of all-all (9 of 10 files read) at 49 admitted bytes/row read",
-          "budget": 650000000,
-          "epoch_cap": 4.0,
-          "epochs": 0.7577143462541654,
-          "growth_x": 0.18942853294775722,
-          "key": "shell-sql-other",
-          "needed_tokens": 7066150,
-          "note": "",
-          "over_cap": false,
-          "share": 0.010871,
-          "shortfall_tokens": 0,
-          "unique_tokens": 9325612
         }
       ],
       "totals": {
-        "binding_epochs": 0.7577214971400164,
-        "binding_source": "go",
-        "corpus_epochs": 0.1156395282320277,
+        "binding_epochs": 0.38811474279840635,
+        "binding_source": "python",
+        "corpus_epochs": 0.18829384909472022,
         "needed_tokens": 650000000,
         "shortfall_tokens": 0,
         "sources_over_cap": 0,
-        "unique_tokens": 5620915356,
+        "unique_tokens": 3452051159,
         "verdict": "SUPPORTED"
       }
     },
@@ -202,58 +90,16 @@
       "budget": 1950000000,
       "sources": [
         {
-          "basis": "354,000 rows of C-all at 3,940 admitted bytes/row read + 389,000 rows of C++-all at 6,105 admitted bytes/row read",
-          "budget": 1950000000,
-          "epoch_cap": 4.0,
-          "epochs": 0.173460349025937,
-          "growth_x": 0.043365086876841784,
-          "key": "c-cpp",
-          "needed_tokens": 228452250,
-          "note": "",
-          "over_cap": false,
-          "share": 0.117155,
-          "shortfall_tokens": 0,
-          "unique_tokens": 1317028654
-        },
-        {
-          "basis": "lower bound -- 547,000 rows of all-all (9 of 10 files read) at 128 admitted bytes/row read",
-          "budget": 1950000000,
-          "epoch_cap": 4.0,
-          "epochs": 2.273164491420049,
-          "growth_x": 0.5682911228550123,
-          "key": "go",
-          "needed_tokens": 55500900,
-          "note": "",
-          "over_cap": false,
-          "share": 0.028462,
-          "shortfall_tokens": 0,
-          "unique_tokens": 24415699
-        },
-        {
-          "basis": "828,000 rows of Java-all at 2,828 admitted bytes/row read",
-          "budget": 1950000000,
-          "epoch_cap": 4.0,
-          "epochs": 0.13962346332738843,
-          "growth_x": 0.034905865220670566,
-          "key": "java",
-          "needed_tokens": 114225150,
-          "note": "",
-          "over_cap": false,
-          "share": 0.058577,
-          "shortfall_tokens": 0,
-          "unique_tokens": 818094232
-        },
-        {
           "basis": "605,000 rows of JavaScript-all at 5,146 admitted bytes/row read + 369,000 rows of TypeScript-all at 11,192 admitted bytes/row read",
           "budget": 1950000000,
           "epoch_cap": 4.0,
-          "epochs": 0.10831613445035182,
-          "growth_x": 0.027079033415032254,
+          "epochs": 0.3467102500455832,
+          "growth_x": 0.0866775625113958,
           "key": "javascript-typescript",
-          "needed_tokens": 274140750,
+          "needed_tokens": 877500000,
           "note": "",
           "over_cap": false,
-          "share": 0.140585,
+          "share": 0.45,
           "shortfall_tokens": 0,
           "unique_tokens": 2530931808
         },
@@ -261,39 +107,25 @@
           "basis": "641,000 rows of Python-all at 4,113 admitted bytes/row read",
           "budget": 1950000000,
           "epoch_cap": 4.0,
-          "epochs": 1.3640821883026535,
-          "growth_x": 0.34102054707566337,
+          "epochs": 1.164344228395219,
+          "growth_x": 0.29108605709880475,
           "key": "python",
-          "needed_tokens": 1256482500,
+          "needed_tokens": 1072500000,
           "note": "",
           "over_cap": false,
-          "share": 0.64435,
+          "share": 0.55,
           "shortfall_tokens": 0,
           "unique_tokens": 921119351
-        },
-        {
-          "basis": "lower bound -- 547,000 rows of all-all (9 of 10 files read) at 49 admitted bytes/row read",
-          "budget": 1950000000,
-          "epoch_cap": 4.0,
-          "epochs": 2.273143038762496,
-          "growth_x": 0.56828570607484,
-          "key": "shell-sql-other",
-          "needed_tokens": 21198450,
-          "note": "",
-          "over_cap": false,
-          "share": 0.010871,
-          "shortfall_tokens": 0,
-          "unique_tokens": 9325612
         }
       ],
       "totals": {
-        "binding_epochs": 2.273164491420049,
-        "binding_source": "go",
-        "corpus_epochs": 0.3469185846960831,
+        "binding_epochs": 1.164344228395219,
+        "binding_source": "python",
+        "corpus_epochs": 0.5648815472841606,
         "needed_tokens": 1950000000,
         "shortfall_tokens": 0,
         "sources_over_cap": 0,
-        "unique_tokens": 5620915356,
+        "unique_tokens": 3452051159,
         "verdict": "SUPPORTED"
       }
     }
@@ -355,55 +187,6 @@
     }
   },
   "supply": {
-    "c-cpp": {
-      "basis": "354,000 rows of C-all at 3,940 admitted bytes/row read + 389,000 rows of C++-all at 6,105 admitted bytes/row read",
-      "configs": [
-        "C-all",
-        "C++-all"
-      ],
-      "lower_bound": false,
-      "missing": [],
-      "partial": [],
-      "per_config": {
-        "C++-all": 829720689,
-        "C-all": 487307964
-      },
-      "share": 0.117155,
-      "unique_bytes": 3769336008,
-      "unique_tokens": 1317028654
-    },
-    "go": {
-      "basis": "lower bound -- 547,000 rows of all-all (9 of 10 files read) at 128 admitted bytes/row read",
-      "configs": [
-        "all-all"
-      ],
-      "lower_bound": true,
-      "missing": [],
-      "partial": [
-        "all-all"
-      ],
-      "per_config": {
-        "all-all": 24415699
-      },
-      "share": 0.028462,
-      "unique_bytes": 69877732,
-      "unique_tokens": 24415699
-    },
-    "java": {
-      "basis": "828,000 rows of Java-all at 2,828 admitted bytes/row read",
-      "configs": [
-        "Java-all"
-      ],
-      "lower_bound": false,
-      "missing": [],
-      "partial": [],
-      "per_config": {
-        "Java-all": 818094232
-      },
-      "share": 0.058577,
-      "unique_bytes": 2341385694,
-      "unique_tokens": 818094232
-    },
     "javascript-typescript": {
       "basis": "605,000 rows of JavaScript-all at 5,146 admitted bytes/row read + 369,000 rows of TypeScript-all at 11,192 admitted bytes/row read",
       "configs": [
@@ -417,7 +200,7 @@
         "JavaScript-all": 1087887556,
         "TypeScript-all": 1443044251
       },
-      "share": 0.140585,
+      "share": 0.45,
       "unique_bytes": 7243526835,
       "unique_tokens": 2530931808
     },
@@ -432,37 +215,9 @@
       "per_config": {
         "Python-all": 921119351
       },
-      "share": 0.64435,
+      "share": 0.55,
       "unique_bytes": 2636243584,
       "unique_tokens": 921119351
-    },
-    "rust": {
-      "basis": "rust is not drawn from this revision: 0.336% of the interleaved directory reaches 0.336% of the code mixture at 1 pass(es), under the 0.5% floor",
-      "configs": [],
-      "lower_bound": false,
-      "missing": [],
-      "partial": [],
-      "per_config": {},
-      "share": 0.0,
-      "unique_bytes": 0,
-      "unique_tokens": 0
-    },
-    "shell-sql-other": {
-      "basis": "lower bound -- 547,000 rows of all-all (9 of 10 files read) at 49 admitted bytes/row read",
-      "configs": [
-        "all-all"
-      ],
-      "lower_bound": true,
-      "missing": [],
-      "partial": [
-        "all-all"
-      ],
-      "per_config": {
-        "all-all": 9325612
-      },
-      "share": 0.010871,
-      "unique_bytes": 26689902,
-      "unique_tokens": 9325612
     }
   }
 }

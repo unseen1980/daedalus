@@ -1,59 +1,15 @@
 {
   "buckets": {
-    "c-cpp": {
-      "configs": [
-        "C-all",
-        "C++-all"
-      ],
-      "missing_configs": [],
-      "plan_share": 0.1,
-      "reason": "every directory this bucket names exists on the revision",
-      "redistributed": 0.01715454090165076,
-      "share": 0.117155,
-      "source": "directories"
-    },
-    "go": {
-      "configs": [
-        "GO-all"
-      ],
-      "interleaved_bytes": 25549445,
-      "interleaved_rows": 3055,
-      "languages": [
-        "go"
-      ],
-      "missing_configs": [
-        "GO-all"
-      ],
-      "plan_share": 0.06,
-      "reachable_share": 0.028461755383129665,
-      "reason": "2.846% of the interleaved directory reaches 2.846% of the code mixture at 1 pass(es)",
-      "required_passes": 2.1080920411382715,
-      "share": 0.028462,
-      "source": "interleaved",
-      "source_config": "all-all",
-      "yield_fraction": 0.028461755383129665
-    },
-    "java": {
-      "configs": [
-        "Java-all"
-      ],
-      "missing_configs": [],
-      "plan_share": 0.05,
-      "reason": "every directory this bucket names exists on the revision",
-      "redistributed": 0.00857727045082538,
-      "share": 0.058577,
-      "source": "directories"
-    },
     "javascript-typescript": {
       "configs": [
         "JavaScript-all",
         "TypeScript-all"
       ],
       "missing_configs": [],
-      "plan_share": 0.12,
+      "plan_share": 0.45,
       "reason": "every directory this bucket names exists on the revision",
-      "redistributed": 0.02058544908198091,
-      "share": 0.140585,
+      "redistributed": 0.0,
+      "share": 0.45,
       "source": "directories"
     },
     "python": {
@@ -63,54 +19,9 @@
       "missing_configs": [],
       "plan_share": 0.55,
       "reason": "every directory this bucket names exists on the revision",
-      "redistributed": 0.0943499749590792,
-      "share": 0.64435,
+      "redistributed": 0.0,
+      "share": 0.55,
       "source": "directories"
-    },
-    "rust": {
-      "configs": [
-        "Rust-all"
-      ],
-      "interleaved_bytes": 3015358,
-      "interleaved_rows": 479,
-      "languages": [
-        "rust"
-      ],
-      "missing_configs": [
-        "Rust-all"
-      ],
-      "plan_share": 0.08,
-      "reachable_share": 0.003359070296382685,
-      "reason": "0.336% of the interleaved directory reaches 0.336% of the code mixture at 1 pass(es), under the 0.5% floor",
-      "required_passes": 23.8161136687584,
-      "share": 0.0,
-      "source": "dropped",
-      "source_config": "all-all",
-      "yield_fraction": 0.003359070296382685
-    },
-    "shell-sql-other": {
-      "configs": [
-        "Shell-all",
-        "SQL-all"
-      ],
-      "interleaved_bytes": 9758648,
-      "interleaved_rows": 2052,
-      "languages": [
-        "shell",
-        "sql"
-      ],
-      "missing_configs": [
-        "Shell-all",
-        "SQL-all"
-      ],
-      "plan_share": 0.04,
-      "reachable_share": 0.010871009223334109,
-      "reason": "1.087% of the interleaved directory reaches 1.087% of the code mixture at 1 pass(es)",
-      "required_passes": 3.679511182286727,
-      "share": 0.010871,
-      "source": "interleaved",
-      "source_config": "all-all",
-      "yield_fraction": 0.010871009223334109
     }
   },
   "evidence": {
@@ -122,19 +33,15 @@
     "admitted_bytes": 897676361,
     "available": true,
     "config": "all-all",
-    "kept_fraction": 0.039333,
+    "kept_fraction": 0,
     "rows_read": 200000,
     "stream_amplification": 1.54
   },
   "min_bucket_share": 0.005,
   "problems": [],
-  "redistributed": 0.140667,
+  "redistributed": 0.0,
   "shares": {
-    "c-cpp": 0.117155,
-    "go": 0.028462,
-    "java": 0.058577,
-    "javascript-typescript": 0.140585,
-    "python": 0.64435,
-    "shell-sql-other": 0.010871
+    "javascript-typescript": 0.45,
+    "python": 0.55
   }
 }

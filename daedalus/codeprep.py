@@ -425,11 +425,17 @@ SPLITS = ("train", "holdout")
 DEFAULT_MAX_REPOSITORIES = 200_000
 
 
-#: The plan's code-language shares, over the 65% of phase 8's mixture that is
-#: code. Keys are *buckets* rather than languages because the plan groups some
+#: What the plan preregistered, over the 65% of phase 8's mixture that is code.
+#: Keys are *buckets* rather than languages because the plan groups some
 #: ("JavaScript/TypeScript 12%", "C/C++ 10%", "shell/SQL/other 4%") and a bucket
 #: is the unit a token budget is set on.
-CODE_LANGUAGE_SHARES = {
+#:
+#: Kept beside the live table rather than replaced by it, for the reason
+#: `code-run-manifest.json` keeps both: this is what the drops below are drops
+#: *from*, and the fallback measurements that decided rust were taken against
+#: it. A table that only ever showed the current answer could not be used to
+#: re-derive how the current answer was reached.
+PREREGISTERED_CODE_LANGUAGE_SHARES = {
     "python": 0.55,
     "javascript-typescript": 0.12,
     "c-cpp": 0.10,
@@ -439,8 +445,33 @@ CODE_LANGUAGE_SHARES = {
     "shell-sql-other": 0.04,
 }
 
-assert abs(sum(CODE_LANGUAGE_SHARES.values()) - 1.0) < 1e-9, \
-    "code language shares must sum to 1.0"
+#: The code portion as this artifact actually builds it, after two drops of
+#: different kinds:
+#:
+#: * **rust** is a source-availability finding. The parquet revision converted
+#:   no Rust directory and the interleaved one carries Rust at 0.336% of what
+#:   the licence gate admits -- 23.8 passes of the fallback stream to reach 8%,
+#:   against a one-pass budget. It could not be served.
+#: * **c-cpp, java, go and shell-sql-other** are a deliberate scope choice by
+#:   the user, recorded as the `phase8-mixture-amendment` user directive. All
+#:   four were *reachable*: c-cpp and java have their own directories and go and
+#:   shell-sql-other cleared the floor from the interleaved one, and
+#:   `corpus headroom` verified every one SUPPORTED at all three gates. They
+#:   were not asked for.
+#:
+#: The two must not be recorded as the same kind of fact, and the freed share
+#: goes to javascript-typescript rather than to python: the redistribution had
+#: drifted python to 64.4% precisely because every unreachable bucket was
+#: non-Python, and both gate benchmarks are Python-only, so that drift was a
+#: reporting hazard. This returns python to exactly its preregistered 55%.
+CODE_LANGUAGE_SHARES = {
+    "python": 0.55,
+    "javascript-typescript": 0.45,
+}
+
+for _table in (PREREGISTERED_CODE_LANGUAGE_SHARES, CODE_LANGUAGE_SHARES):
+    assert abs(sum(_table.values()) - 1.0) < 1e-9, \
+        "code language shares must sum to 1.0"
 
 #: The plan's continued-pretraining mixture: what the 65% above is 65% *of*.
 CORPUS_SHARES = {"code": 0.65, "technical": 0.15, "general-replay": 0.20}
@@ -466,8 +497,16 @@ GITHUB_CODE_LANGUAGES = {
     "shell-sql-other": ("Shell-all", "SQL-all"),
 }
 
-assert set(GITHUB_CODE_LANGUAGES) == set(CODE_LANGUAGE_SHARES), \
-    "every code bucket needs a source and every source needs a share"
+#: Every bucket with a share needs a directory to read it from. The converse is
+#: deliberately *not* required: a bucket the mixture no longer asks for keeps
+#: its entry here, because this table describes the dataset rather than the
+#: artifact, and the fallback path it names is the evidence that decided the
+#: drops. Deleting the four dropped buckets would discard the measurement that
+#: proved rust unreachable.
+assert set(GITHUB_CODE_LANGUAGES) >= set(CODE_LANGUAGE_SHARES), \
+    "every code bucket with a share needs a source"
+assert set(GITHUB_CODE_LANGUAGES) == set(PREREGISTERED_CODE_LANGUAGE_SHARES), \
+    "every preregistered bucket needs a source and every source needs a share"
 
 #: The `language` values each bucket is, in the interleaved directory's own
 #: vocabulary rather than the plan's. Compared case-folded (`normalize_language`),
@@ -485,8 +524,8 @@ GITHUB_CODE_BUCKET_LANGUAGES = {
     "shell-sql-other": ("Shell", "SQL"),
 }
 
-assert set(GITHUB_CODE_BUCKET_LANGUAGES) == set(CODE_LANGUAGE_SHARES), \
-    "every code bucket needs its language names and every one needs a share"
+assert set(GITHUB_CODE_BUCKET_LANGUAGES) == set(PREREGISTERED_CODE_LANGUAGE_SHARES), \
+    "every preregistered bucket needs its language names"
 
 #: The directory that carries every language at once, and the only source on the
 #: pinned revision for the four buckets with no directory of their own.
@@ -1064,7 +1103,12 @@ def probe_languages(languages: Optional[Sequence[str]] = None, *,
               "rows_per_config": rows, "languages": {}}
     for bucket in buckets:
         report["languages"][bucket] = {
-            "share": CODE_LANGUAGE_SHARES[bucket],
+            # 0.0 for a bucket the mixture no longer asks for. The probe
+            # measures the *dataset*, and a directory is worth measuring
+            # whether or not this artifact draws from it -- that is how the
+            # dropped buckets' evidence stays reproducible. A missing key
+            # would make probing them a crash instead.
+            "share": CODE_LANGUAGE_SHARES.get(bucket, 0.0),
             "configs": [probe_source(config, rows=rows, stream=stream,
                                      holdout_frac=holdout_frac, salt=salt)
                         for config in GITHUB_CODE_LANGUAGES[bucket]],
