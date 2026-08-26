@@ -1,18 +1,20 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-26T20:17:43.870321Z`
-- Phase: `phase8-codeprep-gate`
-- Status: `passed`
-- Source: `vast/daedalus-code-20260824` at `e317c4b2fdef`
-- Elapsed: `57.55h` of `144.0h`
-- Finalization window opens in: `78.45h`
+> **Action required.** lane directive: phase8-mixture-retarget-URGENT blocked
+
+- Heartbeat: `2026-08-26T20:22:45.309419Z`
+- Phase: `phase8-code-corpus-build`
+- Status: `failed`
+- Source: `vast/daedalus-code-20260824` at `40e8c25f8d60`
+- Elapsed: `57.64h` of `144.0h`
+- Finalization window opens in: `78.36h`
 - Deadline stage: `active`
 
 ## Lanes
 
-- `directive`: `phase8-mixture-retarget` (passed)
+- `directive`: `phase8-mixture-retarget-URGENT` (blocked)
 - `evidence`: `phase6-stageb-decode` (passed)
-- `inspect`: `phase8-codeprep-build-smoke` (passed)
+- `inspect`: `phase8-state-read` (passed)
 - `operator`: `phase8-branch-prerequisite` (passed)
 - `retrieval`: `phase6-stagea-retrieval-remeasure` (passed)
 - `selfcheck`: `phase6-lane-selfcheck` (passed)

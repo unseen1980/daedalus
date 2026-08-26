@@ -1,13 +1,13 @@
 {
   "attention": {
-    "blocker": "",
-    "user_action_required": false
+    "blocker": "lane directive: phase8-mixture-retarget-URGENT blocked",
+    "user_action_required": true
   },
   "deadline": {
-    "elapsed_hours": 57.55,
-    "finalization_in_hours": 78.45,
+    "elapsed_hours": 57.64,
+    "finalization_in_hours": 78.36,
     "hard_hours": 144.0,
-    "remaining_hours": 86.45,
+    "remaining_hours": 86.36,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,19 +16,21 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T20:17:43.870321Z",
+  "heartbeat_at": "2026-08-26T20:22:45.309419Z",
   "lanes": {
     "directive": {
       "details": {
-        "expected_epochs": "python 55 pct is about 1.2 epochs at the 3B gate and javascript/typescript 45 pct about 0.3, from the committed headroom record. Both are cheaper than the plan they replace, so this is expected to stay SUPPORTED -- but measure it, do not assume it.",
-        "full_directive": "see the phase8-mixture-amendment note of kind user_directive in runs/vast-program/events.jsonl for the reasoning, the epoch estimates, and why this drop must not be recorded as the same kind of finding as the rust drop.",
-        "read_before_building": "do not start the corpus build against the old CODE_LANGUAGE_SHARES. Amend code-run-manifest.json keeping the original split beside the new one, re-run corpus plan and corpus headroom, and confirm SUPPORTED at 250M, 1B and 3B first.",
-        "user_action_required": false,
-        "user_directive": "CODE MIXTURE RETARGETED BY THE USER. code_split_pct becomes python 55, javascript_typescript 45. c_cpp, java, go and shell_sql_other are dropped BY CHOICE, not for availability; rust stays dropped for the availability reason already recorded. The 65/15/20 top-level split is unchanged."
+        "one_thing_to_keep": "do not delete the interleaved language-filter code even though the dropped buckets no longer need it. It is tested and it is the evidence that proved rust unreachable.",
+        "required_order_before_restarting": "1. set CODE_LANGUAGE_SHARES to python 0.55 and javascript-typescript 0.45 only. 2. amend runs/vast-program/code-run-manifest.json, keeping the original code_split_pct beside the new one and naming the user as the authority, the same treatment the rust drop received -- and record explicitly that these four buckets were dropped by choice while their directories exist and their headroom verified SUPPORTED, which is a different kind of fact from the rust finding. 3. re-run scripts/codeprep.py corpus plan and corpus headroom. 4. confirm SUPPORTED at 250M, 1B and 3B and record the new epoch figures -- expected roughly python 1.2 and javascript/typescript 0.3 at 3B, but measure it. 5. rm -rf data/code-shards, then start the build.",
+        "state": "the phase was left reading running with no process behind it; the operator is transitioning it so the ledger is not lying about a build that is not happening.",
+        "the_directive_it_missed": "recorded twice before the build began -- as a user_directive note on phase8-mixture-amendment in events.jsonl, and as the directive lane in state.json under phase8-mixture-retarget. Both say: code_split_pct becomes python 55 and javascript_typescript 45; c_cpp, java, go and shell_sql_other are dropped BY CHOICE; rust stays dropped for the separate availability reason; the 65/15/20 top-level split is unchanged.",
+        "this_is_not_a_criticism_of_the_build_code": "7b9cf81, e317c4b and 1dcb661 are sound and none of them needs changing. corpus build consumes whatever corpus plan produced, so it will build the new mixture correctly once the plan is regenerated. The only fault is ordering: the build ran before the retarget was applied.",
+        "what_the_operator_did": "stopped the phase8-code-corpus-build run and its controller (SIGTERM to both), about two minutes into a 6.0-hour estimate, before it had streamed anything worth keeping. data/code-shards holds 3.9MB and a partial manifest from the stopped attempt; it is not a usable corpus and should be removed rather than resumed.",
+        "why": "the build was streaming the OLD seven-language mixture. daedalus/codeprep.py still had CODE_LANGUAGE_SHARES at python 0.55, javascript-typescript 0.12, c-cpp 0.10, rust 0.08, go 0.06, java 0.05, shell-sql-other 0.04, and runs/codeprep/source-plan.json still held the redistribution derived from it (python 0.6443, javascript-typescript 0.1406, c-cpp 0.1172, java 0.0586, go 0.0285, shell-sql-other 0.0109). The user retargeted the code mixture before this build started."
       },
-      "phase": "phase8-mixture-retarget",
-      "status": "passed",
-      "updated_at": "2026-08-26T20:13:53.161746Z"
+      "phase": "phase8-mixture-retarget-URGENT",
+      "status": "blocked",
+      "updated_at": "2026-08-26T20:21:35.921987Z"
     },
     "evidence": {
       "details": {
@@ -59,27 +61,16 @@
         "attempts": 1,
         "command": [
           "python",
-          "scripts/codeprep.py",
-          "corpus",
-          "build",
-          "--total-tokens",
-          "1000000",
-          "--max-docs-per-source",
-          "25",
-          "--out-root",
-          "data/code-shards-smoke",
-          "--manifest",
-          "data/code-shards-smoke/manifest.json",
-          "--shard-tokens",
-          "2000000"
+          "-c",
+          "\nimport json\ns=json.load(open('runs/vast-program/state.json'))\nprint('main:', s['phase'], s['status'], s['updated_at'])\nprint('details:', json.dumps(s.get('details'))[:300])\n"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-codeprep-build-smoke",
+      "phase": "phase8-state-read",
       "status": "passed",
-      "updated_at": "2026-08-26T20:15:38.587831Z"
+      "updated_at": "2026-08-26T20:19:29.406243Z"
     },
     "operator": {
       "details": {
@@ -135,12 +126,12 @@
     }
   },
   "metrics": {},
-  "phase": "phase8-codeprep-gate",
+  "phase": "phase8-code-corpus-build",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "e317c4b2fdef",
+  "source_sha": "40e8c25f8d60",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
-  "status": "passed",
-  "updated_at": "2026-08-26T20:15:38.587831Z"
+  "status": "failed",
+  "updated_at": "2026-08-26T20:21:35.921987Z"
 }
