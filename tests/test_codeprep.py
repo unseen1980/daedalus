@@ -2171,6 +2171,48 @@ def test_a_source_that_really_runs_out_still_says_so(tmp_path, monkeypatch,
     assert "stream exhausted" in capsys.readouterr().err
 
 
+def test_one_source_tripping_the_memory_cap_stops_the_process(
+        tmp_path, monkeypatch, capsys):
+    """`_run_group_worker`'s rule. The eighth dataprep incident was a raw
+    C-level malloc failure moments after one source's *graceful* cap trip, in a
+    process that had gone on to the next source while still holding the memory
+    -- and it took every other source's in-flight progress with it. Leaving
+    exits non-zero, and the controller's next attempt is a fresh process that
+    resumes from the shards."""
+    import scripts.codeprep as CLI
+    from daedalus import data as DATA
+    from daedalus import dataprep as DP
+
+    _write_code_index(tmp_path)
+    monkeypatch.setattr(DATA, "get_tokenizer", lambda name=None: _FakeTokenizer())
+    _github_stream(monkeypatch, _code_rows(400))
+
+    seen = []
+
+    def explode(limit_gb):
+        raise DP.WorkerMemoryExceeded("worker RSS 9.1 GB exceeds the 8.0 GB cap")
+
+    monkeypatch.setattr(DP, "_check_worker_rss", explode)
+    monkeypatch.setattr(DP, "run_source", _counting(DP.run_source, seen))
+
+    rc = CLI._cli(_build_argv(tmp_path, _one_bucket_plan(tmp_path),
+                              **{"holdout-frac": 0.5, "rss-check-every": 1}))
+
+    assert rc == 3
+    # The holdout side ran and tripped; the train side was never started.
+    assert len(seen) == 1
+    manifest = json.load(open(tmp_path / "code-shards" / "manifest.json"))
+    train = next(e for e in manifest["sources"] if e["split"] == "train")
+    assert "skipped" in train["error"]
+
+
+def _counting(fn, seen):
+    def wrapper(*args, **kwargs):
+        seen.append(args[0].key)
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 def test_a_dry_run_prints_the_budgets_without_reading_a_row(tmp_path, capsys):
     import scripts.codeprep as CLI
 

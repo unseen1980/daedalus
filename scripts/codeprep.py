@@ -615,6 +615,7 @@ def _build_corpus(a) -> int:
             os.fsync(f.fileno())
         os.replace(tmp, a.manifest)
 
+    rss_exceeded = False
     for source in sources:
         out_dir = source.out_dir(a.out_root)
         split_root = os.path.join(a.out_root, source.split)
@@ -627,6 +628,26 @@ def _build_corpus(a) -> int:
                     prior_gate = json.load(f)
             except (OSError, json.JSONDecodeError):
                 prior_gate = None
+
+        if rss_exceeded:
+            # `_run_group_worker`'s rule, for the same reason: a process that
+            # has already tripped its resident cap is holding that memory, and
+            # the eighth dataprep incident was a raw C-level malloc failure
+            # moments after one source's graceful cap trip took the next one
+            # down hard enough to lose every other source's in-flight progress.
+            # Leaving now exits non-zero, and the controller's next attempt is a
+            # fresh process that resumes each source from its shards.
+            print(f"=== skip {source.split}/{source.key}: an earlier source "
+                  f"exceeded the RSS cap in this process ===", flush=True)
+            manifest["sources"].append({
+                **{k: v for k, v in vars(source).items()
+                   if k not in ("spec", "gate")},
+                **{k: v for k, v in recovered.items() if k != "drops"},
+                "gate": prior_gate,
+                "error": "skipped: an earlier source exceeded the RSS cap in "
+                         "this process"})
+            write_manifest()
+            continue
 
         if a.resume and recovered.get("tokens", 0) >= source.token_budget > 0:
             print(f"=== skip {source.split}/{source.key}: "
@@ -681,6 +702,8 @@ def _build_corpus(a) -> int:
             stats = dict(recovered) or {"key": source.key, "tokens": 0}
             stats["error"] = repr(e)
         stats = _uncap_exhaustion(stats, a.max_docs_per_source)
+        if "WorkerMemoryExceeded" in str(stats.get("error") or ""):
+            rss_exceeded = True
 
         # Merged only when the resume restored a stream *position*. The replay
         # fallback re-reads the prefix from row zero and the gate is consulted
