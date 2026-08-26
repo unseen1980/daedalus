@@ -383,7 +383,7 @@ def main(argv=None) -> int:
             source_root, run_tokens=args.exposure_tokens, weights=weights)
 
     from daedalus.config import PRESETS
-    from daedalus.data import get_tokenizer
+    from daedalus.data import assert_shards_tokenizer, get_tokenizer
     from daedalus.model import Daedalus
     from eval import evaluate_bpb
     from train import load_checkpoint
@@ -396,6 +396,11 @@ def main(argv=None) -> int:
     # artifact shared one tokenizer; wrong from Phase 4 onward, which is
     # exactly when BPB became the metric that decides between vocabularies.
     tokenizer = get_tokenizer(args.tokenizer)
+    # Which makes it part of the measurement, so it is checked against the
+    # shards rather than trusted: a holdout that records the vocabulary it was
+    # packed under and disagrees produces a finite, plausible, wrong BPB, and
+    # BPB is what the phase gates are decided on.
+    assert_shards_tokenizer(args.holdout_root, tokenizer, args.tokenizer)
     model = Daedalus(PRESETS[args.config]).to(args.device)
     load_checkpoint(args.checkpoint, model, map_location=args.device)
     model.eval()

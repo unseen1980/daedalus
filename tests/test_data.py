@@ -783,6 +783,28 @@ def test_one_wrong_source_in_a_mixture_root_is_named(tmp_path):
     assert "fineweb-edu" not in str(excinfo.value)
 
 
+def test_a_holdout_packed_by_another_tokenizer_is_refused_with_its_directory(
+        tmp_path):
+    """The evaluator holds a real tokenizer, so it gets the stronger check: two
+    vocabularies of the same size trained on different samples agree on
+    `vocab_size` and nothing else, and the probe digest separates them. The
+    directory is named because a holdout root has one per source."""
+    from daedalus.data import assert_shards_tokenizer, tokenizer_fingerprint
+
+    root = tmp_path / "holdout"
+    for name in ("fineweb-edu", "stack-edu-python"):
+        tree = _packed_tree(root, name)
+        manifest = json.loads((tree / "manifest.json").read_text())
+        manifest["tokenizer"] = tokenizer_fingerprint(
+            _FingerprintTokenizer(32768), f"fake/tok-32768-{name}")
+        (tree / "manifest.json").write_text(json.dumps(manifest))
+
+    assert_shards_tokenizer(str(root), _FingerprintTokenizer(32768))
+    with pytest.raises(ValueError, match="tokenizer mismatch") as excinfo:
+        assert_shards_tokenizer(str(root), _FingerprintTokenizer(49152))
+    assert "fineweb-edu" in str(excinfo.value)
+
+
 def test_a_tree_that_records_no_vocabulary_still_loads(tmp_path):
     """Every corpus on this box predates the fingerprint, including the one
     phase 8 continues from. Unknown must not read as mismatched."""

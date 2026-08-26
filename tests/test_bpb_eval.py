@@ -463,6 +463,9 @@ def test_the_tokenizer_flag_decodes_the_holdout_not_just_labels_it():
     source = inspect.getsource(bpb_eval.main)
     assert "get_tokenizer(args.tokenizer)" in source
     assert "get_tokenizer()" not in source
+    # And, being part of the measurement, checked against the shards rather
+    # than trusted -- a mismatch here is a finite, plausible, wrong BPB.
+    assert "assert_shards_tokenizer(args.holdout_root" in source
 
 
 def test_a_tokenizer_directory_is_hashed_by_its_vocabulary_file(tmp_path):

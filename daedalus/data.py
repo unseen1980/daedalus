@@ -95,6 +95,25 @@ def tokenizer_fingerprint(tokenizer, name: Optional[str] = None) -> dict:
     return fingerprint
 
 
+def shard_manifests(root: str) -> List[str]:
+    """Every `manifest.json` under `root`, for either shape a caller may pass.
+
+    A single source directory has its own; a mixture or holdout root has one per
+    subdirectory. Both are handed to `--data-dir` and `--holdout-root` and told
+    apart exactly this way by `train.py` and `scripts/bpb_eval.py`, so the
+    guards below ask the same question of the same set of files rather than each
+    re-deciding which shape it was given.
+    """
+    if not os.path.isdir(root):
+        return []
+    own = os.path.join(root, "manifest.json")
+    if os.path.exists(own):
+        return [own]
+    return sorted(os.path.join(root, child, "manifest.json")
+                  for child in os.listdir(root)
+                  if os.path.exists(os.path.join(root, child, "manifest.json")))
+
+
 def manifest_vocab_size(manifest: dict) -> Optional[int]:
     """The vocabulary size a tree was packed under, or None if unrecorded.
 
@@ -127,18 +146,8 @@ def assert_shards_vocab_size(data_dir: str, vocab_size: int) -> None:
     can be wrong in one source. A manifest with no fingerprint is passed
     through, so every corpus built before the field existed keeps loading.
     """
-    if not os.path.isdir(data_dir):
-        return
-    own = os.path.join(data_dir, "manifest.json")
-    if os.path.exists(own):
-        manifests = [own]
-    else:
-        manifests = sorted(
-            os.path.join(data_dir, child, "manifest.json")
-            for child in os.listdir(data_dir)
-            if os.path.exists(os.path.join(data_dir, child, "manifest.json")))
     mismatched = []
-    for path in manifests:
+    for path in shard_manifests(data_dir):
         try:
             with open(path) as handle:
                 recorded = manifest_vocab_size(json.load(handle))
@@ -185,6 +194,35 @@ def assert_manifest_tokenizer(manifest: dict, tokenizer, name: Optional[str] = N
                 f"{current['name']!r} gives {current[field]!r}. Reading these "
                 f"ids under this tokenizer is not an error anything raises -- "
                 f"it silently trains on a different vocabulary.")
+
+
+def assert_shards_tokenizer(root: str, tokenizer, name: Optional[str] = None
+                            ) -> None:
+    """`assert_manifest_tokenizer` over every source under `root`.
+
+    For the reader that *does* hold a tokenizer -- `scripts/bpb_eval.py`, which
+    decodes the held-out ids to count the bytes that bits-per-byte is per. That
+    makes the tokenizer part of the measurement, not a label on it: decoding a
+    32,768-vocabulary holdout with SmolLM2 counts the wrong bytes and reports a
+    BPB for a corpus that does not exist, and every phase-4 through phase-8 gate
+    is decided on that number.
+
+    Checks the full fingerprint rather than the row count alone, because here
+    the stronger comparison is available: two vocabularies of the same size
+    trained on different samples share `vocab_size` and agree on nothing else,
+    and the probe digest separates them.
+    """
+    for path in shard_manifests(root):
+        try:
+            with open(path) as handle:
+                manifest = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        try:
+            assert_manifest_tokenizer(manifest, tokenizer, name)
+        except ValueError as exc:
+            raise ValueError(
+                f"{os.path.dirname(path)}: {exc}") from None
 
 
 # --------------------------------------------------------------- streaming ----
