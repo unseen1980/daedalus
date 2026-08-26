@@ -1,0 +1,50 @@
+Downloading dataset from https://github.com/evalplus/mbppplus_release/releases/download/v0.2.0/MbppPlus.jsonl.gz
+Traceback (most recent call last):
+  File "/workspace/daedalus/scripts/code_eval.py", line 668, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/workspace/daedalus/scripts/code_eval.py", line 655, in main
+    paths = run_code_eval(args.dataset, problems, backend, out_dir=args.out_dir,
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/daedalus/scripts/code_eval.py", line 559, in run_code_eval
+    records = evaluate_problems(problems, backend, timeout_s=timeout_s,
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/daedalus/scripts/code_eval.py", line 483, in evaluate_problems
+    base = run_in_sandbox(solution, test_program_for(problem, "base"),
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/daedalus/scripts/code_eval.py", line 442, in test_program_for
+    raise ValueError(
+ValueError: problem 'Mbpp/2' carries no base test; keys are ['assertion', 'atol', 'base_input', 'canonical_solution', 'contract', 'entry_point', 'plus_input', 'prompt', 'task_id']
+Traceback (most recent call last):
+  File "/workspace/daedalus/scripts/vast_program.py", line 666, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/workspace/daedalus/scripts/vast_program.py", line 653, in main
+    controller.run_phase(
+  File "/workspace/daedalus/scripts/vast_program.py", line 388, in run_phase
+    raise PhaseFailed(phase, returncodes)
+PhaseFailed: phase 'phase8-base-code-baseline-mbpp' failed with return codes [1]
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+{
+  "fail_assertion_failed": 37.0,
+  "fail_exception": 50.0,
+  "fail_syntax_error": 289.0,
+  "n": 378.0,
+  "pass@1": 0.007936507936507936,
+  "pass@1_plus": 0.005291005291005291,
+  "plus_inputs_absent": 1.0,
+  "syntax_valid": 0.23809523809523808
+}
+wrote runs/eval/code-base/mbpp-plus.json
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+{
+  "fail_assertion_failed": 37.0,
+  "fail_exception": 50.0,
+  "fail_syntax_error": 289.0,
+  "n": 378.0,
+  "pass@1": 0.007936507936507936,
+  "pass@1_plus": 0.005291005291005291,
+  "plus_inputs_absent": 1.0,
+  "syntax_valid": 0.23809523809523808
+}
+wrote runs/eval/code-base/mbpp-plus.json

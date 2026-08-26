@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "branch": "vast/daedalus-code-20260824",
+  "parent_branch": "vast/daedalus-improvements-20260824",
+  "parent_sha": "8aa5cb482cdd93a2a8f2912ef19b27ecbe9f81ce",
+  "program_base_sha": "99232b4aaaeee6c507611094593f39e861178ebe",
+  "created_at": "2026-08-26T16:53Z",
+  "created_at_source": "box clock at branch creation",
+  "parent_evidence": {
+    "full_suite": "2022 passed, 4 skipped in 222s",
+    "log": "runs/vast-program/full-suite-20260826T1725Z.log",
+    "note": "the log filenames were composed from an estimated clock and read ~25 minutes early; the runs completed at ~16:39Z and ~16:52Z"
+  },
+  "why_this_parent": "the plan creates the code branch from the current tested optimization SHA. 8aa5cb4 is the first SHA where the launcher can supervise a training phase (cad395e, 66b62af), which is the capability every phase 8 run depends on.",
+  "base_model": {
+    "role": "continued pretraining starts here; never the SFT/DPO checkpoint",
+    "checkpoint": {
+      "path": "/root/daedalus/final/hero/checkpoint.pt",
+      "sha256": "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153",
+      "config": "daedalus-150m"
+    },
+    "gguf": "/root/daedalus/gguf/hero-base-f16.gguf",
+    "tokenizer": "released 49,152-entry vocabulary, inherited unchanged",
+    "inherited_limits": [
+      "the 49,152 tokenizer, not phase 4's selected 32,768 -- a vocabulary cannot be transplanted into trained weights",
+      "the released model's dead ShortConv channels, which phase 5's schedules prevent from initialization and cannot revive"
+    ],
+    "label": "Daedalus-Code V1, for both reasons above"
+  },
+  "baselines_before_adaptation": {
+    "measured_at": "2026-08-26T15:29Z to 15:47Z",
+    "scorecards": ["runs/eval/code-base", "runs/eval/code-base-oracle"],
+    "seed": 20260824,
+    "runtime": {"backend": "torch", "evalplus": "0.3.1", "max_new_tokens": 384,
+                "timeout_s": 30.0, "memory_mb": 1024},
+    "humaneval_plus": {"n": 164, "pass@1": 0.0, "pass@1_plus": 0.0,
+                       "syntax_valid": 1.0, "oracle_pass@1": 1.0},
+    "mbpp_plus": {"n": 378, "pass@1": 0.007936507936507936,
+                  "pass@1_plus": 0.005291005291005291,
+                  "syntax_valid": 0.23809523809523808,
+                  "plus_inputs_absent": 1, "oracle_pass@1": 1.0},
+    "reading": "a 150M base at ~zero execution is expected; both oracles return 1.000 through the identical sandbox, so the zero is the model's answer and not the harness failing to run. MBPP+ syntax validity at 0.238 against HumanEval+'s 1.000 is the headroom to watch: it moves before pass@1 does, and a 250M-token probe gated on pass@1 alone would read every arm as identical zero."
+  },
+  "gates": {
+    "probes_250m": {"arms": ["muon_lr=5e-4", "muon_lr=1e-3", "muon_lr=2e-3"],
+                    "select_on": "code BPB and execution pass@1, subject to general retention",
+                    "stop_if": "no arm improves code BPB by >=2% or moves execution/syntax signal"},
+    "branch_1b": {"continue_if": "general BPB regression <=1.5%, five-task mean drop <=1 point, retrieval drop <=2 points at every depth, code metrics improve"},
+    "extension_2b": {"only_if": "the 1B gate passes and completion is projected before T+136h",
+                     "how": "--init-from the 1B weights, lower LR, fresh WSD, same replay floor",
+                     "report_as": "staged adaptation, not one uninterrupted 3B schedule"},
+    "dpo": {"keep_only_if": "held-out preference accuracy AND execution pass@1 both improve",
+            "otherwise": "the SFT model is the instruct winner and DPO is recorded as rejected"},
+    "final": {"code_bpb_improvement_pct": 5.0, "general_bpb_regression_pct_max": 1.5,
+              "five_task_mean_drop_max": 1.0, "single_task_drop_review_at": 2.0,
+              "retrieval_drop_max_points": 2.0,
+              "execution": "HumanEval+/MBPP+ pass@1 and syntax validity must improve over the untouched base"}
+  },
+  "mixture": {
+    "code_pct": 65, "technical_math_prose_pct": 15, "general_replay_pct": 20,
+    "code_split_pct": {"python": 55, "javascript_typescript": 12, "c_cpp": 10,
+                       "rust": 8, "go": 6, "java": 5, "shell_sql_other": 4},
+    "holdout": "split by repository, never by file or by packed window",
+    "decontamination": "HumanEval+ and MBPP+ prompts, reference solutions, tests and repository metadata",
+    "licences": "permissive only, with repository identity, commit/revision and licence recorded per document"
+  },
+  "branch_policy": {
+    "commit_here": ["code data preparation", "code evaluation results",
+                    "code training and post-training", "Daedalus-Code documentation"],
+    "commit_on_parent_first": "shared files (train.py, post.py, daedalus/dpo.py, eval and control-plane code), then merge forward",
+    "pr": "stacked draft onto vast/daedalus-improvements-20260824; never merged automatically",
+    "publication": "private experiment repositories only, until explicit approval"
+  }
+}

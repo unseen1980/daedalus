@@ -1,0 +1,101 @@
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+Traceback (most recent call last):
+  File "/workspace/daedalus/scripts/code_eval.py", line 789, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/workspace/daedalus/scripts/code_eval.py", line 776, in main
+    paths = run_code_eval(name, problems, backend, out_dir=args.out_dir,
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/daedalus/scripts/code_eval.py", line 643, in run_code_eval
+    records = evaluate_problems(problems, backend, timeout_s=timeout_s,
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/daedalus/scripts/code_eval.py", line 575, in evaluate_problems
+    plus = run_in_sandbox(solution, test_program_for(problem, "plus"),
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/daedalus/scripts/code_eval.py", line 549, in test_program_for
+    return _differential_program(problem, problem.get("plus_input"),
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/daedalus/scripts/code_eval.py", line 496, in _differential_program
+    raise ValueError(
+ValueError: problem 'Mbpp/793' has no plus inputs or no reference to derive expectations from; keys are ['assertion', 'atol', 'base_input', 'canonical_solution', 'contract', 'entry_point', 'plus_input', 'prompt', 'task_id']
+Traceback (most recent call last):
+  File "/workspace/daedalus/scripts/vast_program.py", line 666, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/workspace/daedalus/scripts/vast_program.py", line 653, in main
+    controller.run_phase(
+  File "/workspace/daedalus/scripts/vast_program.py", line 388, in run_phase
+    raise PhaseFailed(phase, returncodes)
+PhaseFailed: phase 'phase8-code-harness-oracle-mbpp' failed with return codes [1]
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+{
+  "fail_assertion_failed": 3.0,
+  "fail_exception": 1.0,
+  "fail_resource_limit": 1.0,
+  "fail_syntax_error": 1.0,
+  "n": 378.0,
+  "pass@1": 0.9894179894179894,
+  "pass@1_plus": 0.9841269841269841,
+  "plus_inputs_absent": 1.0,
+  "syntax_valid": 0.9973544973544973
+}
+wrote runs/eval/code-base-oracle/mbpp-plus-oracle.json
+<unknown>:5: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:4: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+{
+  "fail_exception": 1.0,
+  "n": 378.0,
+  "pass@1": 1.0,
+  "pass@1_plus": 0.9973544973544973,
+  "plus_inputs_absent": 1.0,
+  "syntax_valid": 1.0
+}
+wrote runs/eval/code-base-oracle/mbpp-plus-oracle.json
+<unknown>:5: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:4: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:7: SyntaxWarning: invalid escape sequence '\.'
+{
+  "n": 378.0,
+  "pass@1": 1.0,
+  "pass@1_plus": 1.0,
+  "plus_inputs_absent": 1.0,
+  "syntax_valid": 1.0
+}
+wrote runs/eval/code-base-oracle/mbpp-plus-oracle.json
+<unknown>:5: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:9: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:9: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:9: SyntaxWarning: invalid escape sequence '\w'
+<unknown>:4: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\.'
+<unknown>:8: SyntaxWarning: invalid escape sequence '\.'
+{
+  "n": 378.0,
+  "pass@1": 1.0,
+  "pass@1_plus": 1.0,
+  "plus_inputs_absent": 1.0,
+  "syntax_valid": 1.0
+}
+wrote runs/eval/code-base-oracle/mbpp-plus-oracle.json
