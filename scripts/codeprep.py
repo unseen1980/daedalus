@@ -42,7 +42,8 @@ from daedalus.codeprep import (CODE_LANGUAGE_SHARES,  # noqa: E402
                                GITHUB_CODE_DATASET, GITHUB_CODE_REVISION,
                                MIN_BUCKET_SHARE, CODE_BYTES_PER_TOKEN,
                                CORPUS_SHARES, SPLIT_SALT, build_code_index,
-                               bucket_supply, code_coverage_problems,
+                               bucket_supply, checkpoint_every_for,
+                               code_coverage_problems,
                                code_manifest_record, code_token_budget,
                                config_near_misses, config_row_counts,
                                corpus_specs, github_code_configs, load_index,
@@ -691,7 +692,15 @@ def _build_corpus(a) -> int:
                 max_docs=a.max_docs_per_source,
                 rss_limit_gb=a.rss_limit_gb,
                 rss_check_every=a.rss_check_every,
-                checkpoint_every=a.checkpoint_every,
+                # Derived from this source's own budget unless overridden: the
+                # shared 50,000-document default never fires at all on a
+                # holdout pass, which yields ~2% of what it streams. See
+                # `checkpoint_every_for`.
+                checkpoint_every=(a.checkpoint_every
+                                  or checkpoint_every_for(source.token_budget)),
+                progress_every=(a.progress_every
+                                or max(1, checkpoint_every_for(
+                                    source.token_budget) // 2)),
                 resume_skip=resume.get("resume_skip", 0),
                 resume_seed=resume.get("resume_seed"),
                 resume_stream_state=resume.get("stream_state"),
@@ -929,7 +938,16 @@ def _cli(argv=None) -> int:
                             "smoke, and reported as one")
     build.add_argument("--rss-limit-gb", type=float, default=8.0)
     build.add_argument("--rss-check-every", type=int, default=5_000)
-    build.add_argument("--checkpoint-every", type=int, default=50_000)
+    build.add_argument(
+        "--checkpoint-every", type=int, default=0,
+        help="documents between durable checkpoints; 0 derives it from each "
+             "source's own budget, because a cadence in yielded documents "
+             "never fires on a holdout pass and a fixed small one leaves "
+             "hundreds of shards behind on a large source")
+    build.add_argument("--progress-every", type=int, default=0,
+                       help="documents between progress lines; 0 derives it "
+                            "the same way, so a multi-hour source is legible "
+                            "instead of silent")
     build.add_argument(
         "--no-resume", dest="resume", action="store_false",
         help="rebuild every source from row zero. The default continues each "

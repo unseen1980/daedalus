@@ -2213,6 +2213,61 @@ def _counting(fn, seen):
     return wrapper
 
 
+def test_a_holdout_pass_checkpoints_even_though_it_yields_almost_nothing():
+    """`run_source` counts its checkpoint cadence in *yielded* documents, and a
+    holdout pass yields ~2% of what it streams. At the shared 50,000-document
+    default the whole 2M-token Python holdout yields ~800 documents and never
+    checkpoints once -- so the pass with the most streaming to lose is the one
+    a fixed cadence never protects."""
+    assert CP.checkpoint_every_for(2_000_000) == CP.MIN_CHECKPOINT_DOCUMENTS
+    assert CP.checkpoint_every_for(2_000_000) < 50_000
+
+
+def test_a_large_source_does_not_checkpoint_itself_into_hundreds_of_shards():
+    """Every checkpoint closes the buffer as a new shard file, so the cadence
+    cannot just be made small: a 500-document one over the 418M-token Python
+    source would leave ~840 shards behind."""
+    every = CP.checkpoint_every_for(418_827_500)
+
+    documents = 418_827_500 / CP.CODE_TOKENS_PER_DOCUMENT
+    assert documents / every == pytest.approx(CP.CHECKPOINTS_PER_SOURCE, abs=1)
+    assert every > CP.MIN_CHECKPOINT_DOCUMENTS
+
+
+def test_the_build_derives_the_cadence_per_source_unless_told_otherwise(
+        tmp_path, monkeypatch, capsys):
+    import scripts.codeprep as CLI
+    from daedalus import data as DATA
+    from daedalus import dataprep as DP
+
+    _write_code_index(tmp_path)
+    monkeypatch.setattr(DATA, "get_tokenizer", lambda name=None: _FakeTokenizer())
+    _github_stream(monkeypatch, _code_rows(400))
+    seen = []
+
+    real_run_source = DP.run_source          # not DP.run_source at call time:
+                                             # that is this wrapper, forever
+
+    def record(spec, tokenizer, budget, out_dir, *args, **kwargs):
+        seen.append((spec.key, kwargs["checkpoint_every"]))
+        return real_run_source(spec, tokenizer, budget, out_dir, *args, **kwargs)
+
+    monkeypatch.setattr(DP, "run_source", record)
+
+    assert CLI._cli(_build_argv(tmp_path, _one_bucket_plan(tmp_path),
+                                **{"holdout-frac": 0.5})) == 0
+    assert {every for _, every in seen} == {CP.MIN_CHECKPOINT_DOCUMENTS}
+
+    seen.clear()
+    # A second root, because the first build met both budgets and a resumed
+    # source that is already complete is skipped rather than re-run.
+    assert CLI._cli(_build_argv(tmp_path, _one_bucket_plan(tmp_path),
+                                **{"holdout-frac": 0.5, "checkpoint-every": 7,
+                                   "out-root": tmp_path / "again",
+                                   "manifest": tmp_path / "again" / "m.json"})) == 0
+    assert {every for _, every in seen} == {7}
+
+
 def test_a_dry_run_prints_the_budgets_without_reading_a_row(tmp_path, capsys):
     import scripts.codeprep as CLI
 

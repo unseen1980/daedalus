@@ -1555,6 +1555,47 @@ CODE_TEXT_FIELD = "code"
 DEFAULT_HOLDOUT_CAP_TOKENS = 2_000_000
 
 
+#: Tokens per admitted code document, measured on the live smoke: 62,354 tokens
+#: over 25 `Python-all` documents. Used only to turn a token budget into a
+#: document count for the cadences below, never into a corpus size -- a rough
+#: constant is fine for "how often should this checkpoint" and would not be for
+#: "how much does this hold", which `bucket_supply` measures per directory.
+CODE_TOKENS_PER_DOCUMENT = 2_500
+
+#: Durable checkpoints a source should take over its budget.
+CHECKPOINTS_PER_SOURCE = 20
+
+#: Never coarser than this, in documents. A holdout pass yields few documents
+#: however long it streams, and a floor is what makes it checkpoint at all.
+MIN_CHECKPOINT_DOCUMENTS = 200
+
+
+def checkpoint_every_for(token_budget: int, *,
+                         checkpoints: int = CHECKPOINTS_PER_SOURCE,
+                         tokens_per_document: int = CODE_TOKENS_PER_DOCUMENT,
+                         minimum: int = MIN_CHECKPOINT_DOCUMENTS) -> int:
+    """How often one source should write a durable checkpoint, in documents.
+
+    `run_source` counts this cadence in *yielded* documents -- the ones that
+    passed the gate -- and a holdout pass yields about 2% of what it streams.
+    At the shared 50,000-document default the whole 2M-token Python holdout
+    yields ~800 documents and therefore never checkpoints once, so the passes
+    with the most streaming to lose are exactly the ones a fixed cadence never
+    protects. A crash at 90% of one restarts it at row zero.
+
+    It cannot simply be made small either: every checkpoint calls
+    `ShardWriter.flush_partial`, which closes the buffer as a *new shard file*,
+    so a 500-document cadence over the 418M-token Python source would leave
+    ~840 shards behind. Deriving it from the budget keeps the count bounded at
+    both ends -- about `checkpoints` per source, and never coarser than
+    `minimum` for a source that yields very few documents.
+    """
+    if token_budget <= 0 or checkpoints <= 0 or tokens_per_document <= 0:
+        return minimum
+    documents = token_budget / tokens_per_document
+    return max(minimum, int(documents // checkpoints))
+
+
 def code_text(row: dict) -> str:
     """`SourceSpec.text_fn` for a GitHub code row.
 
