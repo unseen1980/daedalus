@@ -198,6 +198,45 @@ def test_a_torn_last_metrics_line_is_not_a_verdict(tmp_path):
     assert CP.arm_is_complete(run_dir, arm.total_tokens) is True
 
 
+def test_the_in_flight_marker_says_which_phase_is_resuming(tmp_path,
+                                                           monkeypatch):
+    """`boot_resume.py` continues a run from that marker after a reboot and the
+    keeper reads it to know the box is busy, so the phase name in it is
+    provenance. `qat_recovery.launch_supervised` is otherwise exactly this
+    function and hardcodes phase 3's name."""
+    import daedalus.supervise as supervise
+
+    seen = {}
+
+    def fake_run_with_resume(command, checkpoint, **kwargs):
+        seen.update(kwargs)
+        seen["checkpoint"] = checkpoint
+        return {"attempts": 1, "returncodes": [0]}
+
+    monkeypatch.setattr(supervise, "run_with_resume", fake_run_with_resume)
+    monkeypatch.setattr(supervise, "start_watchdog",
+                        lambda *a, **k: "watchdog")
+    monkeypatch.setattr(supervise, "stop_watchdog", lambda handle: None)
+    arm = CP.probe_arms()[0]
+
+    CP.launch_supervised(arm, ["python", "train.py"], run_root=str(tmp_path))
+
+    assert seen["inflight_extra"]["phase"] == "phase8-code-probes"
+    assert seen["inflight_extra"]["arm"] == arm.name
+    assert seen["inflight_extra"]["total_tokens"] == arm.total_tokens
+    # Beside the arm's own checkpoint, and with the halt marker that makes a
+    # watchdog stop stick.
+    assert seen["checkpoint"] == str(tmp_path / arm.name / "checkpoint.pt")
+    assert seen["halt_marker"] == str(tmp_path / arm.name / "HALTED")
+
+
+def test_a_supervised_arm_refuses_a_command_carrying_resume(tmp_path):
+    with pytest.raises(ValueError, match="--init-from"):
+        CP.launch_supervised(CP.probe_arms()[0],
+                             ["python", "train.py", "--resume", "x.pt"],
+                             run_root=str(tmp_path))
+
+
 def _fake_launcher(monkeypatch, launched, *, fail=(), run_root=None):
     def launch(arm, command, **kwargs):
         launched.append(arm.name)

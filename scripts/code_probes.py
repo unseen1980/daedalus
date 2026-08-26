@@ -54,7 +54,15 @@ if _ROOT not in sys.path:
 from scripts.qat_recovery import (BATCH_TOKENS, DECAY_FRAC,  # noqa: E402
                                   MICRO_BATCH, SEQ_LEN, adam_lr_for,
                                   assert_no_resume, estimated_steps,
-                                  launch_supervised, warmup_steps_for)
+                                  warmup_steps_for)
+
+#: What this phase's in-flight markers say they are. `boot_resume.py` continues
+#: a run from that marker after a reboot and `session_keeper` reads it to know
+#: the box is busy, so the phase name in it is provenance rather than decoration
+#: -- and `qat_recovery.launch_supervised`, which is otherwise exactly this
+#: function, hardcodes `phase3-qat-recovery`. Reusing it would have had a
+#: phase 8 arm resumed after a reboot under phase 3's name.
+PHASE = "phase8-code-probes"
 
 #: Preregistered in `runs/vast-program/code-run-manifest.json` and in #15's
 #: body, before any arm ran. Adam follows from the shipped Muon:Adam ratio,
@@ -293,6 +301,48 @@ def arm_summary(arm: CodeProbe, run_dir) -> dict:
         "skipped_updates": last.get("skipped_updates"),
         "complete": arm_is_complete(run_dir, arm.total_tokens),
     }
+
+
+def launch_supervised(arm: CodeProbe, command: Sequence[str], *,
+                      run_root: str = "runs", stall_min: float = 20.0,
+                      max_attempts: int = 3) -> dict:
+    """Run one arm under the watchdog and the resume supervisor.
+
+    Nothing here sits inside a training loop: `run_with_resume` owns the
+    subprocess and this returns when the arm is over. The three pieces catch
+    different failures --
+
+    - the **watchdog** catches divergence and stalls, which an arm cannot
+      detect about itself;
+    - the **halt marker** is what makes a watchdog stop stick. Without it the
+      supervisor reads the watchdog's SIGTERM as an ordinary crash, resumes the
+      diverged checkpoint with no watchdog left running, and trains a broken
+      model for the rest of the budget before exiting 0;
+    - **`--resume` on retry only.** Attempt one must not carry it -- that is
+      what `assert_no_resume` enforces -- and a retry must, resuming this
+      *arm's* checkpoint rather than the released one.
+
+    A near-copy of `qat_recovery.launch_supervised` in shape, and deliberately
+    not a call to it: that one writes phase 3's name into the in-flight marker,
+    which is the record `boot_resume.py` continues a run from after a reboot.
+    """
+    from daedalus.supervise import (run_with_resume, start_watchdog,
+                                    stop_watchdog)
+
+    assert_no_resume(command)
+    run_dir = Path(run_root) / arm.name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    watchdog = start_watchdog(arm.name, str(run_dir), arm.total_tokens,
+                              stall_min=stall_min, supervised=True)
+    try:
+        return run_with_resume(
+            list(command), str(run_dir / "checkpoint.pt"),
+            max_attempts=max_attempts, halt_marker=str(run_dir / "HALTED"),
+            inflight_extra={"phase": PHASE, "arm": arm.name,
+                            "muon_lr": arm.muon_lr,
+                            "total_tokens": arm.total_tokens})
+    finally:
+        stop_watchdog(watchdog)
 
 
 def run_arm(arm: CodeProbe, *, init_from: str, record: dict,
