@@ -285,19 +285,32 @@ def arm_is_complete(run_dir, total_tokens: int,
 
 
 def arm_summary(arm: CodeProbe, run_dir) -> dict:
-    """The last metrics row's headline numbers, for the sweep's own report."""
+    """The last metrics row's headline numbers, for the sweep's own report.
+
+    Validation is periodic, so the *last* row usually has no `val_bpb` -- the
+    final step is rarely a multiple of the interval. Taking it from that row
+    would report `null` for every arm that ran, which reads as validation being
+    broken rather than as it having last run 200 steps ago. The most recent row
+    that actually carries one is reported instead, with the step it was taken
+    at, so it can never be mistaken for an end-of-run figure. The gate's own
+    numbers come from a full out-of-band pass either way; this is the sweep's
+    log of what it saw.
+    """
     rows = metrics_rows(run_dir)
     if not rows:
         return {"rows": 0}
     last = rows[-1]
+    validated = next((row for row in reversed(rows)
+                      if row.get("val_bpb") is not None), None)
     return {
         "rows": len(rows),
         "tokens": int(last.get("tokens") or 0),
         "step": int(last.get("step") or 0),
         "loss": last.get("loss"),
         "elapsed_h": last.get("elapsed_h"),
-        "val_bpb": last.get("val_bpb"),
-        "val_bpb_per_source": last.get("val_bpb_per_source"),
+        "val_bpb": (validated or {}).get("val_bpb"),
+        "val_bpb_step": (validated or {}).get("step"),
+        "val_bpb_per_source": (validated or {}).get("val_bpb_per_source"),
         "skipped_updates": last.get("skipped_updates"),
         "complete": arm_is_complete(run_dir, arm.total_tokens),
     }
@@ -388,9 +401,16 @@ def sweep(*, init_from: str, init_from_sha256: Optional[str] = None,
             f"({', '.join(preflight['capped_sources'])} cannot fill it inside "
             f"the epoch cap)")
 
+    # A shortened run is not this gate's evidence, and the report is what a
+    # scorer reads. Naming the gate on it regardless is how a four-step smoke
+    # ends up answering "did the 250M probes run" -- the same mistake the run
+    # names are kept apart for, one level up.
+    is_gate = (sorted(arm.muon_lr for arm in arms) == sorted(PROBE_MUON_LRS)
+               and all(arm.total_tokens == PROBE_TOKENS for arm in arms))
     report = {
         "schema": 1,
-        "gate": "probes_250m",
+        "gate": "probes_250m" if is_gate else None,
+        "smoke": not is_gate,
         "init_from": {"path": str(init_from), "sha256": digest},
         "mixture": {"record": str(mixture_record),
                     "train_root": record["train_root"],

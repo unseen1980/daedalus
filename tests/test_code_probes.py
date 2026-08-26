@@ -237,6 +237,30 @@ def test_a_supervised_arm_refuses_a_command_carrying_resume(tmp_path):
                              run_root=str(tmp_path))
 
 
+def test_the_summary_reports_the_validation_that_happened_not_the_last_row(
+        tmp_path):
+    """Validation is periodic and the final step is rarely a multiple of the
+    interval, so reading `val_bpb` off the last row reports null for every arm
+    that ran -- which reads as validation being broken rather than as it having
+    last run 200 steps ago."""
+    arm = CP.probe_arms()[0]
+    run_dir = tmp_path / arm.name
+    run_dir.mkdir(parents=True)
+    (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in [
+        {"step": 250, "tokens": 131_072_000, "loss": 2.0, "val_bpb": 0.65,
+         "val_bpb_per_source": {"code-python": 0.53}},
+        {"step": 477, "tokens": arm.total_tokens, "loss": 1.9, "val_bpb": None},
+    ]))
+
+    summary = CP.arm_summary(arm, run_dir)
+
+    assert summary["step"] == 477 and summary["tokens"] == arm.total_tokens
+    assert summary["val_bpb"] == 0.65
+    # Stamped with where it came from, so it cannot be read as end-of-run.
+    assert summary["val_bpb_step"] == 250
+    assert summary["val_bpb_per_source"] == {"code-python": 0.53}
+
+
 def _fake_launcher(monkeypatch, launched, *, fail=(), run_root=None):
     def launch(arm, command, **kwargs):
         launched.append(arm.name)
@@ -325,6 +349,24 @@ def test_a_mixture_that_is_a_different_experiment_at_the_budget_is_refused(
                  mixture_record=built["path"], run_root=str(tmp_path / "runs"),
                  json_out=str(tmp_path / "probes.json"))
     assert launched == []
+
+
+def test_a_smokes_report_does_not_answer_for_the_gate(tmp_path, monkeypatch):
+    """The report is what a scorer reads. Naming the gate on a four-step run is
+    how a smoke ends up answering "did the 250M probes run"."""
+    built = _record(tmp_path)
+    run_root = tmp_path / "runs"
+    _fake_launcher(monkeypatch, [], run_root=run_root)
+
+    smoke = CP.sweep(init_from=_base_checkpoint(tmp_path),
+                     mixture_record=built["path"], run_root=str(run_root),
+                     arms=CP.probe_arms(tag="smoke", steps=4), json_out=None)
+    gate = CP.sweep(init_from=_base_checkpoint(tmp_path),
+                    mixture_record=built["path"], run_root=str(run_root),
+                    json_out=None)
+
+    assert smoke["gate"] is None and smoke["smoke"] is True
+    assert gate["gate"] == "probes_250m" and gate["smoke"] is False
 
 
 def test_a_smoke_runs_under_its_own_name_and_budget(tmp_path):
