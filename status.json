@@ -1,13 +1,13 @@
 {
   "attention": {
-    "blocker": "",
-    "user_action_required": false
+    "blocker": "lane inspect: phase8-mixture-dry-run-2 failed",
+    "user_action_required": true
   },
   "deadline": {
-    "elapsed_hours": 58.14,
-    "finalization_in_hours": 77.86,
+    "elapsed_hours": 58.22,
+    "finalization_in_hours": 77.78,
     "hard_hours": 144.0,
-    "remaining_hours": 85.86,
+    "remaining_hours": 85.78,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T20:52:56.746974Z",
+  "heartbeat_at": "2026-08-26T20:57:58.541740Z",
   "lanes": {
     "directive": {
       "details": {
@@ -62,16 +62,20 @@
         "attempts": 1,
         "command": [
           "python",
-          "-c",
-          "\nimport json\nm = json.load(open('data/code-shards/manifest.json'))\nprint('top:', sorted(m))\nprint('n sources', len(m['sources']))\nfor s in m['sources']:\n    print({k: v for k, v in s.items() if k in ('key','split','bucket','config','token_budget','tokens','basis','error','exhausted','resumed','achieved_fraction')})\n"
+          "scripts/codeprep.py",
+          "corpus",
+          "mixture",
+          "--dry-run",
+          "--json-out",
+          ""
         ],
         "returncodes": [
-          0
+          2
         ]
       },
-      "phase": "phase8-mixture-manifest-read",
-      "status": "passed",
-      "updated_at": "2026-08-26T20:50:07.023491Z"
+      "phase": "phase8-mixture-dry-run-2",
+      "status": "failed",
+      "updated_at": "2026-08-26T20:57:17.015572Z"
     },
     "operator": {
       "details": {
@@ -130,9 +134,9 @@
   "phase": "phase8-code-corpus-build",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "a611ece8db5f",
+  "source_sha": "e278d2ad65e5",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
-  "updated_at": "2026-08-26T20:52:55.842280Z"
+  "updated_at": "2026-08-26T20:57:17.015572Z"
 }
