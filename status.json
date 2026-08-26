@@ -4,19 +4,19 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 58.31,
-    "finalization_in_hours": 77.69,
+    "elapsed_hours": 58.39,
+    "finalization_in_hours": 77.61,
     "hard_hours": 144.0,
-    "remaining_hours": 85.69,
+    "remaining_hours": 85.61,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
-    "memory_used_mb": 9,
+    "memory_used_mb": 2416,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T21:02:59.895189Z",
+  "heartbeat_at": "2026-08-26T21:08:01.402396Z",
   "lanes": {
     "directive": {
       "details": {
@@ -62,16 +62,20 @@
         "attempts": 1,
         "command": [
           "python",
-          "-c",
-          "\nimport json\nm = json.load(open('runs/vast-program/code-run-manifest.json'))\nprint(json.dumps(m['base_model'], indent=2, sort_keys=True)[:1600])\n"
+          "scripts/code_probes.py",
+          "command",
+          "--arm",
+          "code-probe-lr0.001",
+          "--init-from",
+          "/root/daedalus/final/hero/checkpoint.pt"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-base-model-read",
+      "phase": "phase8-probe-command-check",
       "status": "passed",
-      "updated_at": "2026-08-26T21:00:33.876617Z"
+      "updated_at": "2026-08-26T21:04:30.398353Z"
     },
     "operator": {
       "details": {
@@ -127,12 +131,12 @@
     }
   },
   "metrics": {},
-  "phase": "phase8-code-corpus-build",
+  "phase": "phase8-probe-smoke",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "e278d2ad65e5",
+  "source_sha": "ed17ce74a3bc",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
-  "status": "passed",
-  "updated_at": "2026-08-26T21:02:51.550020Z"
+  "status": "running",
+  "updated_at": "2026-08-26T21:06:30.019228Z"
 }
