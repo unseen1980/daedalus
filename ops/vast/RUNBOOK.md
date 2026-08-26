@@ -142,6 +142,21 @@ program's own services (and only those):
 daedalus-approved reload-service daedalus_progress
 ```
 
+The same install also unblocks `branch`, which is how phase 8 starts. Everything
+downstream already works from whichever source branch the checkout is on --
+`commit-push` pushes `HEAD:` that branch and `pr-draft` opens from it — so the
+only missing capability was getting there, and a session cannot run
+`git checkout` itself:
+
+```bash
+daedalus-approved branch vast/daedalus-code-20260824   # prints the parent SHA
+daedalus-approved pr-draft "Daedalus-Code" vast/daedalus-improvements-20260824
+```
+
+It moves only between the two source branches, creates only the code branch,
+and refuses while a tracked file is modified — a modification follows the
+checkout, which is how work meant for one branch lands in a commit on the other.
+
 The same install also unblocks `pr-find`, which is how a session learns the pull
 request number it needs for `pr-edit`. Without it, `runs/vast-program/pr-body.md`
 is kept current by session after session and never applied, because the number

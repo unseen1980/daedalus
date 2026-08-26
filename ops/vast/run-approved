@@ -227,6 +227,53 @@ case "${command_name}" in
             "repos/${GITHUB_REPOSITORY:-unseen1980/daedalus}/pulls/${number}" \
             -F "body=@${body_file}" --silent
         ;;
+    branch)
+        # Phase 8 step 1 is a branch this wrapper could not make. Everything
+        # downstream already works from whichever source branch the checkout is
+        # on -- `commit-push` pushes `HEAD:` that branch, `pr-draft` opens from
+        # it -- so the only missing capability was getting there, and a session
+        # cannot run `git checkout` itself.
+        #
+        # Restricted to the two source branches by name, and the code branch is
+        # the only one this may *create*: the optimization branch exists and is
+        # what everything else is built on, so "create it" is never the right
+        # answer to it being missing. Created from wherever the checkout stands,
+        # which `require_source_branch` bounds to the optimization branch -- the
+        # plan's "create the code branch from the current tested SHA" -- and the
+        # printed SHA is the parent to record in the code run manifest.
+        target=${1:-}
+        case "${target}" in
+            vast/daedalus-improvements-20260824|vast/daedalus-code-20260824)
+                ;;
+            *)
+                echo "refusing branch ${target:-<none>}" >&2
+                exit 3
+                ;;
+        esac
+        if [[ $(current_branch) == "${target}" ]]; then
+            exec git rev-parse HEAD
+        fi
+        require_source_branch
+        # A modified tracked file follows the checkout onto the other branch,
+        # which is how work meant for one lands in a commit on the other. The
+        # untracked run artifacts every phase leaves are not checked: they are
+        # not committed by path-scoped commits, and demanding a clean tree here
+        # would mean never switching at all.
+        if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "refusing to switch with modified tracked files; commit them first" >&2
+            exit 3
+        fi
+        if git show-ref --verify --quiet "refs/heads/${target}"; then
+            git checkout -q "${target}"
+        else
+            [[ ${target} == vast/daedalus-code-20260824 ]] || {
+                echo "refusing to create ${target}" >&2
+                exit 3
+            }
+            git checkout -q -b "${target}"
+        fi
+        exec git rev-parse HEAD
+        ;;
     commit-push)
         require_source_branch
         message=""

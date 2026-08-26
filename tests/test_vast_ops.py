@@ -141,6 +141,116 @@ def test_safe_log_rejects_secret_and_parent_paths(tmp_path):
     assert "refusing" in result.stderr
 
 
+SOURCE_BRANCH = "vast/daedalus-improvements-20260824"
+CODE_BRANCH = "vast/daedalus-code-20260824"
+
+
+def _repo_on(tmp_path, branch, name="repo"):
+    """A git repository with one commit, checked out on `branch`."""
+    repository = tmp_path / name
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", branch], cwd=repository, check=True)
+    (repository / "README.md").write_text("initial\n")
+    subprocess.run(["git", "add", "README.md"], cwd=repository, check=True)
+    subprocess.run(["git", "-c", "user.email=t@e.st", "-c", "user.name=t",
+                    "commit", "-qm", "initial"], cwd=repository, check=True)
+    return repository
+
+
+def _wrapper_env(repository, tmp_path):
+    runtime = tmp_path / "runtime.env"
+    runtime.write_text("")
+    environment = os.environ.copy()
+    environment.update({"DAEDALUS_REPO": str(repository),
+                        "DAEDALUS_RUNTIME_ENV": str(runtime)})
+    return environment
+
+
+def _branch_command(repository, tmp_path, target):
+    return subprocess.run([str(ROOT / "ops/vast/run-approved"), "branch", target],
+                          capture_output=True, text=True,
+                          env=_wrapper_env(repository, tmp_path))
+
+
+def test_the_code_branch_is_created_from_the_optimization_branchs_tested_sha(
+        tmp_path):
+    """Phase 8 step 1. Everything downstream already works from whichever source
+    branch the checkout is on; the missing capability was getting there, and a
+    session cannot run `git checkout` itself. The printed SHA is the parent the
+    code run manifest has to record."""
+    repository = _repo_on(tmp_path, SOURCE_BRANCH)
+    parent = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repository,
+                            capture_output=True, text=True, check=True).stdout.strip()
+
+    created = _branch_command(repository, tmp_path, CODE_BRANCH)
+
+    assert created.returncode == 0, created.stderr
+    assert created.stdout.strip() == parent
+    assert subprocess.run(["git", "branch", "--show-current"], cwd=repository,
+                          capture_output=True, text=True,
+                          check=True).stdout.strip() == CODE_BRANCH
+    # Idempotent: a session that is already there gets the SHA, not a second
+    # branch or an error.
+    again = _branch_command(repository, tmp_path, CODE_BRANCH)
+    assert again.returncode == 0 and again.stdout.strip() == parent
+    # And back, because a shared fix belongs on the optimization branch first.
+    back = _branch_command(repository, tmp_path, SOURCE_BRANCH)
+    assert back.returncode == 0, back.stderr
+    assert subprocess.run(["git", "branch", "--show-current"], cwd=repository,
+                          capture_output=True, text=True,
+                          check=True).stdout.strip() == SOURCE_BRANCH
+
+
+def test_only_the_two_source_branches_can_be_switched_to(tmp_path):
+    repository = _repo_on(tmp_path, SOURCE_BRANCH)
+
+    for target in ("main", "vast/progress-20260824", "feature/anything", ""):
+        result = _branch_command(repository, tmp_path, target)
+        assert result.returncode != 0
+        assert "refusing branch" in result.stderr
+
+
+def test_the_optimization_branch_is_never_created_only_switched_to(tmp_path):
+    """It exists and is what every other branch is built on, so "create it" is
+    never the right answer to it being missing -- an empty one would silently
+    become the base of the stacked pull request."""
+    repository = _repo_on(tmp_path, CODE_BRANCH)
+
+    result = _branch_command(repository, tmp_path, SOURCE_BRANCH)
+
+    assert result.returncode != 0
+    assert f"refusing to create {SOURCE_BRANCH}" in result.stderr
+
+
+def test_switching_with_modified_tracked_files_is_refused(tmp_path):
+    """A modified tracked file follows the checkout, which is how work meant for
+    one branch lands in a commit on the other."""
+    repository = _repo_on(tmp_path, SOURCE_BRANCH)
+    (repository / "README.md").write_text("edited but not committed\n")
+
+    result = _branch_command(repository, tmp_path, CODE_BRANCH)
+
+    assert result.returncode != 0
+    assert "modified tracked files" in result.stderr
+    # Untracked artifacts are not the same thing: every phase leaves them, and
+    # refusing on those would mean never switching at all.
+    subprocess.run(["git", "checkout", "--", "README.md"], cwd=repository, check=True)
+    (repository / "runs").mkdir()
+    (repository / "runs" / "metrics.jsonl").write_text("{}\n")
+    assert _branch_command(repository, tmp_path, CODE_BRANCH).returncode == 0
+
+
+def test_a_branch_switch_cannot_reach_the_default_branch(tmp_path):
+    """From `main`, the wrapper refuses before it can move anything -- the same
+    guard `commit-push` uses, for the same reason."""
+    repository = _repo_on(tmp_path, "main")
+
+    result = _branch_command(repository, tmp_path, CODE_BRANCH)
+
+    assert result.returncode != 0
+    assert "refusing branch main" in result.stderr
+
+
 def test_safe_log_allows_portal_log_paths():
     wrapper = (ROOT / "ops/vast/run-approved").read_text()
 
