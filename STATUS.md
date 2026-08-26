@@ -1,17 +1,17 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-26T19:47:32.772862Z`
+- Heartbeat: `2026-08-26T19:52:34.234696Z`
 - Phase: `phase8-codeprep-gate`
 - Status: `passed`
 - Source: `vast/daedalus-code-20260824` at `dd79972c3c08`
-- Elapsed: `57.05h` of `144.0h`
-- Finalization window opens in: `78.95h`
+- Elapsed: `57.13h` of `144.0h`
+- Finalization window opens in: `78.87h`
 - Deadline stage: `active`
 
 ## Lanes
 
 - `evidence`: `phase6-stageb-decode` (passed)
-- `inspect`: `phase8-codeprep-source-plan` (passed)
+- `inspect`: `phase8-codeprep-directory-yield` (passed)
 - `operator`: `phase8-branch-prerequisite` (passed)
 - `retrieval`: `phase6-stagea-retrieval-remeasure` (passed)
 - `selfcheck`: `phase6-lane-selfcheck` (passed)
