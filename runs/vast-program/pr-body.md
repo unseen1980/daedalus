@@ -16,9 +16,9 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 | 1 — Unattended control plane | passed |
 | 2 — Evaluation infrastructure | **passed**, verdict in `runs/eval/phase2-gate.json` |
 | 3 — QAT recovery of released Daedalus | **complete**, verdict in `runs/qat-recovery/verdict.json`, reading in `runs/eval/phase3-evidence.md` — **no arm accepted; two operator decisions below** |
-| 4 — Tokenizer lab for V2 | **in progress**, rule and addendum preregistered, corpus and vocabularies built, fertility measured, tiny-model sweep running |
-| 5 — ShortConv channel death prevention | not started |
-| 6 — Architecture Pareto proxies | not started |
+| 4 — Tokenizer lab for V2 | **complete**, 32,768 selected, reading in `runs/tokenizer-lab/v2-tokenizer-migration.md` |
+| 5 — ShortConv channel death prevention | **complete**, **no schedule selected**, verdict in `runs/conv-health/verdict-paired.json`, reading in `runs/conv-health/phase5-conv-decay.md` |
+| 6 — Architecture Pareto proxies | **complete**, **no shape recommended and stage C is a no-go**, verdicts in `runs/architecture/stageb-recommendation.json` and `runs/architecture/stageb-stage-c.json` |
 | 7 — Improved general corpus and mixture | not started |
 | 8 — Daedalus-Code | not started |
 | 9 — Finalization and reporting | begins no later than T+136h |
@@ -82,6 +82,45 @@ Publishing surfaced a safety gap worth reviewing on its own: `publish_model`'s `
 2. Is the 2–6 point MQAR decline acceptable, or does the recipe need a retrieval-safe variant first?
 
 One preregistered deviation, made before any arm ran: the retrieval gate was re-baselined at 100 items per depth, because at the Phase 2 baseline's 10 items one item is 10 points and a 1-point gate could only ever be met by exact equality. Re-measuring showed the old baseline moving up to 8 points per depth on an unchanged model. 100 items makes the gate expressible, not statistically resolvable — noise is still ~3.6 points — and the evidence file says so rather than implying a precision the instrument lacks.
+
+## Phase 4 — Tokenizer lab: 32,768 selected for V2
+
+Rule digest `4557ac1d70b0f27be7f86395370cd41d`, written before any measurement. **A tokenizer cannot be transplanted into a trained model**, so nothing here changes released V1 weights or Daedalus-Code; this is a recommendation for a future from-scratch run.
+
+24,576 fails the code clause (+0.09% code fertility against a 0% limit). 32,768 and 40,960 both clear all five clauses, and **32,768 is selected**: worst domain −0.72% (dialogue), code −3.04%, tiny-model BPB +0.038% against a 0.5% limit, embedding bytes −33.3%, full byte round-trip.
+
+The honest caveat is the matched control. Against a 49,152-token vocabulary *retrained on the same sample*, 32,768 is 2.8–3.1% worse on fertility in every domain — so most of the gain against SmolLM2 comes from training the tokenizer on this corpus, not from shrinking the vocabulary. Both columns are reported; the rule is evaluated against SmolLM2 exactly as written.
+
+## Phase 5 — ShortConv decay: no schedule selected
+
+Read on the coupled `in_proj` × kernel × `out_proj` instrument rather than the shipped weight proxy, because the fix under test *is* a change to weight decay and a magnitude metric is satisfied as easily by an arm where nothing shrank as by one where nothing died. **Scope: V2 only** — no result here says a channel that collapsed during the 59.9B-token run was revived.
+
+The stage is readable: the positive control (the shipped constant 0.1) dies at 53.9% in the paired 150M/500M-token escalation. Neither candidate clears the preregistered bar of dead fraction under 1%, alive-channel norms within 2× and a matched ablation that bites:
+
+| arm | dead fraction | norms vs control | held-out loss | verdict |
+| --- | ---: | ---: | ---: | :--- |
+| `shipped-0.1` (positive control) | 53.9% | — | — | dies, as intended |
+| `weak-0.0133` | 14.5% | 1.82–2.33× | +0.14% | fails norms, dead fraction, ablation |
+| `weak-then-0.1` | 42.4% | 0.94–1.26× | −0.31% | fails dead fraction, ablation |
+
+Weakening decay cuts the death substantially (53.9% → 14.5%) and pays for it in projection norms; ramping decay back up holds the norms and loses most of the benefit. Neither is a recipe, and the phase says so rather than promoting the better of two failures.
+
+## Phase 6 — Architecture: no shape recommended, no stage C
+
+Stage A screened fifteen shapes on BPB; stage B trained the four it advanced at 159M over 252M tokens and gated them on all five preregistered columns. **The gate recommends none**, and not on decode — decode passes for every arm (241–250 tok/s at depth 0, 208–226 at 2,048, artifacts 101–103 MB, measured in one alternating invocation on an idle box).
+
+| arm | attn | KV B/tok | BPB vs control | retrieval | verdict |
+| --- | ---: | ---: | ---: | :--- | :--- |
+| `a8-kv4` (shipped control) | 8 | 8,192 | +0.00% | no power: 2 of 8 cells are MQAR at the floor | blocked on KV, over the 6,144 ceiling |
+| `a6-kv4` | 6 | 6,144 | +0.07% | passkey d1024 **−20.0 pts** | blocked |
+| `a4-kv4` | 4 | 4,096 | +0.26% | passkey d256 **−42.0 pts** | blocked |
+| `a3-kv4` | 3 | 3,072 | +0.18% | passkey d256 **−38.0 pts** | blocked |
+
+So at this scale cutting attention layers buys 25–62% of the KV cache and costs passkey retrieval by margins nothing in the gate can absorb. BPB, KV, export and decode all pass for the three candidates; retrieval is the column that decides, and it decides on passkey — MQAR is at the floor for every arm, which is carried into the V2 recommendation as a named gap rather than resolved by loosening the gate.
+
+`stage-c` then answers **no-go** on two of three conditions: discrimination (0.26 BPB points across the arms, inside the 0.84 their 2.48% parameter mismatch alone could explain) and finalists (every non-control arm blocked). The deadline condition would have allowed it — 7.8 hours needed against 92.0 — so roughly 7 GPU-hours were deliberately not spent. The rule was committed before this table existed and no threshold moved after it.
+
+One defect worth reviewing: the evidence chain wrote every stage's decode numbers to one shared report, and `run_decode` refuses to overwrite a report measuring models it does not — so the guard that protects a full sweep from a narrow rerun was certain to fire on the *second* stage to reach decode. Stage B's decode column was unmeasured and its phase marked failed for that reason alone. The report is now scoped by tag, beside the per-tag export and retrieval manifests, and the recommendation records which decode file it read.
 
 ## Control plane
 
