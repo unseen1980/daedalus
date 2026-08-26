@@ -1,13 +1,13 @@
 {
   "attention": {
-    "blocker": "",
-    "user_action_required": false
+    "blocker": "3 repair continuations failed on phase phase8-codeprep-gate",
+    "user_action_required": true
   },
   "deadline": {
-    "elapsed_hours": 55.29,
-    "finalization_in_hours": 80.71,
+    "elapsed_hours": 55.37,
+    "finalization_in_hours": 80.63,
     "hard_hours": 144.0,
-    "remaining_hours": 88.71,
+    "remaining_hours": 88.63,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T18:01:45.577193Z",
+  "heartbeat_at": "2026-08-26T18:06:50.104469Z",
   "lanes": {
     "evidence": {
       "details": {
@@ -125,6 +125,6 @@
   "source_sha": "5124c1209000",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
-  "status": "passed",
-  "updated_at": "2026-08-26T17:38:11.391440Z"
+  "status": "blocked",
+  "updated_at": "2026-08-26T18:06:22.155409Z"
 }
