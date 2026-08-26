@@ -104,6 +104,10 @@ EXCESS_TEMPERATURE = 0.10
 #: before floors and renormalization. A single specialist arm that diverged,
 #: got a short holdout, or simply ran unlucky can produce one wild excess
 #: figure; without a cap that one number writes the mixture.
+#:
+#: The cost of the cap is that a share it sets is no longer a measured optimum,
+#: and nothing downstream can tell the two apart from the number alone --
+#: `cap_saturation` is what says which is which.
 EXCESS_RATIO_CAP = 2.0
 
 #: A candidate may not regress any single source's held-out BPB by more than
@@ -365,6 +369,23 @@ def excess_loss(baseline_bpb: Mapping[str, float],
             for name in sorted(baseline_bpb)}
 
 
+def _uncapped_ratio(value: float, temperature: float) -> float:
+    """`exp(excess / T)`, with an overflow answered rather than raised.
+
+    The cap exists for "a single specialist arm that diverged", and a diverged
+    arm is exactly the input that reaches this: its holdout BPB stays finite --
+    so `excess_loss` admits it -- while being large enough that `exp(excess/T)`
+    is not representable. `math.exp` raises `OverflowError` there, which would
+    take down the derivation at the one input the cap was written to absorb, and
+    do it from inside a call that already knows the answer is "more than the cap
+    allows". Infinity is that answer, and the clip below turns it into the cap.
+    """
+    try:
+        return math.exp(float(value) / temperature)
+    except OverflowError:
+        return math.inf
+
+
 def excess_scores(excess: Mapping[str, float],
                   temperature: float = EXCESS_TEMPERATURE,
                   ratio_cap: float = EXCESS_RATIO_CAP) -> Dict[str, float]:
@@ -375,9 +396,49 @@ def excess_scores(excess: Mapping[str, float],
         raise ValueError(f"ratio cap must be at least 1, got {ratio_cap}")
     scores = {}
     for name, value in sorted(excess.items()):
-        raw = math.exp(float(value) / temperature)
+        raw = _uncapped_ratio(value, temperature)
         scores[name] = min(ratio_cap, max(1.0 / ratio_cap, raw))
     return scores
+
+
+def cap_saturation(excess: Mapping[str, float],
+                   temperature: float = EXCESS_TEMPERATURE,
+                   ratio_cap: float = EXCESS_RATIO_CAP) -> Dict[str, dict]:
+    """The sources whose score the *cap* set, rather than the measurement.
+
+    A saturated source's derived share is not a measured optimum. It is the
+    largest (or smallest) share the rule was willing to grant it, and the
+    measurement only says the ask was somewhere past that bound -- 2.1x and 84x
+    both arrive as 2.0x, and the artifact that records `2.0` cannot tell them
+    apart afterwards. On this box `stack-edu-python` saturates: its 0.213
+    bits/byte of headroom asks for 8.4x its blueprint share, and the derived
+    arm's 0.178 code share is what the cap allowed, which is a different claim
+    from "0.178 is the code share the evidence picked".
+
+    Disclosure, deliberately, and not a rule. Every threshold in this module was
+    committed before the first arm trained, and the plan's standing instruction
+    is that thresholds are not tuned after seeing outcomes -- so a saturated
+    source does not become inadmissible, get a wider cap, or change the
+    selection. It gets said out loud in the artifact that reports the share.
+
+    Only saturated sources are returned, so an empty mapping means every share
+    the rule produced came from inside the cap.
+    """
+    scores = excess_scores(excess, temperature=temperature, ratio_cap=ratio_cap)
+    saturated: Dict[str, dict] = {}
+    for name, value in sorted(excess.items()):
+        raw = _uncapped_ratio(value, temperature)
+        if raw >= ratio_cap:
+            bound = "upper"
+        elif raw <= 1.0 / ratio_cap:
+            bound = "lower"
+        else:
+            continue
+        saturated[name] = {"bound": bound, "excess": float(value),
+                           "score": scores[name], "uncapped_ratio": raw,
+                           "ratio_cap": float(ratio_cap),
+                           "temperature": float(temperature)}
+    return saturated
 
 
 def derive_weights(baseline: Mapping[str, float],

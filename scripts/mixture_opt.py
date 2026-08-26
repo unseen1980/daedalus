@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import asdict, dataclass
@@ -803,9 +804,9 @@ def derive(*, sources: Sequence[str], tag: str,
     derived weights can be recomputed from the artifact rather than trusted.
     """
     from daedalus.mixture_opt import (EXCESS_RATIO_CAP, EXCESS_TEMPERATURE,
-                                      baseline_arm, derive_weights,
-                                      domain_floors, domain_shares,
-                                      excess_loss, excess_scores)
+                                      baseline_arm, cap_saturation,
+                                      derive_weights, domain_floors,
+                                      domain_shares, excess_loss, excess_scores)
 
     sources = list(dict.fromkeys(sources))
     baseline = baseline_arm(sources)
@@ -874,6 +875,11 @@ def derive(*, sources: Sequence[str], tag: str,
         "specialists": provenance,
         "excess_loss": excess,
         "excess_scores": excess_scores(excess),
+        # Which of those scores the cap set rather than the measurement. A
+        # saturated source's derived share is the most the rule would grant it,
+        # not the share the evidence picked, and the score alone cannot be read
+        # back to tell the difference.
+        "excess_score_saturation": cap_saturation(excess),
     }
 
 
@@ -1008,9 +1014,58 @@ def _scored_candidate(arm: MixtureArm, *, sources: Sequence[str], tag: str,
     return row, card
 
 
+def _derived_provenance(artifact: Optional[str]) -> dict:
+    """Where the derived arm's weights came from, and which of them the cap set.
+
+    The verdict reports the derived arm's shares as the outcome of a
+    measurement, and for a source that saturated `EXCESS_RATIO_CAP` that is not
+    what they are: the share is the most the rule was willing to grant, and the
+    ask behind it could have been 2.1x or 84x. `cap_saturation` is the only
+    thing that can still tell those apart, and it can only do it from the excess
+    loss -- which lives in the derive artifact, not in the weights the arm
+    trained on.
+
+    Recomputed at read time rather than required to be in the artifact. The
+    candidate arms were launched from a `derive` record written before this
+    field existed, and the fix for that is not to re-run `derive` and overwrite
+    it: that artifact is the launch record the trained checkpoints are tied to,
+    and rewriting evidence to add a field to it is worse than deriving the field
+    from what it already recorded. A record that *does* carry the field is
+    trusted as written, so a future rule change cannot be silently re-applied to
+    an old derivation by this function.
+    """
+    from daedalus.mixture_opt import (EXCESS_RATIO_CAP, EXCESS_TEMPERATURE,
+                                      cap_saturation)
+
+    if not artifact:
+        # `None`, not `{}`: "no source saturated" and "nothing here knows" are
+        # different claims, and only the first one is evidence.
+        return {"artifact": None, "excess_score_saturation": None,
+                "note": "the derived weights were passed in directly rather "
+                        "than as a `derive` artifact, so the excess loss "
+                        "behind them -- and whether the cap set any share -- "
+                        "is not knowable from here"}
+    payload = json.loads(Path(artifact).read_text())
+    if not isinstance(payload, dict):
+        payload = {}
+    rule = payload.get("rule")
+    rule = rule if isinstance(rule, dict) else {}
+    saturation = payload.get("excess_score_saturation")
+    excess = payload.get("excess_loss")
+    if saturation is None and isinstance(excess, dict) and excess:
+        saturation = cap_saturation(
+            {str(name): float(value) for name, value in excess.items()},
+            temperature=float(rule.get("temperature", EXCESS_TEMPERATURE)),
+            ratio_cap=float(rule.get("ratio_cap", EXCESS_RATIO_CAP)))
+    return {"artifact": str(artifact),
+            "created_at": payload.get("created_at"),
+            "excess_score_saturation": saturation}
+
+
 def build_report(*, sources: Sequence[str], tag: str,
                  out_dir: str = SCORECARD_ROOT,
-                 derived: Optional[dict] = None) -> dict:
+                 derived: Optional[dict] = None,
+                 derived_artifact: Optional[str] = None) -> dict:
     """Phase 7's verdict: which mixture the scored candidates select, and why.
 
     The derived weights are required rather than optional. `candidate_arms`
@@ -1061,6 +1116,10 @@ def build_report(*, sources: Sequence[str], tag: str,
                                for name, value in weights.items()},
         "measured_on": _comparable(cards),
         "unrepresented_floored_domains": unrepresented_floored_domains(sources),
+        # Which of the derived arm's shares the rule measured and which the cap
+        # decided. Carried beside the arm it qualifies, because the share is
+        # reported here and the caveat is unrecoverable from the share.
+        "derived_arm": _derived_provenance(derived_artifact),
         "arms": rows,
         "selection": select_mixture(results, floors),
     }
@@ -1127,6 +1186,25 @@ def render_markdown(report: dict) -> str:
             "to constrain: "
             + ", ".join(f"`{domain}`" for domain
                         in report["unrepresented_floored_domains"]))
+
+    saturated = (report.get("derived_arm") or {}).get("excess_score_saturation")
+    if saturated:
+        lines += ["", "## Shares the cap set, not the measurement", "",
+                  "The derived arm tilts each blueprint share by "
+                  "`exp(excess/T)`, clipped. For these sources the clip bound, "
+                  "not the measured headroom, is what fixed the share -- read "
+                  "them as the most the rule would grant, not as a measured "
+                  "optimum:", ""]
+        for name, entry in sorted(saturated.items()):
+            asked = entry.get("uncapped_ratio")
+            asked = ("more than can be represented" if asked is None
+                     or not math.isfinite(float(asked))
+                     else f"{float(asked):.2f}x")
+            lines.append(
+                f"- `{name}` saturated the {entry.get('bound')} bound: "
+                f"{entry.get('excess'):+.4f} bits/byte of excess loss asks for "
+                f"{asked} its blueprint share, and the cap allowed "
+                f"{float(entry.get('score')):.2f}x.")
     if selection["refusals"]:
         lines += ["", "## Refusals", ""]
         for refusal in selection["refusals"]:
@@ -1293,7 +1371,8 @@ def main(argv=None) -> int:
 
     if args.command == "report":
         record = build_report(sources=sources, tag=args.tag,
-                              out_dir=args.scorecard_root, derived=derived)
+                              out_dir=args.scorecard_root, derived=derived,
+                              derived_artifact=args.derived_weights)
         out = Path(args.out) if args.out else verdict_path(
             args.tag, args.report_root)
         _write_json(out, record)

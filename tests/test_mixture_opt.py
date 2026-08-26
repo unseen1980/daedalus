@@ -10,6 +10,7 @@ train on a mixture other than its own.
 Run: python -m pytest tests/test_mixture_opt.py -v
 """
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -238,6 +239,45 @@ def test_excess_scores_are_bounded_in_both_directions():
     assert scores["a"] == pytest.approx(EXCESS_RATIO_CAP)
     assert scores["b"] == pytest.approx(1.0 / EXCESS_RATIO_CAP)
     assert scores["c"] == pytest.approx(1.0)
+
+
+def test_an_excess_too_large_to_exponentiate_is_capped_rather_than_raised():
+    """The input the cap exists for is a diverged specialist, and a diverged arm
+    reaches here as a large *finite* BPB -- so `excess_loss` admits it and
+    `exp(excess/T)` overflows. Raising there would take the derivation down at
+    the one input the cap was written to absorb."""
+    scores = excess_scores({"diverged": 1e6, "collapsed": -1e6})
+    assert scores["diverged"] == pytest.approx(EXCESS_RATIO_CAP)
+    assert scores["collapsed"] == pytest.approx(1.0 / EXCESS_RATIO_CAP)
+
+
+def test_a_saturated_score_is_named_with_the_ask_the_cap_refused():
+    """2.1x and 84x both arrive as 2.0x, and the score alone cannot be read back
+    to tell them apart -- so the ask is recorded beside what was granted."""
+    from daedalus.mixture_opt import cap_saturation
+
+    saturated = cap_saturation({"code": 0.30, "web": 0.02, "short": -0.30})
+    assert sorted(saturated) == ["code", "short"]
+    assert saturated["code"]["bound"] == "upper"
+    assert saturated["code"]["score"] == pytest.approx(EXCESS_RATIO_CAP)
+    assert saturated["code"]["uncapped_ratio"] == pytest.approx(
+        math.exp(0.30 / EXCESS_TEMPERATURE))
+    assert saturated["short"]["bound"] == "lower"
+    assert saturated["short"]["score"] == pytest.approx(1.0 / EXCESS_RATIO_CAP)
+    # The rule that produced them, so the caveat can be checked rather than
+    # trusted.
+    assert saturated["code"]["ratio_cap"] == EXCESS_RATIO_CAP
+    assert saturated["code"]["temperature"] == EXCESS_TEMPERATURE
+
+
+def test_a_source_scored_inside_the_cap_is_not_reported_as_saturated():
+    """An empty mapping is a claim -- every share came from the measurement --
+    so a source the cap never touched must not appear in it."""
+    from daedalus.mixture_opt import cap_saturation
+
+    assert cap_saturation({name: 0.02 for name in BOX_SOURCES}) == {}
+    assert cap_saturation({"diverged": 1e6})["diverged"][
+        "uncapped_ratio"] == math.inf
 
 
 # ----------------------------------------------------------------- deriving ---
@@ -852,6 +892,25 @@ def test_the_derivation_tilts_toward_the_source_with_measured_headroom(tmp_path)
         weights, abs=1e-6)
 
 
+def test_the_derive_artifact_says_which_share_the_cap_set(tmp_path):
+    """Code has 0.30 bits/byte of headroom here, which asks for 20x its
+    blueprint share and is granted 2x. The resulting share is the most the rule
+    would allow, not the share the evidence picked, and the artifact that
+    reports the number is the one that has to say so."""
+    _score_reference(tmp_path)
+    record = derive(sources=BOX_SOURCES, tag="probe",
+                    out_dir=str(tmp_path / "scorecards"))
+
+    saturated = record["excess_score_saturation"]
+    assert sorted(saturated) == ["stack-edu-python"]
+    assert saturated["stack-edu-python"]["bound"] == "upper"
+    assert saturated["stack-edu-python"]["uncapped_ratio"] == pytest.approx(
+        math.exp(0.30 / EXCESS_TEMPERATURE))
+    # The two sources inside the cap keep their measured tilt, and saying
+    # nothing about them is the point: they are not caveated.
+    assert record["excess_scores"]["fineweb-edu"] == pytest.approx(1.0)
+
+
 def test_deriving_before_every_specialist_is_scored_is_refused(tmp_path):
     """A source without a specialist has no measured excess, and scoring it at
     1.0 would produce a mixture that is partly derived and partly inherited
@@ -1029,6 +1088,73 @@ def test_an_arm_that_falls_off_a_cliff_is_refused_and_the_next_one_wins(
     page = render_markdown(report)
     assert "no -- source-regression" in page
     assert "## Refusals" in page
+
+
+def _derive_artifact(tmp_path, drop_saturation=False):
+    """The `derive` record on disk, as `--derived-weights` points at it."""
+    record = derive(sources=BOX_SOURCES, tag="probe",
+                    out_dir=str(tmp_path / "scorecards"))
+    if drop_saturation:
+        # What the artifact on the box looks like: written by the derivation
+        # that launched the candidate arms, before this field existed.
+        record.pop("excess_score_saturation")
+    path = tmp_path / "mixture-derived-probe.json"
+    path.write_text(json.dumps(record, indent=2, sort_keys=True))
+    return path, record
+
+
+def test_the_verdict_carries_the_cap_caveat_onto_the_arm_it_qualifies(tmp_path):
+    """The verdict is where the derived arm's shares get reported, and a share
+    the cap set is unrecoverable from the share. Reporting 0.178 as the code
+    share the evidence picked is the claim this exists to stop."""
+    weights, _ = _score_candidates(tmp_path, quality=_better_by(0.02),
+                                   derived_bpb=_better_by(0.05))
+    artifact, _ = _derive_artifact(tmp_path)
+    report = build_report(sources=BOX_SOURCES, tag="probe",
+                          out_dir=str(tmp_path / "scorecards"), derived=weights,
+                          derived_artifact=str(artifact))
+
+    derived_arm = report["derived_arm"]
+    assert derived_arm["artifact"] == str(artifact)
+    assert sorted(derived_arm["excess_score_saturation"]) == ["stack-edu-python"]
+
+    page = render_markdown(report)
+    assert "## Shares the cap set, not the measurement" in page
+    assert "`stack-edu-python` saturated the upper bound" in page
+    assert f"the cap allowed {EXCESS_RATIO_CAP:.2f}x" in page
+
+
+def test_a_derivation_written_before_the_field_existed_is_still_read(tmp_path):
+    """The candidate arms were launched from a record with no saturation field,
+    and the repair for that is not to re-run `derive` over it: that artifact is
+    the launch record the trained checkpoints are tied to. The excess loss it
+    already carries is enough to recompute the caveat at read time."""
+    weights, _ = _score_candidates(tmp_path, quality=_better_by(0.02),
+                                   derived_bpb=_better_by(0.05))
+    artifact, record = _derive_artifact(tmp_path, drop_saturation=True)
+    assert "excess_score_saturation" not in record
+
+    report = build_report(sources=BOX_SOURCES, tag="probe",
+                          out_dir=str(tmp_path / "scorecards"), derived=weights,
+                          derived_artifact=str(artifact))
+    saturated = report["derived_arm"]["excess_score_saturation"]
+    assert sorted(saturated) == ["stack-edu-python"]
+    assert saturated["stack-edu-python"]["score"] == pytest.approx(
+        EXCESS_RATIO_CAP)
+
+
+def test_a_verdict_built_without_the_artifact_says_it_cannot_tell(tmp_path):
+    """"No source saturated" and "nothing here knows" are different claims, and
+    only the first is evidence. Weights passed in directly carry no excess loss,
+    so the caveat is unknowable rather than absent."""
+    weights, _ = _score_candidates(tmp_path, quality=_better_by(0.02),
+                                   derived_bpb=_better_by(0.05))
+    report = _report(tmp_path, weights)
+
+    assert report["derived_arm"]["artifact"] is None
+    assert report["derived_arm"]["excess_score_saturation"] is None
+    assert "not knowable" in report["derived_arm"]["note"]
+    assert "## Shares the cap set" not in render_markdown(report)
 
 
 def test_a_verdict_that_never_saw_the_derived_arm_is_refused(tmp_path):
