@@ -49,6 +49,28 @@ dataset was read, which filters ran, or which tree ran them. That is precisely
 the hole `source_provenance` was added to close this phase; the next build
 satisfies the criterion and this one cannot be made to retroactively.
 
+**Both closures are now measured rather than argued — and measuring them found
+a defect in this criterion.** A 200,000-token rebuild of one source under the
+selected 32,768 vocabulary, filtered against the frozen index, produced a
+manifest carrying the served commit, the license, the filters, the builder sha
+and the tokenizer fingerprint — and the gate still said `no source_revision and
+no resolved commit`. The criterion read `source_release.resolved_commit`;
+`resolve_source_release` writes the served commit as `sha`. It was unpassable by
+construction, and it looked right because the corpus it runs against carries no
+`source_release` at all, so it failed for the reason it was designed to. The
+fixture agreed with the criterion and both disagreed with every real manifest;
+`tests/test_corpus_gate.py` now builds the manifest through the writer and reads
+it with the criterion, so the two cannot drift apart silently again.
+
+With that fixed, `runs/corpus/phase7-gate-rebuild-smoke.json` is the rebuilt
+tree, re-scanned with its own contamination artifact, at **PASS** on both
+`corpus-contamination` (zero hits over 93.34% of the tree by tokens; 1.01e-2
+upper bound on the document rate) and `manifest-provenance`. The other three
+criteria pass trivially there and say nothing about a full rebuild: one source
+at a budget it can fund cannot skew from its own target or exceed an epoch cap.
+The verdicts on the corpus as built, re-run against the fixed criterion, are
+unchanged in every number.
+
 ## The mixture finding, which is not closed by anything in phase 7
 
 The skew is the one criterion whose failure is a *measurement* rather than a
