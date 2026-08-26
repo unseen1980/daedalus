@@ -86,7 +86,7 @@ from scripts.architecture_report import (DECODE_REPORT,  # noqa: E402
                                          RETRIEVAL_ROOT, TRAINED_CONTEXT,
                                          advanced_selection,
                                          read_decode_passes, read_retrieval,
-                                         selection_notes)
+                                         selection_notes, templated_cards)
 from scripts.architecture_sweep import (ARMS, REPORT_ROOT, RUN_ROOT,  # noqa: E402
                                         SHAPES, STAGE_A, ArchArm, StageShape,
                                         arm_checkpoint_path, arm_run_name,
@@ -446,9 +446,23 @@ def retrieval_scored_from(arm: ArchArm, *, tag: str, root: str,
     step: a re-exported arm writes a new GGUF into the same path, and a scorecard
     keyed only on existence would keep the previous artifact's retention curve
     under the new artifact's name.
+
+    A third half, and it is the one that would have wedged this phase. The
+    report gate refuses a llama.cpp card that is not recorded raw completion,
+    which is correct -- but "scored" here answered on digest alone, so the
+    stage-A cards measured through a chat template counted as done. The chain
+    would skip re-scoring them, the gate would keep refusing them, and the
+    column would stay unmeasured with nothing left to run. `--refresh` is not
+    the answer: it discards every card including the valid ones, so the cost of
+    fixing one stale arm is remeasuring all of them.
+
+    So the two ends share one judgement, `templated_cards`. A card the gate will
+    not read is not a card this arm has been scored on.
     """
     scored = read_retrieval(arm, tag=tag, root=root, tasks=tasks)
     if sorted(scored) != sorted(tasks):
+        return False
+    if templated_cards(*scored.values()):
         return False
     return all(record.get("artifact_sha256") == artifact_sha
                for record in scored.values())

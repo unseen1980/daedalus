@@ -16,7 +16,7 @@ Run: python -m pytest tests/test_architecture_evidence.py -v
 """
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 import pytest
 
@@ -381,18 +381,28 @@ def test_the_two_stages_do_not_share_an_artifact_directory(tmp_path):
 # -------------------------------------------------------------- retrieval ----
 
 def _retrieval_card(path: Path, *, task: str, artifact: str, sha: str,
-                    per_depth: int = RETRIEVAL_PER_DEPTH) -> None:
-    """A scorecard shaped as `retrieval_eval.py` writes one."""
+                    per_depth: int = RETRIEVAL_PER_DEPTH,
+                    template_mode: Optional[str] = "raw-completion") -> None:
+    """A scorecard shaped as `retrieval_eval.py` writes one.
+
+    Raw completion by default because that is the only mode a llama.cpp card
+    may be read in; `template_mode=None` reproduces a card from before the
+    backend recorded the field, which is every stage-A card.
+    """
     metrics = {"exact_match": 0.5, "n": float(per_depth * 4)}
     for depth in (256, 512, 1024, 2048):
         metrics[f"exact_match_d{depth}"] = 0.5
         metrics[f"n_d{depth}"] = float(per_depth)
+    runtime = {"backend": "llama-cpp"}
+    if template_mode is not None:
+        runtime["template_mode"] = template_mode
     write_scorecard(path, Scorecard(
         kind="retrieval", name=f"retrieval-{task}",
         provenance=Provenance(
             artifact=ArtifactRef(path=artifact, sha256=sha, kind="gguf-q4_0"),
             tokenizer=ArtifactRef(path="tok", sha256="0" * 64, kind="tokenizer"),
-            seed=1, git_sha="deadbee", bpb_mode="not-applicable"),
+            seed=1, git_sha="deadbee", bpb_mode="not-applicable",
+            runtime=runtime),
         metrics=metrics, created_at="2026-08-25T00:00:00Z", item_count=1))
 
 
@@ -400,10 +410,12 @@ class FakeRetrieval:
     """Stands in for `retrieval_eval.py`, writing the scorecards it would."""
 
     def __init__(self, *, returncode: int = 0,
-                 tasks: Sequence = RETRIEVAL_GATE_TASKS, sha: str = "c" * 64):
+                 tasks: Sequence = RETRIEVAL_GATE_TASKS, sha: str = "c" * 64,
+                 template_mode: Optional[str] = "raw-completion"):
         self.returncode = returncode
         self.tasks = tuple(tasks)
         self.sha = sha
+        self.template_mode = template_mode
         self.calls = []
 
     def runner(self, command, timeout):
@@ -414,7 +426,8 @@ class FakeRetrieval:
         out_dir.mkdir(parents=True, exist_ok=True)
         for task in self.tasks:
             _retrieval_card(out_dir / f"retrieval-{task}.json", task=task,
-                            artifact=gguf, sha=self.sha)
+                            artifact=gguf, sha=self.sha,
+                            template_mode=self.template_mode)
         return self.returncode, "retrieval output"
 
 
@@ -525,6 +538,41 @@ def test_a_scored_arm_is_skipped_but_a_re_exported_one_is_not(tmp_path):
                                  artifact_sha="d" * 64)
     assert not retrieval_scored_from(ARM, tag="stagea", root=root,
                                      artifact_sha="c" * 64)
+
+
+def test_a_templated_card_does_not_count_as_scored(tmp_path):
+    """The chain and the gate have to mean the same thing by "scored".
+
+    They did not. The report gate refuses a llama.cpp card that is not recorded
+    raw completion; `retrieval_scored_from` answered on the artifact digest
+    alone, so the stage-A cards measured through a chat template counted as
+    done. The chain skipped them, the gate refused them, and the column would
+    have stayed unmeasured with nothing left that would run.
+
+    A card written before the backend recorded `template_mode` is one of those
+    cards -- the pinned build could only run the templated turn -- so an absent
+    field must re-score too, not just an explicitly templated one.
+    """
+    llama_cpp = _llama_cpp(tmp_path)
+    (llama_cpp / "build" / "bin" / "llama-cli").write_text("#!/bin/sh\n")
+    root = str(tmp_path / "retrieval")
+    stale = FakeRetrieval(template_mode=None)
+    score_retrieval_arm(ARM, _exported(tmp_path), root=root,
+                        llama_cpp_dir=str(llama_cpp), runner=stale.runner)
+
+    assert not retrieval_scored_from(ARM, tag="stagea", root=root,
+                                     artifact_sha="c" * 64)
+
+    # ... and the chain re-scores it by itself, without --refresh, which would
+    # discard every valid card to fix one stale arm.
+    fresh = FakeRetrieval()
+    again = score_retrieval_arm(ARM, _exported(tmp_path), root=root,
+                                llama_cpp_dir=str(llama_cpp), runner=fresh.runner)
+
+    assert "skipped" not in again and again["scored"] is True
+    assert len(fresh.calls) == 1
+    assert retrieval_scored_from(ARM, tag="stagea", root=root,
+                                 artifact_sha="c" * 64)
 
 
 def test_refresh_rescores_an_arm_already_scored_from_this_gguf(tmp_path):
