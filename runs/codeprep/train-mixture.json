@@ -1,0 +1,313 @@
+{
+  "absent": {},
+  "buckets": {
+    "code": {
+      "code-javascript-typescript-javascript-all": 0.1934265476923077,
+      "code-javascript-typescript-typescript-all": 0.2565734523076923,
+      "code-python": 0.55
+    },
+    "general-replay": {
+      "cosmopedia-v2": 0.06493506493506494,
+      "dclm-baseline": 0.2922077922077922,
+      "everyday-conversations": 0.025974025974025972,
+      "finephrase": 0.09090909090909091,
+      "fineweb-edu": 0.487012987012987,
+      "finewiki-en": 0.03896103896103896
+    },
+    "technical": {
+      "finemath-3plus": 0.21428571428571425,
+      "finepdfs-edu": 0.5714285714285714,
+      "infiwebmath-3plus": 0.21428571428571425
+    }
+  },
+  "caveats": [
+    "data/holdout/stack-edu-python is GitHub Python from the same dataset and revision the code bucket streams, and the code corpus is repository-split against its own holdout only -- so that source cannot serve as a general-retention measurement for a model being trained on code. Score general BPB over the general-text sources separately from it."
+  ],
+  "code_basis": "each directory's share of the code budget it was built to",
+  "code_sources": {
+    "code-javascript-typescript-javascript-all": {
+      "bucket": "javascript-typescript",
+      "token_budget": 125727256,
+      "tokens": 125728713
+    },
+    "code-javascript-typescript-typescript-all": {
+      "bucket": "javascript-typescript",
+      "token_budget": 166772744,
+      "tokens": 166799914
+    },
+    "code-python": {
+      "bucket": "python",
+      "token_budget": 357500000,
+      "tokens": 357501624
+    }
+  },
+  "composed": {
+    "holdout": {
+      "code-javascript-typescript-javascript-all": {
+        "path": "data/code-mixture/holdout/code-javascript-typescript-javascript-all",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/code-shards/holdout/code-javascript-typescript-javascript-all",
+        "tokens": 859869
+      },
+      "code-javascript-typescript-typescript-all": {
+        "path": "data/code-mixture/holdout/code-javascript-typescript-typescript-all",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/code-shards/holdout/code-javascript-typescript-typescript-all",
+        "tokens": 1160534
+      },
+      "code-python": {
+        "path": "data/code-mixture/holdout/code-python",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/code-shards/holdout/code-python",
+        "tokens": 2000611
+      },
+      "dclm-baseline": {
+        "path": "data/code-mixture/holdout/dclm-baseline",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/holdout/dclm-baseline",
+        "tokens": 66572481
+      },
+      "fineweb-edu": {
+        "path": "data/code-mixture/holdout/fineweb-edu",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/holdout/fineweb-edu",
+        "tokens": 53588955
+      }
+    },
+    "train": {
+      "code-javascript-typescript-javascript-all": {
+        "path": "data/code-mixture/train/code-javascript-typescript-javascript-all",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/code-shards/train/code-javascript-typescript-javascript-all",
+        "tokens": 125728713
+      },
+      "code-javascript-typescript-typescript-all": {
+        "path": "data/code-mixture/train/code-javascript-typescript-typescript-all",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/code-shards/train/code-javascript-typescript-typescript-all",
+        "tokens": 166799914
+      },
+      "code-python": {
+        "path": "data/code-mixture/train/code-python",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/code-shards/train/code-python",
+        "tokens": 357501624
+      },
+      "cosmopedia-v2": {
+        "path": "data/code-mixture/train/cosmopedia-v2",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/shards/cosmopedia-v2",
+        "tokens": 100000000
+      },
+      "dclm-baseline": {
+        "path": "data/code-mixture/train/dclm-baseline",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/shards-train/dclm-baseline",
+        "tokens": 259854466
+      },
+      "everyday-conversations": {
+        "path": "data/code-mixture/train/everyday-conversations",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/shards/everyday-conversations",
+        "tokens": 403573
+      },
+      "finemath-3plus": {
+        "path": "data/code-mixture/train/finemath-3plus",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/shards/finemath-3plus",
+        "tokens": 100000000
+      },
+      "finepdfs-edu": {
+        "path": "data/code-mixture/train/finepdfs-edu",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/shards/finepdfs-edu",
+        "tokens": 100000000
+      },
+      "finephrase": {
+        "path": "data/code-mixture/train/finephrase",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/shards/finephrase",
+        "tokens": 100000000
+      },
+      "fineweb-edu": {
+        "path": "data/code-mixture/train/fineweb-edu",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/shards-train/fineweb-edu",
+        "tokens": 425596079
+      },
+      "finewiki-en": {
+        "path": "data/code-mixture/train/finewiki-en",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/shards/finewiki-en",
+        "tokens": 100000000
+      },
+      "infiwebmath-3plus": {
+        "path": "data/code-mixture/train/infiwebmath-3plus",
+        "relinked": false,
+        "target": "/workspace/daedalus/data/shards/infiwebmath-3plus",
+        "tokens": 100000000
+      }
+    }
+  },
+  "corpus_shares": {
+    "code": 0.65,
+    "general-replay": 0.2,
+    "technical": 0.15
+  },
+  "evidence": {
+    "code_manifest": "data/code-shards/manifest.json",
+    "general_holdout_root": "data/holdout",
+    "replay_roots": [
+      "data/shards-train",
+      "data/shards"
+    ]
+  },
+  "excluded_from_replay": {
+    "stack-edu-python": "code; served by the 65% code bucket, and drawn from the same dataset it streams"
+  },
+  "holdout_root": "data/code-mixture/holdout",
+  "out_root": "data/code-mixture",
+  "preflight": {
+    "capped_sources": [],
+    "l1_skew_pts": 0.0,
+    "max_epochs": 4.0,
+    "max_epochs_seen": 3.218,
+    "most_repeated_source": "everyday-conversations",
+    "per_source": {
+      "code-javascript-typescript-javascript-all": {
+        "capped": false,
+        "effective_share": 0.125727,
+        "epochs": 0.25,
+        "target_share": 0.125727,
+        "tokens_on_disk": 125728713
+      },
+      "code-javascript-typescript-typescript-all": {
+        "capped": false,
+        "effective_share": 0.166773,
+        "epochs": 0.25,
+        "target_share": 0.166773,
+        "tokens_on_disk": 166799914
+      },
+      "code-python": {
+        "capped": false,
+        "effective_share": 0.3575,
+        "epochs": 0.25,
+        "target_share": 0.3575,
+        "tokens_on_disk": 357501624
+      },
+      "cosmopedia-v2": {
+        "capped": false,
+        "effective_share": 0.012987,
+        "epochs": 0.032,
+        "target_share": 0.012987,
+        "tokens_on_disk": 100000000
+      },
+      "dclm-baseline": {
+        "capped": false,
+        "effective_share": 0.058442,
+        "epochs": 0.056,
+        "target_share": 0.058442,
+        "tokens_on_disk": 259854466
+      },
+      "everyday-conversations": {
+        "capped": false,
+        "effective_share": 0.005195,
+        "epochs": 3.218,
+        "target_share": 0.005195,
+        "tokens_on_disk": 403573
+      },
+      "finemath-3plus": {
+        "capped": false,
+        "effective_share": 0.032143,
+        "epochs": 0.08,
+        "target_share": 0.032143,
+        "tokens_on_disk": 100000000
+      },
+      "finepdfs-edu": {
+        "capped": false,
+        "effective_share": 0.085714,
+        "epochs": 0.214,
+        "target_share": 0.085714,
+        "tokens_on_disk": 100000000
+      },
+      "finephrase": {
+        "capped": false,
+        "effective_share": 0.018182,
+        "epochs": 0.045,
+        "target_share": 0.018182,
+        "tokens_on_disk": 100000000
+      },
+      "fineweb-edu": {
+        "capped": false,
+        "effective_share": 0.097403,
+        "epochs": 0.057,
+        "target_share": 0.097403,
+        "tokens_on_disk": 425596079
+      },
+      "finewiki-en": {
+        "capped": false,
+        "effective_share": 0.007792,
+        "epochs": 0.019,
+        "target_share": 0.007792,
+        "tokens_on_disk": 100000000
+      },
+      "infiwebmath-3plus": {
+        "capped": false,
+        "effective_share": 0.032143,
+        "epochs": 0.08,
+        "target_share": 0.032143,
+        "tokens_on_disk": 100000000
+      }
+    },
+    "total_run_tokens": 250000000,
+    "total_tokens_on_disk": 1935884369
+  },
+  "replay_basis": "the original pretraining mixture's own shares, renormalized within each bucket",
+  "schema": 1,
+  "total_tokens": 250000000,
+  "train_flags": [
+    "--data-dir",
+    "data/code-mixture/train",
+    "--val-dir",
+    "data/code-mixture/holdout",
+    "--mixture-weight",
+    "code-javascript-typescript-javascript-all=0.125727256",
+    "--mixture-weight",
+    "code-javascript-typescript-typescript-all=0.166772744",
+    "--mixture-weight",
+    "code-python=0.35750000000000004",
+    "--mixture-weight",
+    "cosmopedia-v2=0.01298701298701299",
+    "--mixture-weight",
+    "dclm-baseline=0.05844155844155844",
+    "--mixture-weight",
+    "everyday-conversations=0.005194805194805195",
+    "--mixture-weight",
+    "finemath-3plus=0.03214285714285713",
+    "--mixture-weight",
+    "finepdfs-edu=0.0857142857142857",
+    "--mixture-weight",
+    "finephrase=0.018181818181818184",
+    "--mixture-weight",
+    "fineweb-edu=0.09740259740259741",
+    "--mixture-weight",
+    "finewiki-en=0.007792207792207792",
+    "--mixture-weight",
+    "infiwebmath-3plus=0.03214285714285713"
+  ],
+  "train_root": "data/code-mixture/train",
+  "weights": {
+    "code-javascript-typescript-javascript-all": 0.125727256,
+    "code-javascript-typescript-typescript-all": 0.166772744,
+    "code-python": 0.35750000000000004,
+    "cosmopedia-v2": 0.01298701298701299,
+    "dclm-baseline": 0.05844155844155844,
+    "everyday-conversations": 0.005194805194805195,
+    "finemath-3plus": 0.03214285714285713,
+    "finepdfs-edu": 0.0857142857142857,
+    "finephrase": 0.018181818181818184,
+    "fineweb-edu": 0.09740259740259741,
+    "finewiki-en": 0.007792207792207792,
+    "infiwebmath-3plus": 0.03214285714285713
+  }
+}
