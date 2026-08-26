@@ -6,7 +6,9 @@ Nothing here is merged automatically, and no artifact is published outside a pri
 
 ## What phase 8 starts from
 
-`hero-base-f16` — the released **base**, never the SFT/DPO checkpoint. The plan's mixture is 65% permissively licensed code (Python 55%, JS/TS 12%, C/C++ 10%, Rust 8%, Go 6%, Java 5%, shell/SQL/other 4%), 15% technical and mathematical prose, and 20% original general replay. Train and holdout split **by repository**, not by file or by packed window, and decontaminated against HumanEval+ and MBPP+ prompts, reference solutions, tests, and repository metadata.
+`hero-base-f16` — the released **base**, never the SFT/DPO checkpoint. The mixture is 65% permissively licensed code, 15% technical and mathematical prose, and 20% original general replay. Train and holdout split **by repository**, not by file or by packed window, and decontaminated against HumanEval+ and MBPP+ prompts, reference solutions, tests, and repository metadata.
+
+The code portion is **Python 55% and JavaScript/TypeScript 45%**. The plan preregistered seven buckets; two separate decisions reduced them to two, and the record keeps them apart because they are not the same kind of fact — one is a measurement, the other is a choice. Both are in `runs/vast-program/code-run-manifest.json` as amendments beside the preregistered split, which is retained rather than overwritten.
 
 It also inherits the released model's 49,152-entry tokenizer and its dead ShortConv channels. Phase 4 selected a 32,768 vocabulary and phase 5 studied decay schedules, but both are from-initialization recommendations for a future V2 and neither can be transplanted into these weights. That is why this is labelled **V1**.
 
@@ -108,6 +110,25 @@ So `corpus headroom` asks phase 7's question with phase 8's evidence, reusing `s
 
 One caveat is carried rather than hidden: `all-all`'s tenth file lost its footer to a 429 that outlasted its retries, so the two fallback buckets are counted from nine files of ten. Their supply is a **floor**, flagged as `lower_bound` in the record and on the report. It matters in one direction only — a floor that clears the cap has cleared it, but a floor that failed would have to be re-measured before being believed, so the two are distinguishable at the point the verdict is read. Record in `runs/codeprep/headroom.json`, footers in `config-rows.json`.
 
+## The mixture the user asked for
+
+Everything above is the mixture this dataset *can* serve. What it builds is narrower, by direction: **the code portion is retargeted to Python and JavaScript/TypeScript only**, and `c-cpp`, `java`, `go` and `shell-sql-other` are dropped.
+
+That drop is **not** the Rust drop and the record must not read as though it were. Rust could not be served — no converted directory, 0.336% of the interleaved one, 23.8 passes to reach its share. These four *were* reachable: C/C++ and Java have their own directories, Go and shell/SQL cleared the 0.5% floor from the interleaved directory, and the headroom pass above verified every one of them SUPPORTED at all three gates. They were not asked for. Conflating a scope choice with an availability constraint would misdescribe both, so `code-run-manifest.json` carries two amendments with two authorities, and `PREREGISTERED_CODE_LANGUAGE_SHARES` stays in the module beside the live table as the thing the drops are drops from.
+
+The freed 20 points go to **JavaScript/TypeScript, not to Python**. The measured plan had drifted Python to 64.4% precisely because every unreachable bucket was non-Python and the shortfall redistributed proportionally — and both gate benchmarks are Python-only, so that drift was a reporting hazard rather than a bonus. Directing the freed share elsewhere returns Python to exactly its preregistered 55% and removes the eval-language concentration rather than deepening it.
+
+Re-measured, not assumed:
+
+| bucket | share | unique tokens | epochs at 3B |
+| --- | --- | --- | --- |
+| python | 55% | 921M (`Python-all`) | **1.2** |
+| javascript-typescript | 45% | 2,531M (`JavaScript-all` + `TypeScript-all`) | **0.3** |
+
+**SUPPORTED at 250M, 1B and 3B**, both cheaper than the plan they replace. The `all-all` lower-bound caveat leaves with the fallback buckets: neither remaining bucket is drawn from the directory whose tenth footer was lost.
+
+The fallback and language-filter code stays and stays tested — the plan tests pin themselves to the preregistered seven-bucket table, the only mixture where that logic has anything to decide. Deleting it along with the buckets would discard the measurement that proved Rust unreachable.
+
 One trap worth carrying forward: a probe that finished, printed its verdict and wrote its JSON still exits `-6`. pyarrow aborts in `PyGILState_Release` during interpreter finalization, *after* everything is written, so the controller records the phase as failed and the return code says nothing about whether the work succeeded. Read the JSON, not the exit code. A long build will hit this too.
 
 ## The build
@@ -118,7 +139,7 @@ Shards go to `<root>/train/<key>` and `<root>/holdout/<key>`, so each side is an
 
 Three decisions are worth naming.
 
-**A bucket's budget is divided across its directories on the supply already measured, not evenly.** `bucket_supply` summed per-directory unique tokens and kept only the sum, so an even split was the only division available — and the measurement says `TypeScript-all` holds **1,443M** unique tokens against `JavaScript-all`'s **1,088M**, and `C++-all` 830M against `C-all`'s 487M. An even split would ask the smaller directory for more than it has, and that shortfall would be reported per directory and invisible per bucket, which is the miscount the whole headroom pass exists to prevent. Where no supply was measured it still splits evenly and the basis says so, because a budget that was guessed and one that was measured must not read alike in a manifest.
+**A bucket's budget is divided across its directories on the supply already measured, not evenly.** `bucket_supply` summed per-directory unique tokens and kept only the sum, so an even split was the only division available — and the measurement says `TypeScript-all` holds **1,443M** unique tokens against `JavaScript-all`'s **1,088M**. That matters more after the retarget than before it: JS/TS is now 45% of the code portion, so the split inside it decides 293M tokens at the 1B gate, and an even one would ask the smaller directory for more than it has. The shortfall would then be reported per directory and invisible per bucket, which is the miscount the whole headroom pass exists to prevent. Where no supply was measured it still splits evenly and the basis says so, because a budget that was guessed and one that was measured must not read alike in a manifest.
 
 **The holdout is capped, not sized as a share.** The holdout pass reads the whole directory and keeps the 2% of repositories on its side, so every holdout token costs roughly fifty tokens of streaming. At 3B total an uncapped holdout is ~39M tokens and ~2B tokens of streaming to collect them, to measure a BPB that a few million measure as well. Capped at 2M per bucket, and it scales down below the cap so a small build is not all holdout.
 
@@ -128,9 +149,13 @@ Resume is the **default**, not a flag: a relaunch after a crash costs the remain
 
 The corpus is filtered against **`general | code`**: 1,406,059 13-grams, 34,286 from HumanEval+/MBPP+ and 1,371,773 from the five general tasks. Dropping the general half to add the code half would decontaminate against the benchmarks phase 8 added and re-contaminate against the ones it inherited; both records, with their digests, are in the corpus manifest.
 
-A 25-document live smoke over all sixteen sources resolved every directory, admitted rows on both sides of every split, and wrote shards and manifests — and found one false record on the way out. `run_source` reads exhaustion off the stream ending, and under a document cap the stream ends at the cap, so the smoke manifested `Java-all` — a directory holding 0.82B unique tokens — as having no more documents. That is recorded as `stopped_by_doc_cap` now; an uncapped stream that really ends still says so, because that one is the finding.
+A 25-document live smoke over all sixteen sources of the pre-retarget plan resolved every directory, admitted rows on both sides of every split, and wrote shards and manifests — and found one false record on the way out. `run_source` reads exhaustion off the stream ending, and under a document cap the stream ends at the cap, so the smoke manifested `Java-all` — a directory holding 0.82B unique tokens — as having no more documents. That is recorded as `stopped_by_doc_cap` now; an uncapped stream that really ends still says so, because that one is the finding.
 
-**Running:** the corpus for the 250M and 1B gates — 1B total, so **650M code tokens** — is building detached under the controller (`phase8-code-corpus-build`, three attempts, log in `runs/codeprep/corpus-build.log`). The 3B continuation needs the same command at a larger `--total-tokens`, which resumes each source from where this one leaves it rather than rebuilding.
+One more cadence defect the smoke exposed. `run_source` writes its durable checkpoints every N *yielded* documents, and a holdout pass yields about 2% of what it streams — so at the shared 50,000-document default the whole 2M-token Python holdout yields ~800 documents and never checkpoints once. The pass with the most streaming behind each token it keeps was the one no crash could be resumed from. It cannot simply be made small either: every checkpoint closes the buffer as a *new shard file*, so a 500-document cadence over a 357M-token source would leave hundreds of shards behind. It is derived from each source's own budget now — about twenty checkpoints per source, never coarser than 200 documents — and `--progress-every` follows the same rule, because a detached multi-hour source that prints nothing between its start and its finish cannot be told from one that has hung.
+
+**Running:** the corpus for the 250M and 1B gates — 1B total, so **650M code tokens**: Python 357.5M, `JavaScript-all` 125.7M, `TypeScript-all` 166.8M, plus ~4M of by-repository holdout — is building detached under the controller (`phase8-code-corpus-build`, three attempts, log in `runs/codeprep/corpus-build.log`). The 3B continuation is the same command at a larger `--total-tokens`, which resumes each source from where this one leaves it rather than rebuilding.
+
+An earlier launch of this build was stopped by the operator two minutes in, and it is worth recording why rather than quietly relaunching: it was streaming the **old seven-bucket mixture**. The retarget landed at 20:13:31Z and the build went out at 20:18:28Z, from a session that had read the controller state at the top of its turn and not again before starting a six-hour job. The build code itself needed no change — `corpus build` consumes whatever `corpus plan` produced — so the fault was ordering, and the cost was the 4.0 MB that attempt had written, removed rather than resumed.
 
 **One operator ask.** Every Hub read in this program is unauthenticated: the runtime environment carries `HF_TOKEN_WRITE` but not `HF_TOKEN`, which is the name `huggingface_hub` reads. It has already cost one measurement — the 429 that took `all-all`'s tenth footer and made two buckets a flagged lower bound — and it is a worse risk over a multi-GB streaming build. Not repaired here: the fix belongs in the approved wrapper, which is control-plane and lives on #14, and the installed copy is only refreshed by an operator run of `ops/vast/install_supervisor.sh`. Promoting a write-scoped credential into `HF_TOKEN` from inside a build script would put a secret in code. Adding a read-scoped `HF_TOKEN` to the runtime environment closes it.
 
@@ -151,6 +176,6 @@ Final acceptance: code BPB improves ≥5%, HumanEval+/MBPP+ pass@1 and syntax va
 
 Branch created from #14's tested SHA; parent recorded in `runs/vast-program/code-run-manifest.json`. Base baselines and both harness oracles are in, the code decontamination index is frozen and verified, and the admission gate is written and measured against the real sources.
 
-The mixture decision is closed: the plan is measured, Rust is dropped by name, the remainder is redistributed, and every bucket's directories have been shown to hold the share the plan gives them inside the four-epoch cap.
+The mixture decision is closed twice over: the plan is measured and Rust is dropped by name for what the revision could serve, and the code portion is then retargeted by the user to Python and JavaScript/TypeScript, with the two kinds of drop recorded apart. Both remaining buckets are verified SUPPORTED at all three gates — 1.2 and 0.3 epochs at 3B against a cap of 4.
 
-The build is written, smoked against the real sources, and **running** for the 250M and 1B gates — 650M code tokens across sixteen sources, detached under the controller so it outlives the session that started it. No training has started. The next slice is the three 250M probes, which now have a corpus to read.
+The build is written, smoked against the real sources, and **running** for the 250M and 1B gates — 650M code tokens across six sources, detached under the controller so it outlives the session that started it. No training has started. The next slice is the three 250M probes, which will have a corpus to read.
