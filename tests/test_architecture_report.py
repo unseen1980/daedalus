@@ -14,6 +14,7 @@ Run: python -m pytest tests/test_architecture_report.py -v
 """
 import json
 import math
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -26,18 +27,25 @@ from scripts.architecture_report import (GATE_COLUMNS, MATCHED_HOLDOUT_SOURCE,
                                          RETRIEVAL_MAX_DROP_POINTS,
                                          RETRIEVAL_MIN_ITEMS_PER_DEPTH,
                                          STAGE_B_FLOOR_PCT, STAGE_B_MAX_ARMS,
+                                         STAGE_C_CONDITIONS, STAGE_C_MAX_ARMS,
+                                         STAGE_C_TOTAL_TOKENS,
                                          advanced_selection, arm_bpb,
+                                         bpb_discrimination,
                                          build_recommendation,
                                          build_report,
-                                         credited_bpb_delta_pct, decode_check,
+                                         credited_bpb_delta_pct, deadline_room,
+                                         decode_check,
                                          export_check, gate_arm, gate_verdict,
                                          kv_check, pareto_frontier, read_rows,
-                                         read_decode_passes, render_markdown,
+                                         read_decode_passes,
+                                         read_run_throughput, render_markdown,
                                          render_recommendation_markdown,
-                                         report_path, retrieval_check,
+                                         render_stage_c_markdown, report_path,
+                                         retrieval_check,
                                          score_arm, scorecard_path, scored_from,
                                          select_stage_b, selection_notes,
-                                         swept_arms)
+                                         stage_c_cost, stage_c_decision,
+                                         stage_c_finalists, swept_arms)
 from scripts.architecture_report import main as architecture_report_main
 from scripts.architecture_sweep import (ARMS, ARMS_BY_NAME, CONTROL, STAGE_A,
                                         STAGE_B, arm_checkpoint_path)
@@ -1176,3 +1184,460 @@ def test_the_recommend_subcommand_writes_both_artifacts(tmp_path):
     assert report["gate"]["columns"] == list(GATE_COLUMNS)
     assert "recommendation gate" in \
         (tmp_path / "out" / "stagea-recommendation.md").read_text()
+
+
+# ====================================================== the stage-C go/no-go ==
+# The condition that decides whether the phase spends another ~20 GPU-hours.
+# Exercised on synthetic tables for the same reason the rest of this file is:
+# the arithmetic has to be pinned independently of what the four real arms
+# happened to score, since those numbers were already visible when the rule was
+# written and the rule's defence is that it introduces no threshold of its own.
+
+
+def _stage_row(arm, *, bpb, kv, parameters, is_control=False):
+    return {"arm": arm, "preset": f"arch-b-{arm}", "is_control": is_control,
+            "attention_layers": 8, "num_key_value_heads": 4,
+            "kv_bytes_per_context_token": kv, "parameters": parameters,
+            "q4_0_MB": 90.0, "bpb": bpb, "checkpoint_sha256": "0" * 64,
+            "scorecard": f"{arm}.json"}
+
+
+def _committed_report(root, rows, *, tag="stageb", control="a8-kv4"):
+    """A `report`-shaped artifact, written where `stage-c` reads it."""
+    path = report_path(tag, str(root))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "tag": tag, "created_at": "2026-08-26T00:00:00Z", "control": control,
+        "shape": {"name": "stage-b", "seq_len": 2048,
+                  "total_tokens": STAGE_B.total_tokens, "steps": 3840},
+        "rows": _with_deltas(rows)}))
+    return path
+
+
+def _committed_recommendation(root, verdicts, *, tag="stageb"):
+    """A `recommend`-shaped artifact carrying one verdict per arm."""
+    path = Path(root) / f"{tag}-recommendation.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "tag": tag, "created_at": "2026-08-26T00:00:00Z",
+        "arms": [{"arm": arm, "verdict": verdict, "checks": {}}
+                 for arm, verdict in verdicts.items()]}))
+    return path
+
+
+def _run_metrics(root, run, *, tokens, elapsed_h, trailing=""):
+    """A finished run's metrics tail, optionally with a torn final line."""
+    directory = Path(root) / run
+    directory.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps({"step": 10, "tokens": tokens // 2,
+                         "elapsed_h": elapsed_h / 2}),
+             json.dumps({"step": 20, "tokens": tokens, "elapsed_h": elapsed_h})]
+    (directory / "metrics.jsonl").write_text("\n".join(lines) + "\n" + trailing)
+    return directory
+
+
+def _controller_state(path, *, now, elapsed_hours, hard_hours=144.0,
+                      reserve_hours=8.0):
+    """A state file whose window is `hard_hours - reserve_hours - elapsed`."""
+    started = now - timedelta(hours=elapsed_hours)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps({
+        "started_at": started.isoformat().replace("+00:00", "Z"),
+        "hard_hours": hard_hours, "reserve_hours": reserve_hours,
+        "phase": "phase6", "status": "running"}))
+    return path
+
+
+NOW = datetime(2026, 8, 26, 6, 0, tzinfo=timezone.utc)
+
+
+def _four_arms(*, spread_bpb, spread_params):
+    """Control plus three arms, with the BPB and parameter widths under test.
+
+    Laid out so cheaper cache costs monotonically more BPB, which puts all three
+    non-control arms on the frontier -- the arrangement in which the cap is the
+    thing doing the dropping, rather than domination doing it first and hiding
+    whether the cap works at all.
+    """
+    return [
+        _stage_row("a8-kv4", bpb=1.0, kv=8192, parameters=100_000_000,
+                   is_control=True),
+        _stage_row("a6-kv4", bpb=1.0 + spread_bpb / 3, kv=6144,
+                   parameters=100_000_000 + spread_params // 3),
+        _stage_row("a4-kv4", bpb=1.0 + 2 * spread_bpb / 3, kv=4096,
+                   parameters=100_000_000 + 2 * spread_params // 3),
+        _stage_row("a3-kv4", bpb=1.0 + spread_bpb, kv=3072,
+                   parameters=100_000_000 + spread_params),
+    ]
+
+
+# ------------------------------------------------------------ discrimination --
+
+def test_a_bpb_spread_inside_the_parameter_residual_is_not_discrimination():
+    """The grid's own matching residual can move BPB. A measured spread smaller
+    than that is a ranking of the residual, and 1B tokens buys a more precise
+    version of the same confound."""
+    rows = _with_deltas(_four_arms(spread_bpb=0.001, spread_params=2_000_000))
+
+    check = bpb_discrimination(rows)
+
+    assert check["status"] == "fail"
+    assert check["measured_spread_pct"] == pytest.approx(0.1)
+    assert check["param_spread_pct"] == pytest.approx(2.0)
+    assert check["explained_spread_pct"] == pytest.approx(
+        2.0 * PARAM_SCALING_EXPONENT)
+    assert "matching residual" in check["note"]
+
+
+def test_a_bpb_spread_wider_than_the_residual_is_discrimination():
+    """A parameter-matched grid that still spreads on quality has separated its
+    arms, and that is what stage C would resolve further."""
+    rows = _with_deltas(_four_arms(spread_bpb=0.01, spread_params=0))
+
+    check = bpb_discrimination(rows)
+
+    assert check["status"] == "pass"
+    assert check["measured_spread_pct"] == pytest.approx(1.0)
+    assert check["explained_spread_pct"] == pytest.approx(0.0)
+
+
+def test_the_discrimination_test_introduces_no_threshold_of_its_own():
+    """Its only constant is stage A's exponent. The boundary is therefore a
+    property of the grid that was measured, not a number chosen for it."""
+    rows = _with_deltas(_four_arms(spread_bpb=0.005, spread_params=1_000_000))
+
+    check = bpb_discrimination(rows)
+
+    assert check["exponent"] == PARAM_SCALING_EXPONENT
+    assert check["explained_spread_pct"] == pytest.approx(
+        check["param_spread_pct"] * PARAM_SCALING_EXPONENT)
+
+
+def test_one_scored_arm_cannot_show_a_spread():
+    """Unmeasured, not discriminating. A stage that finished one arm has not
+    demonstrated that its shapes differ."""
+    check = bpb_discrimination(_with_deltas([
+        _stage_row("a8-kv4", bpb=1.0, kv=8192, parameters=100_000_000,
+                   is_control=True)]))
+
+    assert check["status"] == "unmeasured"
+
+
+# ----------------------------------------------------------------- finalists --
+
+def test_an_unproven_arm_is_still_a_finalist():
+    """A column that could not be measured at proxy scale is the kind of thing
+    more tokens can resolve. Excluding it would make the permissive reading of
+    the recommendation gate the strict one here."""
+    rows = _with_deltas(_four_arms(spread_bpb=0.001, spread_params=0))
+
+    check = stage_c_finalists(
+        {"arms": [{"arm": "a8-kv4", "verdict": "unproven"},
+                  {"arm": "a6-kv4", "verdict": "unproven"},
+                  {"arm": "a4-kv4", "verdict": "unproven"},
+                  {"arm": "a3-kv4", "verdict": "unproven"}]}, rows)
+
+    assert check["status"] == "pass"
+    assert check["selected"] == ["a3-kv4", "a4-kv4"]
+
+
+def test_a_blocked_arm_is_not_a_finalist():
+    """A measured failure is a closed question; it does not reopen at four
+    times the budget."""
+    rows = _with_deltas(_four_arms(spread_bpb=0.001, spread_params=0))
+
+    check = stage_c_finalists(
+        {"arms": [{"arm": "a8-kv4", "verdict": "unproven"},
+                  {"arm": "a6-kv4", "verdict": "recommended"},
+                  {"arm": "a4-kv4", "verdict": "unproven"},
+                  {"arm": "a3-kv4", "verdict": "blocked"}]}, rows)
+
+    assert check["selected"] == ["a4-kv4", "a6-kv4"]
+    assert check["blocked"] == ["a3-kv4"]
+
+
+def test_finalists_are_capped_at_the_plans_two():
+    """`at most two finalists` is the plan's number, and the cap is applied
+    after the frontier so the two that run are the cheapest-cache survivors."""
+    rows = _with_deltas(_four_arms(spread_bpb=0.001, spread_params=0))
+
+    check = stage_c_finalists(
+        {"arms": [{"arm": arm, "verdict": "unproven"}
+                  for arm in ("a8-kv4", "a6-kv4", "a4-kv4", "a3-kv4")]}, rows)
+
+    assert check["max_arms"] == STAGE_C_MAX_ARMS == 2
+    assert len(check["selected"]) == 2
+    assert check["dropped_from_frontier"] == ["a6-kv4"]
+
+
+def test_every_non_control_arm_blocked_leaves_nothing_to_promote():
+    rows = _with_deltas(_four_arms(spread_bpb=0.001, spread_params=0))
+
+    check = stage_c_finalists(
+        {"arms": [{"arm": "a8-kv4", "verdict": "unproven"}]
+                 + [{"arm": arm, "verdict": "blocked"}
+                    for arm in ("a6-kv4", "a4-kv4", "a3-kv4")]}, rows)
+
+    assert check["status"] == "fail"
+    assert check["selected"] == []
+
+
+def test_an_ungated_arm_is_not_promoted_by_default():
+    """An arm the recommendation never gated has not passed anything. Silently
+    promoting it is how an unscored shape gets a 1B-token run."""
+    rows = _with_deltas(_four_arms(spread_bpb=0.001, spread_params=0))
+
+    check = stage_c_finalists(
+        {"arms": [{"arm": "a8-kv4", "verdict": "unproven"},
+                  {"arm": "a6-kv4", "verdict": "unproven"}]}, rows)
+
+    assert check["selected"] == ["a6-kv4"]
+    assert "a4-kv4" not in check["eligible"]
+
+
+# ---------------------------------------------------------------------- cost --
+
+def test_stage_c_hours_come_from_what_the_previous_stage_measured(tmp_path):
+    """Per arm, not pooled: the shapes differ in width by design, so one rate
+    for all of them would be an estimate of the control."""
+    _run_metrics(tmp_path, "arch-stageb-a8-kv4", tokens=250_000_000,
+                 elapsed_h=2.0)
+    _run_metrics(tmp_path, "arch-stageb-a4-kv4", tokens=250_000_000,
+                 elapsed_h=2.5)
+
+    check = stage_c_cost(["a8-kv4", "a4-kv4"], tag="stageb",
+                         run_root=str(tmp_path), total_tokens=500_000_000)
+
+    assert check["status"] == "pass"
+    assert [run["hours"] for run in check["runs"]] == pytest.approx([4.0, 5.0])
+    assert check["training_hours"] == pytest.approx(9.0)
+    assert check["assumed_rate_for"] == []
+
+
+def test_an_unmeasured_arm_borrows_the_slowest_measured_rate(tmp_path):
+    """Conservative in the direction that matters: the failure this feeds is
+    starting a run that cannot finish."""
+    _run_metrics(tmp_path, "arch-stageb-a8-kv4", tokens=250_000_000,
+                 elapsed_h=2.0)
+    _run_metrics(tmp_path, "arch-stageb-a4-kv4", tokens=250_000_000,
+                 elapsed_h=2.5)
+
+    check = stage_c_cost(["a8-kv4", "a4-kv4", "a3-kv4"], tag="stageb",
+                         run_root=str(tmp_path), total_tokens=500_000_000)
+
+    assert check["assumed_rate_for"] == ["a3-kv4"]
+    assert check["runs"][2]["hours"] == pytest.approx(5.0)
+    assert check["runs"][2]["source"] == "slowest-measured"
+
+
+def test_a_torn_final_metrics_line_does_not_lose_the_measurement(tmp_path):
+    """A run killed mid-write leaves half a line. Refusing the file over it
+    throws away a measurement that is otherwise complete."""
+    _run_metrics(tmp_path, "arch-stageb-a8-kv4", tokens=250_000_000,
+                 elapsed_h=2.0, trailing='{"step": 30, "tokens": 3')
+
+    rate = read_run_throughput(tmp_path / "arch-stageb-a8-kv4")
+
+    assert rate["tokens_per_hour"] == pytest.approx(125_000_000.0)
+
+
+def test_a_stage_with_no_metrics_is_unmeasured_rather_than_free(tmp_path):
+    check = stage_c_cost(["a8-kv4"], tag="stageb", run_root=str(tmp_path))
+
+    assert check["status"] == "unmeasured"
+    assert check["training_hours"] is None
+
+
+# ------------------------------------------------------------------ deadline --
+
+def test_a_window_shorter_than_the_run_fails_the_deadline(tmp_path):
+    state = _controller_state(tmp_path / "state.json", now=NOW,
+                              elapsed_hours=130.0)
+
+    check = deadline_room(state, 20.0, now=NOW)
+
+    assert check["status"] == "fail"
+    assert check["hours_available"] == pytest.approx(6.0)
+
+
+def test_a_window_that_holds_the_run_passes(tmp_path):
+    state = _controller_state(tmp_path / "state.json", now=NOW,
+                              elapsed_hours=44.0)
+
+    check = deadline_room(state, 20.0, now=NOW)
+
+    assert check["status"] == "pass"
+    assert check["hours_available"] == pytest.approx(92.0)
+
+
+def test_a_missing_controller_state_is_unmeasured_rather_than_room(tmp_path):
+    """Not a pass. The degradation policy prunes work that will not fit, and it
+    cannot prune against a window nobody checked."""
+    check = deadline_room(tmp_path / "absent.json", 20.0, now=NOW)
+
+    assert check["status"] == "unmeasured"
+
+
+def test_an_uncostable_run_cannot_be_fitted_into_the_window(tmp_path):
+    state = _controller_state(tmp_path / "state.json", now=NOW,
+                              elapsed_hours=1.0)
+
+    check = deadline_room(state, None, now=NOW)
+
+    assert check["status"] == "unmeasured"
+
+
+# ------------------------------------------------------------- the decision --
+
+def _stage_c_tree(tmp_path, *, spread_bpb, spread_params, verdicts,
+                  elapsed_hours=44.0, elapsed_h=2.0):
+    root = tmp_path / "reports"
+    rows = _four_arms(spread_bpb=spread_bpb, spread_params=spread_params)
+    _committed_report(root, rows)
+    _committed_recommendation(root, verdicts)
+    for arm in ("a8-kv4", "a6-kv4", "a4-kv4", "a3-kv4"):
+        _run_metrics(tmp_path / "runs", f"arch-stageb-{arm}",
+                     tokens=250_000_000, elapsed_h=elapsed_h)
+    state = _controller_state(tmp_path / "state.json", now=NOW,
+                              elapsed_hours=elapsed_hours)
+    return root, state
+
+
+def test_a_go_needs_every_condition(tmp_path):
+    root, state = _stage_c_tree(
+        tmp_path, spread_bpb=0.01, spread_params=0,
+        verdicts={arm: "unproven"
+                  for arm in ("a8-kv4", "a6-kv4", "a4-kv4", "a3-kv4")})
+
+    decision = stage_c_decision(tag="stageb", shape=STAGE_B,
+                                report_root=str(root),
+                                run_root=str(tmp_path / "runs"),
+                                state_path=str(state), now=NOW)
+
+    assert decision["verdict"] == "go"
+    assert decision["unmet"] == []
+    assert decision["finalists"] == ["a3-kv4", "a4-kv4"]
+    # Control plus the two finalists, each at 4x the 250M the stage measured.
+    assert decision["stage_c"]["training_hours"] == pytest.approx(
+        3 * 2.0 * STAGE_C_TOTAL_TOKENS / 250_000_000)
+
+
+def test_an_undiscriminating_stage_hands_on_no_stage_c(tmp_path):
+    """The preregistered answer when a stage did not separate its arms: record
+    the negative result, do not spend 1B tokens."""
+    root, state = _stage_c_tree(
+        tmp_path, spread_bpb=0.001, spread_params=2_000_000,
+        verdicts={arm: "unproven"
+                  for arm in ("a8-kv4", "a6-kv4", "a4-kv4", "a3-kv4")})
+
+    decision = stage_c_decision(tag="stageb", shape=STAGE_B,
+                                report_root=str(root),
+                                run_root=str(tmp_path / "runs"),
+                                state_path=str(state), now=NOW)
+
+    assert decision["verdict"] == "no-go"
+    assert decision["unmet"] == ["discrimination"]
+    assert "not a deferral" in decision["note"]
+    # The numbers travel with the verdict, so the negative result is readable
+    # without re-deriving it from the artifacts it read.
+    assert decision["conditions"]["discrimination"]["measured_spread_pct"] \
+        == pytest.approx(0.1)
+
+
+def test_a_no_go_carries_the_counterfactual_that_would_have_been_a_go(tmp_path):
+    """The rule was written after its table existed and says so. What keeps
+    that honest is a boundary the reader can compare to the observation."""
+    root, state = _stage_c_tree(
+        tmp_path, spread_bpb=0.001, spread_params=2_000_000,
+        verdicts={arm: "unproven"
+                  for arm in ("a8-kv4", "a6-kv4", "a4-kv4", "a3-kv4")})
+
+    decision = stage_c_decision(tag="stageb", shape=STAGE_B,
+                                report_root=str(root),
+                                run_root=str(tmp_path / "runs"),
+                                state_path=str(state), now=NOW)
+
+    required = decision["go_would_have_required"]["discrimination"]
+    assert "0.68" in required and "0.10" in required
+
+
+def test_a_deadline_that_cannot_hold_stage_c_is_its_own_refusal(tmp_path):
+    root, state = _stage_c_tree(
+        tmp_path, spread_bpb=0.01, spread_params=0, elapsed_hours=130.0,
+        verdicts={arm: "unproven"
+                  for arm in ("a8-kv4", "a6-kv4", "a4-kv4", "a3-kv4")})
+
+    decision = stage_c_decision(tag="stageb", shape=STAGE_B,
+                                report_root=str(root),
+                                run_root=str(tmp_path / "runs"),
+                                state_path=str(state), now=NOW)
+
+    assert decision["verdict"] == "no-go"
+    assert decision["unmet"] == ["deadline"]
+
+
+def test_the_extra_hours_allowance_is_carried_into_the_window(tmp_path):
+    """The training estimate covers training. An allowance for scoring is the
+    caller's measurement to supply, and it is recorded rather than assumed."""
+    root, state = _stage_c_tree(
+        tmp_path, spread_bpb=0.01, spread_params=0,
+        verdicts={arm: "unproven"
+                  for arm in ("a8-kv4", "a6-kv4", "a4-kv4", "a3-kv4")})
+
+    decision = stage_c_decision(tag="stageb", shape=STAGE_B,
+                                report_root=str(root),
+                                run_root=str(tmp_path / "runs"),
+                                state_path=str(state), now=NOW,
+                                extra_hours=3.0)
+
+    assert decision["stage_c"]["hours_needed"] == pytest.approx(
+        decision["stage_c"]["training_hours"] + 3.0)
+    assert decision["conditions"]["deadline"]["hours_needed"] == \
+        pytest.approx(decision["stage_c"]["hours_needed"])
+
+
+def test_a_stage_that_advances_arms_makes_no_stage_c_decision(tmp_path):
+    """Stage A's handoff is an arm list decided by its own admission rule.
+    Asking it for the stage-C decision would answer with a screen's verdict."""
+    root, state = _stage_c_tree(
+        tmp_path, spread_bpb=0.01, spread_params=0,
+        verdicts={arm: "unproven" for arm in ("a8-kv4", "a6-kv4")})
+
+    with pytest.raises(SystemExit, match="advances arms to"):
+        stage_c_decision(tag="stagea", shape=STAGE_A, report_root=str(root),
+                         run_root=str(tmp_path / "runs"),
+                         state_path=str(state), now=NOW)
+
+
+def test_a_missing_recommendation_is_refused_rather_than_defaulted(tmp_path):
+    """A `go` is worth ~20 GPU-hours, so an absent gate has no default that is
+    better than stopping."""
+    root = tmp_path / "reports"
+    _committed_report(root, _four_arms(spread_bpb=0.01, spread_params=0))
+
+    with pytest.raises(SystemExit, match="recommend"):
+        stage_c_decision(tag="stageb", shape=STAGE_B, report_root=str(root),
+                         run_root=str(tmp_path / "runs"),
+                         state_path=str(tmp_path / "state.json"), now=NOW)
+
+
+def test_the_stage_c_subcommand_writes_both_artifacts_and_exits_zero(tmp_path):
+    """A no-go is this command succeeding. A non-zero exit would make the
+    controller mark the phase `failed`, which the progress branch publishes as
+    an attention banner over a correct preregistered result."""
+    root, state = _stage_c_tree(
+        tmp_path, spread_bpb=0.001, spread_params=2_000_000,
+        verdicts={arm: "unproven"
+                  for arm in ("a8-kv4", "a6-kv4", "a4-kv4", "a3-kv4")})
+
+    assert architecture_report_main([
+        "--shape", "stage-b", "--tag", "stageb",
+        "--report-root", str(root), "--run-root", str(tmp_path / "runs"),
+        "stage-c", "--state", str(state)]) == 0
+
+    decision = json.loads((root / "stageb-stage-c.json").read_text())
+    assert decision["verdict"] == "no-go"
+    markdown = (root / "stageb-stage-c.md").read_text()
+    for condition in STAGE_C_CONDITIONS:
+        assert f"| {condition} |" in markdown
+    assert "What a `go` would have required" in markdown

@@ -105,6 +105,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from daedalus.arch_space import (MAX_KV_BYTES_PER_CONTEXT_TOKEN,  # noqa: E402
                                  PREFERRED_KV_BYTES_PER_CONTEXT_TOKEN)
+from daedalus.program_state import ProgramDeadline  # noqa: E402
 from daedalus.scorecard import (ArtifactRef, ScorecardError, load_scorecard,  # noqa: E402
                                 sha256_file)
 from scripts.architecture_sweep import (ARMS, CONTROL, REPORT_ROOT,  # noqa: E402
@@ -1444,6 +1445,473 @@ def render_recommendation_markdown(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ========================================== preregistered: the stage-C gate ====
+# The plan's stage C "trains at most two finalists for 1B tokens only if
+# deadline reserve and prior discrimination justify it". Both halves of that
+# sentence are conditions, and neither of them is a table the earlier commands
+# already produce -- which is why running stage C is a decision rather than the
+# default continuation of a stage that finished.
+#
+# **On the order this was written in, since it matters and cannot be hidden.**
+# Every other rule in this file was committed before the numbers it judges
+# existed. This one could not be: a go/no-go on "did the previous stage separate
+# the arms" is a question about a finished table, and stage B's table was already
+# on screen. So the guard here is a different one -- the rule is *derived* from
+# constants that predate the table rather than chosen against it. It introduces
+# no new threshold: `PARAM_SCALING_EXPONENT` is stage A's, the 1B budget and the
+# two-finalist cap are the plan's, and the deadline comes from the controller's
+# own state. `stage_c_decision` records `go_would_have_required` so a reader can
+# see how far the observed number sits from the boundary and judge for
+# themselves whether the boundary was drawn around the answer.
+#
+# **Discrimination is measured against the grid's own parameter residual.** The
+# arms are matched only to a few percent, a conv block is dearer than an
+# attention block, and the residual therefore favours exactly the attention-
+# sparse arms this phase hopes will win. `credited_bpb_delta_pct` already
+# discounts that per arm. At the level of the whole stage the same fact reads as
+# a width: if parameters alone could account for a BPB spread of X across the
+# grid, then a measured spread inside X is a ranking of the matching residual,
+# and 1B tokens spent ordering those shapes buys a more precise version of the
+# same confound.
+#
+# The test is deliberately one-sided and its limitation is stated rather than
+# argued away: a measured spread *inside* the confound is also what a genuine
+# architectural effect cancelling against the parameter residual would look
+# like. The two are indistinguishable at this scale -- which is itself a reason
+# not to spend a stage ranking them, not a reason to call the stage decisive.
+#
+# **`unproven` does not disqualify a finalist; `blocked` does.** A column that
+# could not be measured at proxy scale is the kind of thing more tokens can
+# resolve, so an arm held up by one is precisely a candidate for a longer run. A
+# column that was measured and failed is a closed question, and re-running it at
+# 4x the budget is not how it reopens. This is the permissive reading, and it is
+# the one that makes a `go` easier rather than harder.
+
+#: The plan's stage-C budget: 1B tokens per finalist. Expressed as whole steps
+#: at stage B's batch for the reason stage B's own budget is -- a round
+#: 1,000,000,000 leaves a truncated final batch and makes the step count a
+#: rounding artefact rather than the plan's.
+STAGE_C_TOTAL_TOKENS = 15_360 * 65_536
+
+#: "at most two finalists" -- the plan's own cap. Not a resource judgement: the
+#: deadline gate is a separate condition and is measured, not guessed at here.
+STAGE_C_MAX_ARMS = 2
+
+
+def _read_json_or_none(path) -> Optional[dict]:
+    """A JSON object, or None. Unreadable counts as absent, and every caller
+    here treats absent as `unmeasured` rather than as a pass."""
+    try:
+        payload = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _read_committed(path, what: str) -> dict:
+    """A committed artifact, or a refusal naming what should have produced it.
+
+    Same stance as `advanced_selection`: an absent conclusion has no default
+    that is better than stopping, and a stage-C `go` is worth ~20 GPU-hours.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise SystemExit(
+            f"no {what} at {path}: the stage-C decision is read off the "
+            f"committed artifacts of the stage before it, so run `{what}` "
+            "first. There is no default that is better than stopping here.")
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"cannot read {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit(f"{path} is not a {what} written by this module")
+    return payload
+
+
+def bpb_discrimination(rows: Sequence[dict], *,
+                       exponent: float = PARAM_SCALING_EXPONENT) -> dict:
+    """Did this stage separate its arms by more than its grid could explain?
+
+    Both widths are read off columns the report already carries, on the same
+    denominator: `bpb_delta_pct` and `param_surplus_pct` are each a percentage
+    against the control, so their spreads are directly comparable and no new
+    normalisation is introduced here.
+    """
+    scored = [row for row in rows
+              if row.get("bpb_delta_pct") is not None
+              and row.get("param_surplus_pct") is not None]
+    if len(scored) < 2:
+        return _check(CHECK_UNMEASURED,
+                      f"{len(scored)} scored arm(s): a spread needs two",
+                      measured_spread_pct=None, param_spread_pct=None,
+                      explained_spread_pct=None, exponent=exponent)
+
+    deltas = [row["bpb_delta_pct"] for row in scored]
+    surpluses = [row["param_surplus_pct"] for row in scored]
+    measured = max(deltas) - min(deltas)
+    param_spread = max(surpluses) - min(surpluses)
+    explained = exponent * param_spread
+    fields = {
+        "measured_spread_pct": measured,
+        "param_spread_pct": param_spread,
+        "explained_spread_pct": explained,
+        "exponent": exponent,
+        "arms": len(scored),
+        "widest": max(scored, key=lambda row: row["bpb_delta_pct"])["arm"],
+        "narrowest": min(scored, key=lambda row: row["bpb_delta_pct"])["arm"],
+    }
+    if measured > explained:
+        return _check(CHECK_PASS,
+                      f"BPB spans {measured:.2f} points across {len(scored)} "
+                      f"arms, wider than the {explained:.2f} points their "
+                      f"{param_spread:.2f}% parameter spread could explain at "
+                      f"an exponent of {exponent}", **fields)
+    return _check(CHECK_FAIL,
+                  f"BPB spans only {measured:.2f} points across {len(scored)} "
+                  f"arms, inside the {explained:.2f} points their "
+                  f"{param_spread:.2f}% parameter spread could explain on its "
+                  f"own; the ordering is not separable from the grid's "
+                  f"matching residual at this scale", **fields)
+
+
+def read_run_throughput(run_dir) -> Optional[dict]:
+    """Measured tokens per hour for a finished run, or None.
+
+    From `metrics.jsonl` rather than from wall-clock between controller
+    transitions: the metric line is written by the trainer itself and carries
+    both terms of the rate, so it excludes the launcher, the scoring pass and
+    whatever else shared the phase. The last *parseable* line is used -- a run
+    killed mid-write leaves a torn final line, and refusing the whole file over
+    it would throw away a measurement that is otherwise complete.
+    """
+    path = Path(run_dir) / "metrics.jsonl"
+    if not path.exists():
+        return None
+    latest = None
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("tokens") and record.get("elapsed_h"):
+            latest = record
+    if latest is None:
+        return None
+    tokens, hours = float(latest["tokens"]), float(latest["elapsed_h"])
+    if hours <= 0:
+        return None
+    return {"tokens": tokens, "elapsed_h": hours,
+            "tokens_per_hour": tokens / hours,
+            "metrics": str(path)}
+
+
+def stage_c_cost(arms: Sequence[str], *, tag: str, run_root: str = RUN_ROOT,
+                 total_tokens: int = STAGE_C_TOTAL_TOKENS,
+                 arms_by_name: Optional[Dict[str, ArchArm]] = None) -> dict:
+    """What stage C would cost, from what the stage before it actually ran.
+
+    Per arm rather than pooled, because the arms differ in width by design and
+    an attention-sparse shape is not the same number of tokens per hour as the
+    control. An arm with no measurement borrows the *slowest* measured rate --
+    conservative in the direction that matters, since the failure this feeds is
+    starting a run that cannot finish.
+    """
+    by_name = arms_by_name or {}
+    measured: Dict[str, dict] = {}
+    for arm in arms:
+        run = arm_run_name(by_name[arm], tag) if arm in by_name \
+            else f"arch-{tag}-{arm}"
+        rate = read_run_throughput(Path(run_root) / run)
+        measured[arm] = {"arm": arm, "run": run, "throughput": rate}
+
+    rates = [entry["throughput"]["tokens_per_hour"] for entry in measured.values()
+             if entry["throughput"]]
+    if not rates:
+        return _check(CHECK_UNMEASURED,
+                      f"no run under {run_root} for {list(arms)} carries a "
+                      "metrics line with both tokens and elapsed hours, so "
+                      "stage C's cost is unknown rather than affordable",
+                      total_tokens=total_tokens, runs=[], training_hours=None)
+
+    slowest = min(rates)
+    runs = []
+    for arm in arms:
+        entry = measured[arm]
+        rate = entry["throughput"]
+        tokens_per_hour = rate["tokens_per_hour"] if rate else slowest
+        runs.append({
+            "arm": arm, "run": entry["run"],
+            "tokens_per_hour": tokens_per_hour,
+            "hours": total_tokens / tokens_per_hour,
+            "source": "measured" if rate else "slowest-measured",
+            "metrics": rate["metrics"] if rate else None,
+        })
+    training_hours = sum(run["hours"] for run in runs)
+    assumed = [run["arm"] for run in runs if run["source"] != "measured"]
+    return _check(
+        CHECK_PASS,
+        f"{training_hours:.1f} training hours for {len(runs)} runs of "
+        f"{total_tokens:,} tokens at the rates the previous stage measured"
+        + (f"; {assumed} borrowed the slowest measured rate" if assumed else ""),
+        total_tokens=total_tokens, runs=runs, training_hours=training_hours,
+        assumed_rate_for=assumed)
+
+
+def deadline_room(state_path, hours: Optional[float], *,
+                  now: Optional[datetime] = None) -> dict:
+    """Does the reserved window still hold a run of `hours`?
+
+    Read from the controller's own state so the answer is the same one
+    `run-phase` will give when the launch is actually attempted, rather than a
+    second opinion that can disagree with it. A missing or unreadable state is
+    `unmeasured`, which is not a pass: the plan's degradation policy prunes work
+    that will not fit, and it cannot prune against a window nobody checked.
+    """
+    if hours is None:
+        return _check(CHECK_UNMEASURED,
+                      "the cost of stage C is unknown, so it cannot be fitted "
+                      "into the remaining window", hours_needed=None)
+    state = _read_json_or_none(state_path)
+    if not state or "started_at" not in state:
+        return _check(CHECK_UNMEASURED,
+                      f"no controller state at {state_path}, so the remaining "
+                      "window is unknown", hours_needed=hours)
+    try:
+        started_at = datetime.fromisoformat(
+            str(state["started_at"]).replace("Z", "+00:00"))
+    except ValueError:
+        return _check(CHECK_UNMEASURED,
+                      f"{state_path} carries an unparseable started_at",
+                      hours_needed=hours)
+    deadline = ProgramDeadline(
+        started_at,
+        hard_hours=float(state.get("hard_hours", 144.0)),
+        reserve_hours=float(state.get("reserve_hours", 8.0)))
+    now = now or datetime.now(timezone.utc)
+    available = (deadline.finalizes_at - now).total_seconds() / 3600.0
+    fields = {"hours_needed": hours, "hours_available": available,
+              "finalizes_at": deadline.finalizes_at.isoformat().replace(
+                  "+00:00", "Z"),
+              "stage": deadline.stage(now)}
+    if deadline.can_start(now, hours):
+        return _check(CHECK_PASS,
+                      f"{hours:.1f} hours needed against {available:.1f} before "
+                      f"finalization opens", **fields)
+    return _check(CHECK_FAIL,
+                  f"{hours:.1f} hours needed but only {available:.1f} remain "
+                  f"before finalization opens; the degradation policy stops a "
+                  f"stage that cannot finish rather than starting one that "
+                  f"cannot be evaluated", **fields)
+
+
+def stage_c_finalists(recommendation: dict, rows: Sequence[dict], *,
+                      max_arms: int = STAGE_C_MAX_ARMS) -> dict:
+    """At most `max_arms` arms worth a 1B-token run, and why the rest are not.
+
+    Ordered by the same Pareto rule the rest of the phase uses, so the arms that
+    would run are the cheapest-cache survivors rather than whichever the table
+    happened to list first.
+    """
+    verdicts = {entry["arm"]: entry["verdict"]
+                for entry in recommendation.get("arms") or ()}
+    by_name = {row["arm"]: row for row in rows}
+    unscored = [name for name in verdicts if name not in by_name]
+    blocked = [name for name, verdict in verdicts.items()
+               if verdict == "blocked"]
+    eligible = [row for row in rows
+                if not row["is_control"]
+                and row["arm"] in verdicts
+                and verdicts[row["arm"]] != "blocked"]
+    frontier = pareto_frontier(eligible)
+    selected = frontier[:max_arms]
+    fields = {
+        "eligible": [row["arm"] for row in eligible],
+        "frontier": [row["arm"] for row in frontier],
+        "selected": [row["arm"] for row in selected],
+        "dropped_from_frontier": [row["arm"] for row in frontier[max_arms:]],
+        "blocked": sorted(blocked),
+        "unscored": sorted(unscored),
+        "max_arms": max_arms,
+        "verdicts": verdicts,
+    }
+    if not verdicts:
+        return _check(CHECK_UNMEASURED,
+                      "the recommendation gates no arm, so there is nothing to "
+                      "promote", **fields)
+    if not selected:
+        return _check(CHECK_FAIL,
+                      f"every non-control arm is blocked ({sorted(blocked)}); a "
+                      "measured failure does not reopen at four times the "
+                      "budget", **fields)
+    return _check(CHECK_PASS,
+                  f"{[row['arm'] for row in selected]} carry no measured "
+                  f"failure and lead the frontier"
+                  + (f"; {sorted(blocked)} blocked" if blocked else ""),
+                  **fields)
+
+
+#: Every condition a `go` requires. All of them, for the reason the
+#: recommendation gate requires all five of its columns: a stage that runs on
+#: two conditions out of three is a stage nobody decided to run.
+STAGE_C_CONDITIONS = ("discrimination", "finalists", "deadline")
+
+
+def stage_c_decision(*, tag: str, shape: StageShape,
+                     report_root: str = REPORT_ROOT,
+                     run_root: str = RUN_ROOT,
+                     state_path: str = "runs/vast-program/state.json",
+                     total_tokens: int = STAGE_C_TOTAL_TOKENS,
+                     max_arms: int = STAGE_C_MAX_ARMS,
+                     extra_hours: float = 0.0,
+                     now: Optional[datetime] = None,
+                     arms: Optional[Sequence[ArchArm]] = None) -> dict:
+    """`go` or `no-go` on stage C, with the numbers that decided it."""
+
+    if shape.advances_to:
+        raise SystemExit(
+            f"{shape.name} advances arms to {shape.advances_to!r} by its own "
+            "admission rule, so its handoff is an arm list and not the stage-C "
+            "decision. Point --shape at the stage that advances to nothing.")
+
+    report = _read_committed(report_path(tag, report_root), "report")
+    recommendation = _read_committed(
+        Path(report_root) / f"{tag}-recommendation.json", "recommend")
+    rows = list(report.get("rows") or ())
+    by_name = {arm.name: arm for arm in (arms or arms_for(shape))}
+
+    discrimination = bpb_discrimination(rows)
+    finalists = stage_c_finalists(recommendation, rows, max_arms=max_arms)
+
+    # Costed over the control plus the finalists: every stage runs the control,
+    # for the same reason every column is a delta against it.
+    control = report.get("control")
+    costed = ([control] if control else []) + list(finalists["selected"])
+    cost = stage_c_cost(costed, tag=tag, run_root=run_root,
+                        total_tokens=total_tokens, arms_by_name=by_name) \
+        if costed else _check(CHECK_UNMEASURED, "no run to cost",
+                              total_tokens=total_tokens, runs=[],
+                              training_hours=None)
+    needed = None if cost["training_hours"] is None \
+        else cost["training_hours"] + extra_hours
+    deadline = deadline_room(state_path, needed, now=now)
+
+    conditions = {"discrimination": discrimination, "finalists": finalists,
+                  "deadline": deadline}
+    unmet = [name for name in STAGE_C_CONDITIONS
+             if conditions[name]["status"] != CHECK_PASS]
+    verdict = "no-go" if unmet else "go"
+    decision = {
+        "tag": tag,
+        "created_at": _utcnow(),
+        "shape": {"name": shape.name, "total_tokens": shape.total_tokens},
+        "stage_c": {"total_tokens": total_tokens, "max_arms": max_arms,
+                    "extra_hours": extra_hours,
+                    "training_hours": cost["training_hours"],
+                    "hours_needed": needed},
+        "control": control,
+        "conditions": conditions,
+        "unmet": unmet,
+        "finalists": finalists["selected"],
+        "verdict": verdict,
+        "read": {"report": str(report_path(tag, report_root)),
+                 "recommendation": str(Path(report_root)
+                                       / f"{tag}-recommendation.json"),
+                 "state": str(state_path)},
+        # The counterfactual, so the boundary can be read against the observed
+        # number rather than taken on trust. See this section's header on why a
+        # rule written after its table needs one.
+        "go_would_have_required": {
+            "discrimination": (
+                f"a measured BPB spread wider than "
+                f"{discrimination.get('explained_spread_pct'):.2f} points, "
+                f"against the {discrimination.get('measured_spread_pct'):.2f} "
+                f"observed"
+                if discrimination.get("explained_spread_pct") is not None
+                else "at least two scored arms"),
+            "finalists": (
+                f"at least one non-control arm not blocked, of "
+                f"{len(finalists['verdicts'])} gated"),
+            "deadline": (
+                f"{deadline.get('hours_available'):.1f} hours before "
+                f"finalization to cover {needed:.1f}"
+                if deadline.get("hours_available") is not None
+                and needed is not None
+                else "a readable controller state and a costable run"),
+        },
+    }
+    if verdict == "no-go":
+        decision["note"] = (
+            f"{shape.name} does not hand on a stage C: {unmet} unmet. This is "
+            "a preregistered negative result and not a deferral -- the numbers "
+            "that decided it are in `conditions`, and the shapes stand on the "
+            "evidence already gathered. Re-running the decision at a looser "
+            "condition after seeing this would be threshold-tuning.")
+    else:
+        decision["note"] = (
+            f"stage C runs {finalists['selected']} against the control "
+            f"{control} at {total_tokens:,} tokens each, an estimated "
+            f"{cost['training_hours']:.1f} training hours. The estimate is "
+            "training only: scoring and the evidence chain are additional, and "
+            "the controller's own deadline guard is what enforces the window at "
+            "launch.")
+    return decision
+
+
+def render_stage_c_markdown(decision: dict) -> str:
+    stage_c = decision["stage_c"]
+    lines = [
+        f"# Phase 6 stage-C go/no-go, from {decision['shape']['name']} "
+        f"({decision['tag']})",
+        "",
+        f"Three preregistered conditions, all required: the previous stage "
+        f"separated its arms beyond its own parameter-matching residual, at "
+        f"least one arm carries no measured failure, and "
+        f"{stage_c['total_tokens']:,} tokens for at most "
+        f"{stage_c['max_arms']} finalists plus the control still fit before "
+        f"finalization.",
+        "",
+        "| condition | status | note |",
+        "| --- | :---: | :--- |",
+    ]
+    symbols = {CHECK_PASS: "pass", CHECK_FAIL: "**FAIL**",
+               CHECK_UNMEASURED: "--", CHECK_NO_POWER: "n/p"}
+    for name in STAGE_C_CONDITIONS:
+        check = decision["conditions"][name]
+        lines.append(f"| {name} | {symbols[check['status']]} | "
+                     f"{check['note']} |")
+
+    lines += [
+        "",
+        "## Outcome",
+        "",
+        f"- **verdict: `{decision['verdict']}`**",
+        f"- finalists: {decision['finalists'] or 'none'}",
+        f"- unmet: {decision['unmet'] or 'none'}",
+        f"- estimated training hours: "
+        + (f"{stage_c['training_hours']:.1f}"
+           if stage_c["training_hours"] is not None else "unknown"),
+        "",
+        f"> {decision['note']}",
+        "",
+        "## What a `go` would have required",
+        "",
+    ]
+    for name in STAGE_C_CONDITIONS:
+        lines.append(f"- {name}: {decision['go_would_have_required'][name]}")
+    lines += ["", "## Read from", ""]
+    lines += [f"- {what}: `{path}`"
+              for what, path in sorted(decision["read"].items())]
+    return "\n".join(lines) + "\n"
+
+
 # ====================================================================== cli ====
 
 def main(argv=None) -> int:
@@ -1482,6 +1950,21 @@ def main(argv=None) -> int:
     recommend.add_argument("--decode", default=DECODE_REPORT,
                            help="a single decode_bench.py report; arm and "
                                 "control must appear in the same pass")
+
+    stage_c = sub.add_parser(
+        "stage-c", help="the preregistered go/no-go on stage C, read off this "
+                        "stage's committed report and recommendation")
+    stage_c.add_argument("--state", default="runs/vast-program/state.json",
+                         help="controller state, for the remaining window")
+    stage_c.add_argument("--total-tokens", type=int,
+                         default=STAGE_C_TOTAL_TOKENS,
+                         help="stage-C budget per run; the plan's 1B")
+    stage_c.add_argument("--max-arms", type=int, default=STAGE_C_MAX_ARMS,
+                         help="the plan's at-most-two finalists")
+    stage_c.add_argument("--extra-hours", type=float, default=0.0,
+                         help="a measured allowance for scoring and the "
+                              "evidence chain; the training estimate covers "
+                              "neither, and no allowance is invented here")
 
     args = parser.parse_args(argv)
     shape = SHAPES[args.shape]
@@ -1529,6 +2012,30 @@ def main(argv=None) -> int:
         markdown_path.write_text(render_recommendation_markdown(report))
         print(render_recommendation_markdown(report))
         print(f"wrote {json_path} and {markdown_path}")
+        return 0
+
+    if args.command == "stage-c":
+        decision = stage_c_decision(
+            tag=tag, shape=shape, report_root=args.report_root,
+            run_root=args.run_root, state_path=args.state,
+            total_tokens=args.total_tokens, max_arms=args.max_arms,
+            extra_hours=args.extra_hours)
+        json_path = Path(args.report_root) / f"{tag}-stage-c.json"
+        markdown_path = Path(args.report_root) / f"{tag}-stage-c.md"
+        _write_json(json_path, decision)
+        markdown_path.write_text(render_stage_c_markdown(decision))
+        print(render_stage_c_markdown(decision))
+        print(f"wrote {json_path} and {markdown_path}")
+        # Zero on both verdicts, deliberately. A `no-go` is this command
+        # succeeding at the thing it exists to do, and the controller turns a
+        # non-zero phase into `failed` -- which the progress branch publishes as
+        # an attention banner. Reporting a preregistered negative result as a
+        # broken phase is how the next session tries to "fix" it.
+        #
+        # What must not happen is a launcher walking past the verdict, and that
+        # is guarded where it can actually be guarded: at the reader, the way
+        # `advanced_selection` refuses a report that does not say `advance`. A
+        # stage-C launcher reads `verdict` out of this artifact.
         return 0
 
     raise SystemExit(f"unhandled command {args.command}")
