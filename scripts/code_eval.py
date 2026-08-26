@@ -186,6 +186,17 @@ def _leaves_an_open_block(prompt: str) -> bool:
     return False
 
 
+_DEFINITION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                     ast.Import, ast.ImportFrom)
+
+
+def _node_start(node) -> int:
+    """The first line of a definition, decorators included."""
+
+    return min([node.lineno]
+               + [d.lineno for d in getattr(node, "decorator_list", [])])
+
+
 def _standalone_program(completion: str) -> str:
     """The definitions out of a completion that is a program in its own right.
 
@@ -195,10 +206,39 @@ def _standalone_program(completion: str) -> str:
     the model's own `assert`s, a `print`, a worked example -- are cut, because
     this harness supplies the tests and a candidate's are not evidence.
 
+    Done through the parser when the completion parses, because a line-shaped
+    rule reads indentation and Python does not: a comment sits at whatever
+    column it likes *inside* a function body, and "stop at the first column-zero
+    line" therefore truncated MBPP+'s own reference solution for `Mbpp/64` to a
+    signature with no body. The line rule is kept for the completions that do
+    not parse, which is most of what a base model emits, and it no longer stops
+    at a comment either.
+
     A completion with no definition in it is returned whole, so it fails as
     what it is (a syntax error, or a missing entry point) rather than being
     silently replaced by nothing.
     """
+
+    try:
+        module = ast.parse(completion)
+    except SyntaxError:
+        return _standalone_program_by_lines(completion)
+
+    first = last = None
+    for node in module.body:
+        if isinstance(node, _DEFINITION_NODES):
+            first = node if first is None else first
+            last = node
+        elif first is not None:
+            break
+    if first is None:
+        return completion.rstrip()
+    lines = completion.split("\n")
+    return "\n".join(lines[_node_start(first) - 1:last.end_lineno]).rstrip()
+
+
+def _standalone_program_by_lines(completion: str) -> str:
+    """`_standalone_program` for a completion that does not parse."""
 
     lines = completion.split("\n")
     start = next((index for index, line in enumerate(lines)
@@ -209,7 +249,8 @@ def _standalone_program(completion: str) -> str:
     kept: List[str] = []
     for line in lines[start:]:
         stripped = line.strip()
-        if (stripped and not line[:1].isspace()
+        if (stripped and not stripped.startswith("#")
+                and not line[:1].isspace()
                 and not _STARTS_DEFINITION.match(stripped)
                 and not line.startswith((")", "]", "}"))):
             break
@@ -252,7 +293,12 @@ def extract_code(prompt: str, completion: str) -> str:
     kept: List[str] = []
     for line in completion.split("\n"):
         stripped = line.strip()
-        if stripped and not line[:1].isspace() and not line.startswith(("@", ")")):
+        # A comment is not a new top-level statement, whatever column it is in:
+        # Python ignores its indentation, so one written flush-left inside a
+        # function body used to cut the rest of that body away.
+        if (stripped and not stripped.startswith("#")
+                and not line[:1].isspace()
+                and not line.startswith(("@", ")"))):
             break                      # a new top-level statement: stop here
         kept.append(line)
     body = "\n".join(kept).rstrip()
@@ -466,12 +512,36 @@ def _equivalent(left, right, atol):
     if isinstance(left, dict) and isinstance(right, dict):
         return (set(left) == set(right)
                 and all(_equivalent(left[k], right[k], atol) for k in left))
-    return type(left) is type(right) and left == right
+    if type(left) is not type(right):
+        return False
+    try:
+        if left == right:
+            return True
+    except Exception:
+        pass
+    # An object whose `==` is identity is never equal to an equivalent one --
+    # `re.Match` is the common case, and three MBPP+ reference solutions failed
+    # against *themselves* on it. Their repr carries what distinguishes them
+    # (the span and the matched text), so it is the equivalence available.
+    return repr(left) == repr(right)
 
 
 def _run_plus_suite():
     for _arguments in {inputs}:
-        _expected = _reference(*_copy.deepcopy(_arguments))
+        try:
+            _expected = _reference(*_copy.deepcopy(_arguments))
+        except Exception as _error:
+            # The reference rejects this input, so it fixes no expected value --
+            # only that the input is rejected. Requiring the candidate to reject
+            # it too keeps the comparison differential; skipping the input would
+            # let a candidate return anything at all for it.
+            try:
+                _unexpected = {entry_point}(*_copy.deepcopy(_arguments))
+            except Exception:
+                continue
+            raise AssertionError(
+                "input {{!r}}: reference raises {{}}, candidate returned "
+                "{{!r}}".format(_arguments, type(_error).__name__, _unexpected))
         _actual = {entry_point}(*_copy.deepcopy(_arguments))
         assert _equivalent(_actual, _expected, {atol}), (
             "plus input {{!r}} gave {{!r}}, reference gives {{!r}}".format(

@@ -119,6 +119,47 @@ def test_extract_code_keeps_a_completion_with_no_definition_in_it():
     assert "the answer is 3" in solution
 
 
+def test_extract_code_keeps_a_body_interrupted_by_a_flush_left_comment():
+    """Python ignores a comment's indentation; a line-shaped rule does not.
+
+    MBPP+'s own reference solution for `Mbpp/64` writes a comment at column
+    zero *inside* the function body. Cutting there left a signature with no
+    body, and the reference scored a syntax error against its own suite.
+    """
+    from scripts.code_eval import extract_code
+
+    solution = extract_code(
+        MBPP_PROMPT,
+        "def subject_marks(marks):\n#marks = [('English', 88)]\n"
+        " marks.sort(key=lambda x: x[1])\n return marks\n")
+
+    assert "return marks" in solution
+    assert "sort" in solution
+
+
+def test_extract_code_keeps_a_flush_left_comment_inside_a_continued_body():
+    """The same hazard in the HumanEval-shaped path, where the prompt has
+    already opened the function."""
+    from scripts.code_eval import extract_code
+
+    solution = extract_code(
+        "def add(a, b):\n",
+        "    total = a + b\n# a comment the model wrote flush left\n    return total\n")
+
+    assert "return total" in solution
+
+
+def test_extract_code_keeps_a_decorated_definition_whole():
+    from scripts.code_eval import extract_code
+
+    solution = extract_code(
+        MBPP_PROMPT,
+        "import functools\n\n@functools.cache\ndef fib(n):\n"
+        "    return n if n < 2 else fib(n - 1) + fib(n - 2)\n")
+
+    assert "@functools.cache" in solution and "def fib(n):" in solution
+
+
 # ------------------------------------------------------------------ syntax ---
 
 def test_check_syntax_accepts_valid_code():
@@ -615,6 +656,67 @@ def test_summarize_code_counts_the_items_with_no_extended_inputs():
 
     assert metrics["plus_inputs_absent"] == 1.0
     assert metrics["pass@1_plus"] == 1.0
+
+
+@pytest.mark.slow
+def test_a_returned_object_is_compared_by_value_not_by_identity():
+    """Three MBPP+ reference solutions failed against *themselves*: they
+    return `re.Match`, whose `==` is identity, so an identical result was never
+    equal to itself across two calls."""
+    from scripts.code_eval import evaluate_problems
+
+    solution = "import re\ndef starts_vowel(s):\n    return re.search('^[aeiou]', s)\n"
+    problems = {
+        "Mbpp/737": {
+            "task_id": "Mbpp/737",
+            "prompt": '"""\nWhether the string starts with a vowel.\n"""\n',
+            "entry_point": "starts_vowel",
+            "canonical_solution": solution,
+            "base_input": [["annie"]],
+            "plus_input": [["orange"], ["banana"]],
+            "atol": 0,
+        },
+    }
+
+    records = evaluate_problems(problems, ScriptedBackend({"Mbpp/737": solution}),
+                                timeout_s=10.0)
+
+    assert records[0]["base_passed"] == 1
+    assert records[0]["plus_passed"] == 1, records[0]["detail"]
+
+
+def _rejecting_problem(candidate: str) -> dict:
+    """A problem whose reference raises on one of its extended inputs."""
+    return {
+        "Mbpp/404": {
+            "task_id": "Mbpp/404",
+            "prompt": '"""\nThe smaller of two numbers.\n"""\n',
+            "entry_point": "minimum",
+            "canonical_solution": "def minimum(a, b):\n    return min(a, b)\n",
+            "base_input": [[1, 2]],
+            "plus_input": [[1, 2], [None, 3]],
+            "atol": 0,
+        },
+    }, ScriptedBackend({"Mbpp/404": candidate})
+
+
+@pytest.mark.slow
+def test_an_input_the_reference_rejects_must_be_rejected_by_the_candidate():
+    """The reference fixes no expected value there, only that the input is
+    refused -- so the candidate has to refuse it too. Skipping the input
+    instead would let a candidate return anything at all for it."""
+    from scripts.code_eval import evaluate_problems
+
+    problems, backend = _rejecting_problem(
+        "def minimum(a, b):\n    return min(a, b)\n")
+    records = evaluate_problems(problems, backend, timeout_s=10.0)
+    assert records[0]["plus_passed"] == 1, records[0]["detail"]
+
+    problems, backend = _rejecting_problem(
+        "def minimum(a, b):\n"
+        "    try:\n        return min(a, b)\n    except TypeError:\n        return 0\n")
+    records = evaluate_problems(problems, backend, timeout_s=10.0)
+    assert records[0]["plus_passed"] == 0
 
 
 @pytest.mark.slow
