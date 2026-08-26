@@ -44,7 +44,21 @@
   "gates": {
     "probes_250m": {"arms": ["muon_lr=5e-4", "muon_lr=1e-3", "muon_lr=2e-3"],
                     "select_on": "code BPB and execution pass@1, subject to general retention",
-                    "stop_if": "no arm improves code BPB by >=2% or moves execution/syntax signal"},
+                    "stop_if_preregistered_wording": "no arm improves code BPB by >=2% or moves execution/syntax signal",
+                    "stop_if": "stop only if NO arm clears EITHER criterion; continue if ANY arm clears EITHER",
+                    "criterion_a_code_bpb": "held-out code BPB improves >=2.0% relative to the untouched base",
+                    "criterion_b_execution": "HumanEval+ or MBPP+ syntax validity improves by >=2.0 points absolute, or either benchmark's pass@1 / pass@1_plus improves by >=1.0 point absolute",
+                    "implemented_by": "daedalus/code_gates.py::probes_250m_verdict, tests/test_code_gates.py",
+                    "disambiguated_when": "before any 250M arm had produced a number, and before the code corpus finished building; the timestamp is the `at` field of the phase8-gate-wording decision event in runs/vast-program/events.jsonl, not a clock reading composed here",
+                    "disambiguation": {
+                      "authority": "engineering session, under the plan's rule that a session fixes or justifies an ambiguous gate wording; raised as the phase8-gate-wording gate_ambiguity note in runs/vast-program/events.jsonl",
+                      "the_ambiguity": "'no arm improves X or moves Y' reads either as stop-if-every-arm-fails-both (loose) or stop-if-no-arm-clears-X-OR-no-arm-moves-Y (strict). The difference is a 1B-token run.",
+                      "reading_chosen": "loose",
+                      "why": "the execution/syntax signal was added to this gate as the MORE SENSITIVE alternative to a BPB bar a 250M-token probe may not clear -- see baselines_before_adaptation.reading, which records that a probe gated on pass@1 alone would read every arm as identical zero. Under the strict reading, adding a more sensitive signal makes the gate harder, and would stop a run whose code BPB improved 5% without moving Python syntax validity. That inverts the purpose of the addition.",
+                      "the_cost_recorded": "the loose reading is easier to pass than a BPB-only gate would have been. The criterion B thresholds are what keep it from being passed by noise: an unbounded 'moves' is satisfied by 1 item of 378 (0.26 points), and a gate that cannot return no is not a gate -- the defect the DPO preference gate was repaired for.",
+                      "why_these_thresholds": "2.0 points of MBPP+ syntax validity is ~8 of 378 items against a 0.238 base, which has the headroom this manifest already names; HumanEval+ syntax validity is 1.000 at base and can only fall, so that half is MBPP+'s in practice. 1.0 point of pass@1 is ~2 of HumanEval+'s 164 and ~4 of MBPP+'s 378, set above one item so a single lucky solve cannot authorise a 1B-token run.",
+                      "not_decided_here": "the winner. select_on says 'subject to general retention' and no retention bound is preregistered for the PROBE stage (only for branch_1b), so probes_250m_verdict ranks the qualifying arms and names best_before_retention; the caller holding the general-side scorecards applies retention and chooses."
+                    }},
     "branch_1b": {"continue_if": "general BPB regression <=1.5%, five-task mean drop <=1 point, retrieval drop <=2 points at every depth, code metrics improve"},
     "extension_2b": {"only_if": "the 1B gate passes and completion is projected before T+136h",
                      "how": "--init-from the 1B weights, lower LR, fresh WSD, same replay floor",
