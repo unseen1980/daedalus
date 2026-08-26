@@ -1,13 +1,13 @@
 {
   "attention": {
-    "blocker": "lane inspect: phase8-codeprep-source-probe failed",
+    "blocker": "lane inspect: phase8-codeprep-allall-coverage failed",
     "user_action_required": true
   },
   "deadline": {
-    "elapsed_hours": 54.61,
-    "finalization_in_hours": 81.39,
+    "elapsed_hours": 54.7,
+    "finalization_in_hours": 81.3,
     "hard_hours": 144.0,
-    "remaining_hours": 89.39,
+    "remaining_hours": 89.3,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T17:21:23.434060Z",
+  "heartbeat_at": "2026-08-26T17:26:26.594253Z",
   "lanes": {
     "evidence": {
       "details": {
@@ -50,18 +50,20 @@
           "scripts/codeprep.py",
           "corpus",
           "probe",
+          "--config",
+          "all-all",
           "--rows",
-          "2000",
+          "20000",
           "--json-out",
-          "runs/codeprep/source-probe.json"
+          "runs/codeprep/all-all-probe.json"
         ],
         "returncodes": [
           -6
         ]
       },
-      "phase": "phase8-codeprep-source-probe",
+      "phase": "phase8-codeprep-allall-coverage",
       "status": "failed",
-      "updated_at": "2026-08-26T17:21:20.349662Z"
+      "updated_at": "2026-08-26T17:25:42.683785Z"
     },
     "operator": {
       "details": {
@@ -120,9 +122,9 @@
   "phase": "phase8-code-decontam-index",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "3ead5562702a",
+  "source_sha": "c769a177b859",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "passed",
-  "updated_at": "2026-08-26T17:21:20.349662Z"
+  "updated_at": "2026-08-26T17:25:42.683785Z"
 }
