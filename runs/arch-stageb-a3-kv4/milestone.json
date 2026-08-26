@@ -1,0 +1,14 @@
+{
+  "revision": "arch-stageb-a3-kv4-stable-end-step767",
+  "step": 767,
+  "tokens_seen": 50266112,
+  "total_steps": 3840,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.02,
+  "adam_lr": 0.0003,
+  "config": "arch-b-a3-kv4",
+  "repo": null,
+  "path_in_repo": "milestone/arch-stageb-a3-kv4/checkpoint.pt",
+  "created_at": 1787704921.2567046
+}
