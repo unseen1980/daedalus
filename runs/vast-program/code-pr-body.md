@@ -163,12 +163,30 @@ An earlier launch of this build was stopped by the operator two minutes in, and 
 
 Set before any arm runs, and not adjusted after seeing a number.
 
-1. Three fully decayed **250M-token** probes from the same base checkpoint at Muon LR `5e-4`, `1e-3`, `2e-3`, proportionally matched Adam rates, identical data order and seed. Selected on code BPB and execution pass@1 subject to general retention. **Stop** if no arm improves code BPB by ≥2% or moves execution/syntax signal.
+1. Three fully decayed **250M-token** probes from the same base checkpoint at Muon LR `5e-4`, `1e-3`, `2e-3`, proportionally matched Adam rates, identical data order and seed. Selected on code BPB and execution pass@1 subject to general retention. **Stop** if no arm improves code BPB by ≥2% or moves execution/syntax signal — read as set out below.
 2. A fresh **1B-token** branch with the selected settings. Continue only if general BPB regression ≤1.5%, five-task mean drop ≤1 point, retrieval drop ≤2 points at every depth, and code metrics improve.
 3. A staged **+2B** continuation from the 1B weights via `--init-from`, a lower LR and a fresh WSD schedule, only if the 1B gate passes and the controller projects completion before T+136h. Staged adaptation, reported as such — not one uninterrupted 3B schedule.
 4. Code and general **SFT** on syntax-checked and execution-tested conversations.
 5. **DPO** only if held-out preference accuracy *and* execution pass@1 improve; otherwise the SFT model is the instruct winner and DPO is recorded as rejected.
 6. The winning **QAT** recipe applied to the final checkpoint, FP16 and Q4_0 exported, and every code/general/retrieval evaluation re-run from the immutable artifacts.
+
+### What gate 1 actually says
+
+"No arm improves code BPB by ≥2% **or** moves execution/syntax signal" has two readings, and they spend a 1B-token budget differently. **Loose:** stop only when every arm fails both criteria, so one arm moving the execution signal alone continues the run. **Strict:** stop when no arm clears the BPB bar *or* when no arm moves the execution signal, so continuing needs both. The wording is settled now, before any arm has produced a number, which is the only time it can be settled without being an adjustment to a result.
+
+**The reading is loose**, for the reason the execution signal is in the gate at all. This model's base scores 0.000 pass@1 on HumanEval+ and 0.008 on MBPP+, so a probe gated on pass@1 alone reads every arm as identical zero, and MBPP+ syntax validity at 0.238 is the headroom that moves first. The signal was added as the *more sensitive alternative* to a BPB bar a 250M-token probe may not clear. Under the strict reading, adding a more sensitive signal makes the gate harder — and would stop a run whose code BPB improved 5% without moving Python syntax validity. That inverts the purpose of the addition.
+
+The cost is stated rather than left implicit: the loose reading is easier to pass than a BPB-only gate would have been. What keeps it from being passed by noise is the second half, which the wording never had — **"moves" had no bar**, and an unbounded "moves" is satisfied by one item of 378, or 0.26 points. A gate that cannot return no is not a gate; this is the defect the DPO preference gate was repaired for two days earlier in the same phase.
+
+| criterion | bar | what it is in items |
+| --- | --- | --- |
+| A — code BPB | ≥2.0% relative improvement on the held-out code split | — |
+| B — syntax validity | ≥2.0 points absolute | ~8 of MBPP+'s 378; HumanEval+ is 1.000 at base and can only fall, so this half is MBPP+'s in practice |
+| B — pass@1 or pass@1 (extended) | ≥1.0 point absolute | ~2 of HumanEval+'s 164, ~4 of MBPP+'s 378 — above one item, so a single lucky solve cannot authorise a 1B-token run |
+
+`daedalus/code_gates.py::probes_250m_verdict` is the rule, and it refuses rather than scores where a comparison would not be evidence: a non-finite BPB, a zero base BPB, an arm scored on different benchmarks than the base, a differing item count (the `--task-limit` failure `scorecard.paired_outcomes` already refuses), no arms, and two arms under one name. Regressions are recorded with their size and never count as movement — a falling syntax validity is how an arm unlearning Python announces itself, but it is not evidence for spending 1B tokens.
+
+It does **not** pick the winner. `select_on` reads "subject to general retention" and no retention bound is preregistered for the *probe* stage — only for the 1B branch — so the verdict ranks the qualifying arms by code BPB, breaks ties on pass@1 movement, and names `best_before_retention`. Applying retention stays with the caller holding the general-side scorecards. Inventing a probe-stage retention bound would have been a second preregistration decision nobody asked for.
 
 Final acceptance: code BPB improves ≥5%, HumanEval+/MBPP+ pass@1 and syntax validity improve over the untouched base, general full-pass BPB regression ≤1.5%, five-task mean drop ≤1 point with no single task dropping >2 points unreviewed, retrieval drop ≤2 points at every depth, and the Q4 penalty either meets the selected V1 QAT target or is reported transparently.
 
@@ -178,4 +196,6 @@ Branch created from #14's tested SHA; parent recorded in `runs/vast-program/code
 
 The mixture decision is closed twice over: the plan is measured and Rust is dropped by name for what the revision could serve, and the code portion is then retargeted by the user to Python and JavaScript/TypeScript, with the two kinds of drop recorded apart. Both remaining buckets are verified SUPPORTED at all three gates — 1.2 and 0.3 epochs at 3B against a cap of 4.
 
-The build is written, smoked against the real sources, and **running** for the 250M and 1B gates — 650M code tokens across six sources, detached under the controller so it outlives the session that started it. No training has started. The next slice is the three 250M probes, which will have a corpus to read.
+The build is written, smoked against the real sources, and **running** for the 250M and 1B gates — 650M code tokens across six sources, detached under the controller so it outlives the session that started it. No training has started.
+
+Gate 1's wording is now unambiguous and executable, settled while the corpus was still streaming and no arm existed to settle it in favour of. The next slice is the three 250M probes, which will have a corpus to read and a gate that can return no.
