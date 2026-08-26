@@ -979,3 +979,40 @@ def test_the_cli_writes_the_probe_and_fails_on_what_it_found(
     assert any("wtfpl" in p for p in written["problems"])
     assert written["languages"]["python"]["configs"][0]["licenses"]["wtfpl"] == 10
     assert "does not classify" in capsys.readouterr().err
+
+
+class _Recorder:
+    """A stream that records being flushed, so the order can be asserted."""
+
+    def __init__(self, events, name):
+        self._events, self._name = events, name
+
+    def flush(self):
+        self._events.append(("flush", self._name))
+
+    def write(self, text):        # pragma: no cover - not what is asserted
+        return len(text)
+
+
+def test_the_probe_leaves_with_its_verdict_instead_of_dying_in_teardown(
+        monkeypatch):
+    """Both live probes exited -6, after printing the report and writing the
+    JSON, from a `PyGILState_Release` abort while the interpreter finalized
+    underneath a `datasets` streaming thread.
+
+    That is not a lost crash, it is a lost *verdict*: the exit code is what the
+    controller ledger records, so "four of ten directories did not resolve" (3)
+    and "nothing wrong with these rows" (0) were filed identically, and phase
+    8's coverage measurement is recorded in `state.json` as a failure it never
+    was. Flush, then leave -- `os._exit` does not flush, and the report is the
+    output."""
+    import scripts.codeprep as CLI
+
+    events = []
+    monkeypatch.setattr(CLI.sys, "stdout", _Recorder(events, "stdout"))
+    monkeypatch.setattr(CLI.sys, "stderr", _Recorder(events, "stderr"))
+    monkeypatch.setattr(CLI.os, "_exit", lambda code: events.append(("exit", code)))
+
+    CLI._exit(3)
+
+    assert events == [("flush", "stdout"), ("flush", "stderr"), ("exit", 3)]

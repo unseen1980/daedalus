@@ -297,5 +297,37 @@ def _cli(argv=None) -> int:
     return a.fn(a)
 
 
+def _exit(code: int):
+    """Leave with `code` as the verdict, without running interpreter teardown.
+
+    Neither live probe so far exited with the verdict it had computed. Both
+    printed their report, wrote their JSON, and then:
+
+        Fatal Python error: PyGILState_Release: thread state ... must be
+        current when releasing
+        Python runtime state: finalizing
+
+    -- an abort, exit -6. A `datasets` streaming iterator leaves a background
+    thread behind and `probe_source` breaks out of the loop rather than
+    exhausting it, so the interpreter finalizes underneath a thread that is
+    still holding GIL state. The measurement is complete before any of that
+    happens; the only thing lost is the exit code.
+
+    The exit code is not a detail here -- it is what the controller ledger
+    records. The source probe's "four of ten directories did not resolve" (3)
+    and the all-all coverage probe's "nothing wrong with these rows" (0) were
+    both filed as the same -6, so `state.json` says a measurement that found no
+    problem failed, and says nothing about the one that found four.
+
+    Flush first, because `os._exit` does not: the report on stdout and the
+    refusal on stderr *are* the output. Everything written to disk is closed by
+    its own `with` block well before this, so skipping `atexit` costs a
+    `datasets` cache cleanup -- a temp file under `HF_HOME` -- and no result.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 if __name__ == "__main__":
-    sys.exit(_cli())
+    _exit(_cli())
