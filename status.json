@@ -4,19 +4,19 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 43.82,
-    "finalization_in_hours": 92.18,
+    "elapsed_hours": 43.91,
+    "finalization_in_hours": 92.09,
     "hard_hours": 144.0,
-    "remaining_hours": 100.18,
+    "remaining_hours": 100.09,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
-    "memory_used_mb": 12,
+    "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T06:34:04.309048Z",
+  "heartbeat_at": "2026-08-26T06:39:05.794454Z",
   "metrics": {},
   "phase": "phase6-stageb-report-rewrite",
   "schema": 1,
@@ -24,5 +24,5 @@
   "source_sha": "1a87e9ff1e19",
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "passed",
-  "updated_at": "2026-08-26T06:16:58.082403Z"
+  "updated_at": "2026-08-26T06:34:32.522779Z"
 }
