@@ -1,0 +1,35 @@
+{
+  "state_at_note": "NO LANE RUNNING. Every lease is free, the GPU is idle and nothing is training. Last work: inspect lane, phase7-headroom-hub-limits, passed 2026-08-26T07:07:56Z. Phase 7 has started and its headline deliverable -- the unique-token headroom curve -- is measured, committed and written up. The remaining phase-7 work is the corpus rebuild itself, none of which has begun.",
+
+  "shipped_this_turn": "68c1749 -- `source_headroom.py epochs`, the per-source epoch and four-epoch-shortfall curve across 30B/60B/100B/200B/500B/1T. 732e7f7 -- the inverse, `4 x unique / share`, the largest total budget each source feeds at the cap. 65aca10 -- the measured artifacts: runs/corpus/headroom-curve.json (Hub-enriched), headroom-curve-realized.json (the floor that credits only realized tokens) and headroom-curve.md (the write-up). 46 focused tests pass, plus 169 neighbouring (dataprep, dataprep_budget_topup, contam_scan).",
+
+  "the_answer": "The mixture supports ~53.8B total tokens at four epochs, and the ceiling is ONE source: stack-edu-python, 1.211B unique and out of documents. Corpus as built = 17.15B unique (which is exactly where the released 59.9B run's ~3.5 epochs came from); reachable across untouched files = 6,582B. Only three sources ever bind: everyday-conversations at 0.08B (remove it, as the plan already directs), stack-edu-python at 53.8B, finewiki-en at 902B. Everything else has slack past 1T. At 1T the shortfall is 27.03B unique, of which 21.29B is code, 5.00B is dialogue and 0.74B is wiki.",
+
+  "why_the_aggregate_lies": "At 1T the corpus-level ratio is 0.2 epochs while three sources are over the cap. A mixture cannot spend dclm-baseline's 3,746B of headroom on stack-edu-python's shortfall, so `corpus_epochs` is reported only beside `binding_source`. Anyone quoting the aggregate alone will conclude the corpus is fine when it is not.",
+
+  "supply_traps_now_pinned_by_tests": "Two, both silent, both pointing the wrong way. (1) A shard manifest's `total_tokens` describes the FETCHED SUBSET while `subset_of.total_tokens` describes the whole released build -- 479M against 5.19B for fineweb-edu, a 10.8x understatement that invents a shortfall. (2) A manifest with no stream position must never reach the density arithmetic: `assess` places an unknown position at file 0 and divides the whole build's tokens by that one file's bytes, reading stack-edu-python's 1.2B as ~13B. Both have regression tests with the real numbers.",
+
+  "the_conservatism_happened_to_be_exact": "stack-edu-python and everyday-conversations record no stream position, so they are credited with what they produced and nothing more. For stack-edu-python that is not merely safe, it is right: the Hub resolves its config to 10 files and the original build's recorded position was file 10. Its 2026-08-10 shortfall of 139M is permanent.",
+
+  "cross_checks_on_the_extrapolation": "fineweb-edu measures 1,424B reachable against a published ~1.3T for that dataset; dclm-baseline 3,746B against a published multi-trillion corpus. The density extrapolation lands in the right place at both ends, which is worth knowing before anyone plans a successor on these numbers.",
+
+  "this_number_will_go_DOWN": "Supply is counted after the released build's dedup and decontamination, which were memory-bounded and reset every 2M kept docs -- exact duplicates outside a reset window survived. Phase 7's own mandate is persistent exact hashes and shared near-duplicate groups across overlapping web sources, which by construction keeps FEWER tokens. Re-measure after the rebuild; do not carry these forward as if the rebuild were free.",
+
+  "next_1": "The rest of phase 7's measurement pass, which the phase-6 handoff called the honest first slice and which is still mostly undone: contamination coverage (scripts/contam_scan.py exists; the 2,000-item HellaSwag limit and the split-coverage gap are the named holes), split integrity (scripts/validate_split.py exists), and the manifest provenance fields. Mixture optimisation has nothing yet -- no daedalus/mixture_opt.py, no scripts/mixture_opt.py.",
+
+  "next_2": "The curve makes one phase-8 decision for free: a 9% code share needs 4.5B unique code tokens at 200B and 22.5B at 1T against 1.21B today, so phase 8's code corpus is the growth path for a general successor and not only for Daedalus-Code. Worth stating in the phase-9 V2 recommendation.",
+
+  "long_runs_outlive_the_turn": "STILL CONFIRMED WIRED, and exercised twice this turn. Both Hub sweeps were launched with --detach and ran in their own session under the inspect lane (07:02:21-07:04:09 and 07:06:16-07:07:56, ~108s each). `scripts/vast_program.py detach_phase` spawns the phase controller with start_new_session=True; `run_with_resume` defaults resume_interrupted=True and decides from `interrupted_marker`, so a relaunch beside an open marker and an existing checkpoint carries --resume on attempt 1. No launcher change was needed this turn and none was made.",
+
+  "trap_1": "THE APPROVED WRAPPER MUST BE CALLED BY ABSOLUTE PATH: `/usr/local/bin/daedalus-approved ...`. A bare `daedalus-approved` is denied with a message that reads like the command is forbidden rather than the path.",
+
+  "trap_2": "This session's Bash allowlist is narrow. Denied this turn: `python -c`, `find`, heredocs. Allowed: `ls`, `head`, `wc`, `grep` (including -A/-c and pipes), `git log`, `git ls-files`, `df`, `Read`, and the approved wrapper. Read files with the Read tool and logs with `daedalus-approved safe-log`. There is no way to sleep-poll, so a detached phase is checked by re-running `ls -l runs/vast-program/*.lock` between other work.",
+
+  "trap_3": "The phase log is opened in append mode, so a re-run's output lands BELOW the previous run's and `safe-log <path> 14` shows the tail of the OLD run until the new one finishes. Confirm completion from `runs/vast-program/events.jsonl` or the lock file, not from the log tail.",
+
+  "trap_4": "`epochs --hub` runs unauthenticated -- the HF token in runtime.env is not under a name huggingface_hub picks up. It cost nothing here (all ten sources are public and it took 108s) but a rate limit would surface as a per-source 'could not resolve files' line on stderr and a silently realized-only supply for that source. Check the `basis` field in the report before trusting a number.",
+
+  "trap_5": "STILL OUTSTANDING from the phase-6 handoff. `reload-service` is in ops/vast/run-approved but the INSTALLED wrapper's invocation is denied outright, so the progress publisher cannot be reloaded from a session and STATUS.md keeps omitting the lanes field. Operator step: `bash ops/vast/install_supervisor.sh` then a reload.",
+
+  "deadline": "Program started 2026-08-24T10:44:35Z. At this note T+44.4h of 144h; finalization opens at T+136h = 2026-08-30T02:44Z, leaving ~91.6h. The plan puts hours 72-104 on architecture and mixture proxies; phase 6 finished at T+44 and phase 7's headline deliverable at T+44.4, so phase 7 continues with slack rather than against the clock."
+}
