@@ -122,6 +122,14 @@ class StageShape:
     #: a 159M arm on top of a finished 105M one.
     tag: str
     note: str = ""
+    #: The stage this one's report admits arms to, or None when it admits arms
+    #: to nothing this module schedules. `select_stage_b` is an *admission*
+    #: rule, so it only means something applied to the results of the stage
+    #: before its target; run over a stage's own rows it answers "which of these
+    #: advances to the stage they are already in", which is not a question.
+    #: Recorded on the shape rather than inferred in the reporter so that adding
+    #: a stage cannot leave the reporter believing the old one is still last.
+    advances_to: Optional[str] = None
 
     @property
     def steps(self) -> int:
@@ -158,6 +166,7 @@ STAGE_A = StageShape(
     preset_family="stage-a",
     tag="stagea",
     note="the fifteen-point attention x KV-head screen at ~105M parameters",
+    advances_to="stage-b",
 )
 
 #: Stage B, preregistered: the survivors re-run at the scale the plan allows a
@@ -197,6 +206,13 @@ STAGE_B = StageShape(
     preset_family="stage-b",
     tag="stageb",
     note="the stage-A survivors re-run at ~159M parameters over 250M tokens",
+    #: Deliberately nothing. The plan's stage C takes at most *two* finalists
+    #: and is gated on deadline reserve and on whether stage B separated the
+    #: arms at all -- a controller decision and a judgement about discrimination,
+    #: neither of which a BPB table makes. So stage B hands on a recommendation
+    #: gate, not an arm list, and `select_stage_b`'s cap-3 rule is not the rule
+    #: that would choose stage C's arms even if it were run here.
+    advances_to=None,
 )
 
 SHAPES = {shape.name: shape for shape in (STAGE_A, STAGE_B)}

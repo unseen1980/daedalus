@@ -499,6 +499,89 @@ def test_the_markdown_table_shows_the_credited_column_beside_the_raw_one():
     assert "Stage B selection" in markdown
 
 
+# ------------------------------------------- a report describes its own stage --
+
+def _terminal_rows():
+    """A control and one arm at stage B's scale, both inside the floor."""
+    return _with_deltas([_row("a8-kv4", bpb=1.0939, kv=8192,
+                              parameters=158_934_784, is_control=True),
+                         _row("a6-kv4", bpb=1.0946, kv=6144,
+                              parameters=160_512_000)])
+
+
+def test_a_stage_that_advances_to_nothing_selects_nobody():
+    """`select_stage_b` is stage B's *admission* rule, so running it over stage
+    B's own rows answers "which of these arms advances to the stage they are
+    already in". `advanced_selection` refuses to act on that, but a report is
+    also read by people, and `selected: [...]` under a heading naming the
+    reader's own stage is a conclusion nobody drew."""
+    decision = build_report(_terminal_rows(), tag=STAGE_B.tag,
+                            shape=STAGE_B)["stage_b"]
+
+    assert decision["verdict"] == "not-applicable"
+    assert decision["selected"] == []
+    assert decision["frontier"] == []
+    assert STAGE_B.name in decision["note"]
+
+
+def test_the_screen_still_advances_its_survivors():
+    """The guard above must not cost stage A the decision stage B reads out of
+    it -- that handoff is the reason the field exists."""
+    decision = build_report(_with_deltas(_advancing_rows()), tag=STAGE_A.tag,
+                            shape=STAGE_A)["stage_b"]
+
+    assert decision["verdict"] == "advance"
+    assert decision["selected"] == ["a4-kv2"]
+
+
+def test_a_terminal_stages_markdown_states_no_selection():
+    """The bolded `selected` line is what a reader's eye lands on, so a stage
+    that advances nobody must not print one at all."""
+    markdown = render_markdown(build_report(_terminal_rows(), tag=STAGE_B.tag,
+                                            shape=STAGE_B))
+
+    assert "**selected:" not in markdown
+    assert "not-applicable" in markdown
+
+
+def test_pointing_a_later_stage_at_a_terminal_report_says_why(tmp_path):
+    """The refusal has to name the reason. Dropping the field instead would
+    read as "not written by this module", which sends the reader off to
+    regenerate a report that is already correct."""
+    _commit_report(tmp_path, _terminal_rows(), tag=STAGE_B.tag, shape=STAGE_B)
+
+    with pytest.raises(SystemExit) as excinfo:
+        advanced_selection(from_tag=STAGE_B.tag, report_root=str(tmp_path),
+                           for_shape="stage-c")
+
+    assert "not-applicable" in str(excinfo.value)
+    assert STAGE_B.name in str(excinfo.value)
+
+
+def test_the_parameter_caveat_quotes_the_spread_of_the_grid_it_describes():
+    """Stage B's grid spreads +/-2.2% about its midpoint where stage A's spreads
+    +/-1.5%. `parameter_spread` is already computed per shape for exactly this
+    reason; quoting stage A's number in a stage-B caveat understates the
+    discount the table beside it applies, by a third."""
+    report = build_report(_terminal_rows(), tag=STAGE_B.tag, shape=STAGE_B)
+    caveats = " ".join(report["caveats"])
+    drift = 100.0 * report["parameter_spread"]["max_drift_from_midpoint"]
+
+    assert drift > 2.0, "stage B's own spread, not a literal copied from here"
+    assert f"+/-{drift:.1f}%" in caveats
+    assert "+/-1.5%" not in caveats
+
+
+def test_the_holdout_caveat_names_the_stage_it_was_measured_at():
+    """"unmeasured at stage A" on a stage-B table tells the reader transfer was
+    left unmeasured by some *other* pass."""
+    report = build_report(_terminal_rows(), tag=STAGE_B.tag, shape=STAGE_B)
+
+    assert f"unmeasured at {STAGE_B.name}" in " ".join(report["caveats"])
+    assert f"unmeasured at {STAGE_A.name}" in " ".join(
+        build_report(_with_deltas(_advancing_rows()))["caveats"])
+
+
 # ---------------------------------------------------------------- scoring ----
 
 def test_scoring_is_skipped_only_when_the_same_bytes_were_scored(tmp_path):

@@ -546,6 +546,40 @@ def select_stage_b(rows: Sequence[dict], *, floor_pct: float = STAGE_B_FLOOR_PCT
     return decision
 
 
+def no_advancement(shape: StageShape) -> dict:
+    """The advancement record of a stage that advances arms to nothing.
+
+    A record rather than a missing field, and the difference is load-bearing in
+    two places. `advanced_selection` reads `stage_b` and treats an absent one as
+    "this file was not written by this module" -- an accurate message about a
+    corrupt report and a badly misleading one about a correct report of a
+    terminal stage, because it sends the reader off to regenerate a file that is
+    already right. And `render_markdown` prints a bolded `selected:` line, which
+    is where a reader's eye lands; on a stage-B table that line said stage B
+    advances a3-kv4 and a6-kv4 *to stage B*, which is circular and was never
+    anybody's conclusion.
+
+    So the section stays, and says what is actually true: this stage selects no
+    arms, and here is why not.
+    """
+    return {
+        "rule": {"floor_pct": STAGE_B_FLOOR_PCT, "max_arms": STAGE_B_MAX_ARMS,
+                 "param_scaling_exponent": PARAM_SCALING_EXPONENT,
+                 "floor": "not applied: this stage admits arms to no later one",
+                 "order": "not applied"},
+        "eligible": [], "frontier": [], "selected": [],
+        "dropped_from_frontier": [],
+        "verdict": "not-applicable",
+        "note": (
+            f"{shape.name} advances arms to no stage this module schedules, so "
+            f"it selects none. The admission rule here is the *next* stage's, "
+            f"and run over {shape.name}'s own rows it would answer which of "
+            f"these arms advances to the stage they are already in. What "
+            f"{shape.name} hands on is the recommendation gate over all five "
+            f"preregistered columns, not an arm list."),
+    }
+
+
 def report_path(tag: str = "stagea", root: str = REPORT_ROOT) -> Path:
     """Where `report` writes its machine-readable half, and where the next stage
     reads its arm list from. One function so the writer and the reader cannot
@@ -668,6 +702,7 @@ def build_report(rows: Sequence[dict], *, tag: str = "stagea",
     control = next(row for row in rows if row["is_control"])
     ordered = sorted(rows, key=lambda row: (row["kv_bytes_per_context_token"],
                                             row["arm"]))
+    spread = parameter_spread(arms_for(shape))
     return {
         "tag": tag,
         "created_at": _utcnow(),
@@ -681,13 +716,22 @@ def build_report(rows: Sequence[dict], *, tag: str = "stagea",
         # in width, and therefore in how far from parameter-matched the grid is
         # -- reporting stage A's spread on a stage-B table would under-state the
         # discount by a third.
-        "parameter_spread": parameter_spread(arms_for(shape)),
+        "parameter_spread": spread,
         "rows": ordered,
-        "stage_b": select_stage_b(rows),
+        # The advancement rule is the *next* stage's admission rule, so a stage
+        # with no next stage records why it selects nobody rather than running
+        # the rule over its own arms. See `no_advancement`.
+        "stage_b": (select_stage_b(rows) if shape.advances_to
+                    else no_advancement(shape)),
         "caveats": [
-            "The grid is parameter-matched only to +/-1.5%, and the residual "
-            "favours attention-sparse arms: a conv block is dearer than an "
-            "attention block, so cutting attention adds parameters. "
+            # The spread is quoted from this shape's own grid. Stage A spreads
+            # +/-1.5% and stage B +/-2.2%, so a literal here understated the
+            # discount the table beside it applies by a third -- the same drift
+            # `parameter_spread` is computed per-shape to avoid.
+            f"The grid is parameter-matched only to "
+            f"+/-{100.0 * spread['max_drift_from_midpoint']:.1f}%, and the "
+            "residual favours attention-sparse arms: a conv block is dearer "
+            "than an attention block, so cutting attention adds parameters. "
             "credited_bpb_delta_pct discounts that surplus at Chinchilla's "
             "0.34 exponent on N, which is an upper bound and therefore "
             "conservative against exactly the arms this phase hopes to "
@@ -701,8 +745,8 @@ def build_report(rows: Sequence[dict], *, tag: str = "stagea",
             "export/load and decode shape are preregistered stage-6 gates that "
             "this pass does not measure; no arm is recommended on BPB alone.",
             f"Scored on {source} alone, the one source the arms trained on. "
-            "Transfer to held-out code and other web text is unmeasured at "
-            "stage A.",
+            f"Transfer to held-out code and other web text is unmeasured at "
+            f"{shape.name}.",
         ],
     }
 
@@ -736,17 +780,24 @@ def render_markdown(report: dict) -> str:
             f"{'pass' if row['passes_floor'] else 'FAIL'} |")
 
     stage_b = report["stage_b"]
-    lines += [
-        "",
-        "## Stage B selection",
-        "",
-        f"- rule: raw delta <= {stage_b['rule']['floor_pct']}% of control, then "
-        f"{stage_b['rule']['order']}, capped at {stage_b['rule']['max_arms']}",
-        f"- eligible: {stage_b['eligible'] or 'none'}",
-        f"- frontier: {stage_b['frontier'] or 'none'}",
-        f"- **selected: {stage_b['selected'] or 'none'}**",
-        f"- verdict: `{stage_b['verdict']}`",
-    ]
+    if stage_b["verdict"] == "not-applicable":
+        # No rule line and no bolded `selected:`, because both would describe a
+        # decision this stage did not make. The note carries the whole story.
+        lines += ["", "## Advancement", "",
+                  f"- verdict: `{stage_b['verdict']}`"]
+    else:
+        lines += [
+            "",
+            "## Stage B selection",
+            "",
+            f"- rule: raw delta <= {stage_b['rule']['floor_pct']}% of control, "
+            f"then {stage_b['rule']['order']}, capped at "
+            f"{stage_b['rule']['max_arms']}",
+            f"- eligible: {stage_b['eligible'] or 'none'}",
+            f"- frontier: {stage_b['frontier'] or 'none'}",
+            f"- **selected: {stage_b['selected'] or 'none'}**",
+            f"- verdict: `{stage_b['verdict']}`",
+        ]
     if stage_b.get("note"):
         lines += ["", f"> {stage_b['note']}"]
     lines += ["", "## Caveats", ""]
