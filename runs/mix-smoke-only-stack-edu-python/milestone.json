@@ -1,0 +1,14 @@
+{
+  "revision": "mix-smoke-only-stack-edu-python-stable-end-step0",
+  "step": 0,
+  "tokens_seen": 0,
+  "total_steps": 2,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 0.0,
+  "muon_lr": 0.02,
+  "adam_lr": 0.0003,
+  "config": "tok-probe-49152",
+  "repo": null,
+  "path_in_repo": "milestone/mix-smoke-only-stack-edu-python/checkpoint.pt",
+  "created_at": 1787730516.450057
+}
