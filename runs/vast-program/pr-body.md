@@ -20,7 +20,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 | 5 — ShortConv channel death prevention | **complete**, **no schedule selected**, verdict in `runs/conv-health/verdict-paired.json`, reading in `runs/conv-health/phase5-conv-decay.md` |
 | 6 — Architecture Pareto proxies | **complete**, **no shape recommended and stage C is a no-go**, verdicts in `runs/architecture/stageb-recommendation.json` and `runs/architecture/stageb-stage-c.json` |
 | 7 — Improved general corpus and mixture | **in progress**, steps 1–8 and 10 complete — mixture verdict **keep-baseline** in `runs/corpus/mixture-verdict-probe.json`, acceptance gate in `runs/corpus/phase7-gate.md`, headroom in `runs/corpus/headroom-curve.md`; step 9 demonstrated on a rebuilt source, open at full scale |
-| 8 — Daedalus-Code | not started — step 1 is a branch switch, which the wrapper can now do (`branch`) but which needs the operator install below |
+| 8 — Daedalus-Code | not started — step 1 is a branch switch, which the wrapper can now do (`branch`) but which needs the operator install below. Its one branch-independent input, the untouched base on HumanEval+ and MBPP+, is measured; those scorecards are Daedalus-Code results and land on the code branch |
 | 9 — Finalization and reporting | begins no later than T+136h |
 
 ## Released-model baselines
@@ -239,6 +239,30 @@ This is an independent measurement of the phenomenon `daedalus/data.py::select_h
 
 **A fingerprint nothing reads is half a guard**, so both readers now check it, each with the comparison it can actually make. `train.py` has no tokenizer — training reads ids and an embedding table — so it checks the row count, per source, before the sampler exists: a 49,152-row model reading 32,768-vocabulary shards indexes every id successfully and trains on text that means something else. `scripts/bpb_eval.py` does hold one, and it is part of the measurement rather than a label on it, so it checks the full fingerprint: BPB is nats per token converted through the bytes those tokens stand for, and the byte count comes from decoding them. Pointed at the rebuilt 32,768 tree with the default tokenizer, it now refuses before the model is built — `shard tokenizer mismatch on 'vocab_size' … packed by 'data/tokenizer-lab/tokenizers/v32768' (32768) but 'HuggingFaceTB/SmolLM2-135M' gives 49152` — where it would previously have returned a finite, plausible, wrong number. Both are inert for a manifest with no fingerprint, which is every tree on this box.
 
+## Phase 2 evaluation, revisited: MBPP+ had never run
+
+Phase 8's first training step scores the untouched base, and half of that gate turned out to be unreachable. `--dataset mbpp-plus` was an advertised choice that raised on its first problem, from two defects that are the same mistake seen twice: assuming the two benchmarks share a schema.
+
+**The base suite.** HumanEval+ ships `test`; MBPP+ ships no such key — its base suite is `base_input`, scored against the reference solution exactly as the extended suite is. This is the same shape as the defect phase 2 found in the HumanEval path, and it survived for the same reason: every fixture in `tests/test_code_eval.py` was written to the code rather than to the dataset, so MBPP+ had passing tests around a harness that could not run it. The no-default rule is kept — neither a test nor inputs raises, and an *empty* input list raises, because a program with no assertions in it exits zero and scores as a pass.
+
+**The extraction.** "Cut the completion at the first top-level line" assumes the prompt left a function body open. That is HumanEval+'s shape and not MBPP+'s, whose prompt is a module docstring: the answer is a top-level `def`, so the rule discarded it on line one and left the docstring alone as the program. Every MBPP+ item would have failed on an undefined entry point — a clean, plausible **0.000 that measured the harness rather than the model**, and on a 150M base model indistinguishable from the real score. Which cut applies is now decided by the prompt.
+
+**`--oracle` is the check a fixture cannot make.** It scores the benchmark's own reference solutions through the same extraction, sandbox and scoring rule, writing `<dataset>-oracle` with the dataset as the artifact so it can never be read back as a model's score. A model's 0.000 only becomes a fact about the model once the references score 1.000 on the same path — and both harness failure modes have now happened here, HumanEval+ once returning 1.000 for programs containing no assertions, and MBPP+ returning nothing at all.
+
+**It immediately found five more defects, each of which would have scored a model wrong**, and none of them visible from a fixture, from the test suite, or from a five-problem smoke:
+
+| what failed | why | how it would read on a model |
+| --- | --- | --- |
+| One problem stopped the whole 378-problem run | `Mbpp/793` ships an empty `plus_input` | the dataset unusable, or the run silently short |
+| A reference scored a **syntax error** against its own suite | a comment sits at whatever column it likes *inside* a body; `Mbpp/64` writes one flush left, and "cut at the first column-zero line" left a signature with no body | a model penalised for its comment style |
+| Three references failed against **themselves** | they return `re.Match`, whose `==` is identity, so an identical result is never equal — the assertion printed two spans that are character for character the same | a correct answer scored wrong whenever the return value is an object |
+| An input the reference itself rejects failed every candidate | the extended program computed the reference first, so `min(None, 3)` raised before the candidate ran | a whole item lost on an input nobody can pass |
+| `NameError: name 'inf' is not defined` | inputs are written with `repr`, and `repr(float('inf'))` is a *name*, not a literal | every problem whose extended inputs reach the floating-point extremes silently lost, on the first arm that started solving anything |
+
+Extraction now goes through the parser whenever the completion parses; values are compared by `repr` when equality is identity-based; an input the reference rejects requires the candidate to reject it too; an absent extended suite is credited from the base suite it is the union of, counted as `plus_inputs_absent` and never able to rescue a failing base suite; and `from math import inf, nan` makes those reprs evaluate to what they came from. The `NameError` needed the run reproduced by hand to diagnose, because an extended-suite failure recorded its category with an empty detail — the scorecard said `exception` and nothing more — so the detail of whichever suite failed is now kept.
+
+**Measured.** `runs/eval/code-base-oracle/`: MBPP+ **pass@1 1.0000, pass@1_plus 1.0000, syntax_valid 1.0000 on 378 of 378**, from 0.9894 / 0.9841 / 0.9974 before the fixes and from *not running at all* before that; HumanEval+ 1.0000 on 164 of 164. The oracle is now the standing check on this harness: a value whose `repr` does not round-trip, or a dataset shape it cannot read, fails the references rather than a model.
+
 ## Control plane
 
 `daedalus/program_state.py` holds an atomic snapshot beside an append-only timeline; `scripts/vast_program.py` owns phases, one-process leases, and deadline gates; `scripts/boot_resume.py` resumes only an approved incomplete marker; `scripts/github_progress.py` publishes a sanitized heartbeat from an isolated worktree; `ops/vast/run-approved` is the only shell, Git, PR, and evaluation surface an engineering session may use, and it refuses default-branch pushes, PR merges, secret paths, and arbitrary shell fragments.
@@ -247,7 +271,9 @@ This is an independent measurement of the phenomenon `daedalus/data.py::select_h
 
 Both failure drills pass and are recorded in the timeline: a session killed mid-turn is counted as a failure and relaunched, and a keeper killed with SIGKILL is restarted by supervisord without a duplicate session.
 
-**One operator step is outstanding and now blocks three things**, including the start of phase 8: `bash ops/vast/install_supervisor.sh`. Sessions call `/usr/local/bin/daedalus-approved`, not the repository copy — deliberately, because a wrapper that changed whenever a branch edited a file would let a session widen its own permissions — so `pr-find` (how a session learns the PR number to apply this body), `reload-service` (why the heartbeat still omits the lanes field), and now `branch` (the only way a session can reach `vast/daedalus-code-20260824`, since it cannot run `git checkout` itself) all wait on it.
+**One operator step is outstanding and blocks the start of phase 8**: `bash ops/vast/install_supervisor.sh`. Sessions call `/usr/local/bin/daedalus-approved`, not the repository copy — deliberately, because a wrapper that changed whenever a branch edited a file would let a session widen its own permissions — so `pr-find` (how a session learns the PR number to apply this body), `reload-service`, and `branch` (the only way a session can reach `vast/daedalus-code-20260824`, since it cannot run `git checkout` itself) all wait on it.
+
+**The heartbeat now says so by itself.** A committed change to any installed file is inert until an operator reinstalls, and the only symptom a session got was `unapproved command branch` — so the program's last deliverable sat unable to start while `STATUS.md` read `passed`. The quieter half is worse: a command present in both copies whose *behaviour* changed enforces nothing and fails nothing, and this repository's tests pass either way, because they exercise the committed copy while sessions run the installed one. `scripts/github_progress.py` compares each installed file against **HEAD** — not the working tree, so a session cannot make the heartbeat demand its own uncommitted wrapper — and raises the action banner naming the files and the one command. On this box it finds exactly one, `ops/vast/run-approved`; the publisher, resume, keeper and supervisor config installed here do match HEAD.
 
 ## Security fix worth reviewing
 
