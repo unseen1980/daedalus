@@ -69,7 +69,44 @@ It also found what the plan's mixture cannot have. `codeparrot/github-code`'s au
 
 Those four are 18% of the code portion. Reaching them from `all-all` would mean streaming roughly seven times the entire code budget, and `all-all` is a `partial-train` conversion of ten files that very likely does not hold that much. **Rust is the binding one** — Go, Shell and SQL are merely expensive; Rust is not reachable at share from this dataset at all.
 
-This is a decision, not an implementation detail, and it is open: either substitute a per-language permissive source for the four buckets — the candidates (`bigcode/the-stack-dedup`, `starcoderdata`) are gated, and an ambiguous licence is on the plan's hard-blocker list — or redistribute their 18% proportionally onto the six buckets that resolved, the way phase 7's `GATED_SUBSTITUTION_NOTES` redistributed Nemotron-CC. Evidence in `runs/codeprep/github-code-configs.json`, `github-code-clean-configs.json`, `source-probe.json` and `all-all-probe.json`.
+This is a decision, not an implementation detail. The substitution arm is closed: the per-language candidates (`bigcode/the-stack-dedup`, `starcoderdata`) are gated, and an ambiguous licence is on the plan's hard-blocker list. So it is the redistribution arm, the way phase 7's `GATED_SUBSTITUTION_NOTES` redistributed Nemotron-CC — but taken per bucket rather than for all four at once, because the four are not equally out of reach and a blanket drop would throw away Go and Shell to save Rust.
+
+## The mixture this revision can actually serve
+
+`scripts/codeprep.py corpus plan` reads the directory listing and a 200,000-row probe of `all-all` and decides each bucket in one pass. The rate it divides by is measured **after** the licence gate — `all-all` admitted 897.7 MB from 200,000 rows, and the gate refuses about a third of the dataset at rates that differ by language, so the offered-rows histogram in the table above overstates every fallback bucket.
+
+| bucket | plan | source | share | passes to reach plan |
+| --- | --- | --- | --- | --- |
+| python | 55% | `Python-all` | **64.4%** | — |
+| javascript-typescript | 12% | `JavaScript-all`, `TypeScript-all` | **14.1%** | — |
+| c-cpp | 10% | `C-all`, `C++-all` | **11.7%** | — |
+| rust | 8% | — | **dropped** | 23.8× |
+| go | 6% | `all-all`, `language=GO` | **2.8%** | 2.1× |
+| java | 5% | `Java-all` | **5.9%** | — |
+| shell-sql-other | 4% | `all-all`, `language∈{Shell,SQL}` | **1.1%** | 3.7× |
+
+The budget is one pass: the fallback stream may admit as many bytes as the entire rest of the code corpus, which is already a large concession for 18% of the mixture. Under it Rust reaches 0.336% and is **dropped by name** rather than carried — a bucket at a third of a percent is a few million tokens, too little to teach the language and enough for a model card to claim it. Go and shell/SQL clear the 0.5% floor and are carried at what the yield reaches, capped. The 14.07 points the three cannot serve go proportionally to the four buckets with directories of their own; they cannot go to the capped buckets, which are capped *because* the rows are not there, and raising their target would only move the shortfall from a function that announces it to a build that does not.
+
+Nothing here is unreachable in principle, only at a price, so every bucket's `required_passes` is recorded and the same measurement re-derives the mixture at any other budget without re-reading a row. Plan in `runs/codeprep/source-plan.json`; evidence in `runs/codeprep/github-code-configs.json`, `github-code-clean-configs.json`, `source-probe.json`, `directory-yield.json` and `allall-yield.json`.
+
+### Whether the raised shares are there to be read
+
+Redistributing moved 14 points onto Python. That fixes the shortfall only if `Python-all` holds 64% of the budget; otherwise it moves the shortfall from a bucket that announces it to one that does not — and phase 7 has already paid for that mistake once, when `stack-edu-python` came up 139M tokens short of its share and one metadata call would have said so before a document was streamed.
+
+So `corpus headroom` asks phase 7's question with phase 8's evidence, reusing `source_headroom.epoch_curve`, its four-epoch cap and its verdicts. The supply is two measured factors and no assumed ones: the rate a directory admits bytes at, from a probe of its real rows, times the rows it holds, from its parquet footers — ten range requests per directory rather than a pass over gigabytes — over the tokenizer's measured **2.862 bytes/token of code** (phase 4's `49152-smollm2` fertility reading, not the ~4.0 that general text gives, which would understate every directory by 40%).
+
+| bucket | share | rows | unique tokens | epochs at 3B |
+| --- | --- | --- | --- | --- |
+| python | 64.4% | 641,000 (`Python-all`) | 921M | **1.4** |
+| javascript-typescript | 14.1% | 605,000 + 369,000 | 2,531M | 0.1 |
+| c-cpp | 11.7% | 354,000 + 389,000 | 1,317M | 0.2 |
+| java | 5.9% | 828,000 (`Java-all`) | 822M | 0.1 |
+| go | 2.8% | 547,000 (`all-all`) | 19M | 2.3 |
+| shell-sql-other | 1.1% | 547,000 (`all-all`) | 8M | 2.3 |
+
+**SUPPORTED at all three gates** — 250M, 1B and 3B total tokens. Python at its raised share is read 1.4 times at the largest budget, well inside the cap, so the redistribution is sound rather than merely arithmetic.
+
+One caveat is carried rather than hidden: `all-all`'s tenth file lost its footer to a 429 that outlasted its retries, so the two fallback buckets are counted from nine files of ten. Their supply is a **floor**, flagged as `lower_bound` in the record and on the report. It matters in one direction only — a floor that clears the cap has cleared it, but a floor that failed would have to be re-measured before being believed, so the two are distinguishable at the point the verdict is read. Record in `runs/codeprep/headroom.json`, footers in `config-rows.json`.
 
 One trap worth carrying forward: a probe that finished, printed its verdict and wrote its JSON still exits `-6`. pyarrow aborts in `PyGILState_Release` during interpreter finalization, *after* everything is written, so the controller records the phase as failed and the return code says nothing about whether the work succeeded. Read the JSON, not the exit code. A long build will hit this too.
 
@@ -88,4 +125,6 @@ Final acceptance: code BPB improves ≥5%, HumanEval+/MBPP+ pass@1 and syntax va
 
 ## Status
 
-Branch created from #14's tested SHA; parent recorded in `runs/vast-program/code-run-manifest.json`. Base baselines and both harness oracles are in, the code decontamination index is frozen and verified, and the admission gate is written and measured against the real sources. No corpus has been built and no training has started — the corpus build is blocked on the mixture decision above, not on code.
+Branch created from #14's tested SHA; parent recorded in `runs/vast-program/code-run-manifest.json`. Base baselines and both harness oracles are in, the code decontamination index is frozen and verified, and the admission gate is written and measured against the real sources.
+
+The mixture decision is closed: the plan is measured, Rust is dropped by name, the remainder is redistributed, and every bucket's directories have been shown to hold the share the plan gives them inside the four-epoch cap. No corpus has been built and no training has started; the next slice is the build itself, which now has a mixture to build.
