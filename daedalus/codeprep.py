@@ -424,6 +424,63 @@ SPLITS = ("train", "holdout")
 DEFAULT_MAX_REPOSITORIES = 200_000
 
 
+#: The plan's code-language shares, over the 65% of phase 8's mixture that is
+#: code. Keys are *buckets* rather than languages because the plan groups some
+#: ("JavaScript/TypeScript 12%", "C/C++ 10%", "shell/SQL/other 4%") and a bucket
+#: is the unit a token budget is set on.
+CODE_LANGUAGE_SHARES = {
+    "python": 0.55,
+    "javascript-typescript": 0.12,
+    "c-cpp": 0.10,
+    "rust": 0.08,
+    "go": 0.06,
+    "java": 0.05,
+    "shell-sql-other": 0.04,
+}
+
+assert abs(sum(CODE_LANGUAGE_SHARES.values()) - 1.0) < 1e-9, \
+    "code language shares must sum to 1.0"
+
+#: The plan's continued-pretraining mixture: what the 65% above is 65% *of*.
+CORPUS_SHARES = {"code": 0.65, "technical": 0.15, "general-replay": 0.20}
+
+assert abs(sum(CORPUS_SHARES.values()) - 1.0) < 1e-9, \
+    "corpus shares must sum to 1.0"
+
+#: Candidate `codeparrot/github-code` parquet directories per bucket -- what to
+#: *ask* for, not what exists. The names carry real spelling risk (`GO` is
+#: upper-case in this dataset's own vocabulary, `C++` and `C#` contain
+#: characters a path may escape), and a directory that does not resolve fails by
+#: yielding no rows, which is indistinguishable from a language with no
+#: permissively licensed code in it. `scripts/codeprep.py corpus probe` resolves
+#: each one against the real dataset and says which answered; nothing should
+#: build a token budget on this table before it has.
+GITHUB_CODE_LANGUAGES = {
+    "python": ("Python-all",),
+    "javascript-typescript": ("JavaScript-all", "TypeScript-all"),
+    "c-cpp": ("C-all", "C++-all"),
+    "rust": ("Rust-all",),
+    "go": ("GO-all",),
+    "java": ("Java-all",),
+    "shell-sql-other": ("Shell-all", "SQL-all"),
+}
+
+assert set(GITHUB_CODE_LANGUAGES) == set(CODE_LANGUAGE_SHARES), \
+    "every code bucket needs a source and every source needs a share"
+
+GITHUB_CODE_DATASET = "codeparrot/github-code"
+
+#: The parquet-converted revision, as `dataprep.MIXTURE`'s `stack-edu-python`
+#: reads it -- the same dataset, the same access path, so phase 8's Python
+#: bucket and the general corpus's code share are drawn the same way.
+GITHUB_CODE_REVISION = "refs/convert/parquet"
+
+
+def github_code_data_files(config: str) -> str:
+    """The `data_files` glob for one `codeparrot/github-code` config."""
+    return f"{config}/partial-train/*.parquet"
+
+
 def normalize_license(value) -> str:
     """One lowercase licence identifier out of whatever a row carries.
 
@@ -612,6 +669,13 @@ class RepositoryGate:
         """
         return sorted(self._repositories)
 
+    @property
+    def repositories_count(self) -> int:
+        """How many distinct repositories were recorded -- which past
+        `max_repositories` is the cap, not the number admitted. `rows_admitted`
+        is the count that keeps growing."""
+        return len(self._repositories)
+
     def manifest(self) -> dict:
         """What this gate admitted, in the shape a source manifest carries.
 
@@ -632,10 +696,154 @@ class RepositoryGate:
             "licenses": dict(sorted(self.licenses.items())),
             "permissive_licenses": sorted(PERMISSIVE_LICENSES),
             "repository_fields": dict(sorted(self.repository_fields.items())),
-            "repositories": len(self._repositories),
+            "repositories": self.repositories_count,
             "repositories_truncated": self.repositories_truncated,
             "repository_names": self.repositories,
         }
+
+
+def probe_source(config: str, *, rows: int = 2_000,
+                 stream: Optional[Callable[[str], object]] = None,
+                 holdout_frac: float = DEFAULT_HOLDOUT_FRAC,
+                 salt: str = SPLIT_SALT) -> dict:
+    """Run the gate over real rows of one source and report what it found.
+
+    Every field name and licence string in this module is a *guess* about a
+    dataset until a row of it has been read, and each guess fails silently in
+    the same direction: `repo_name` spelled wrong makes `repository_of` answer
+    None for every row, the gate refuses all of them, and the build finishes
+    early with an empty shard directory and a zero exit. A licence vocabulary
+    that is not the one assumed does the same thing more quietly still -- it
+    refuses most rows and keeps a biased remainder.
+
+    So this is not a dry run of the build; it is the measurement the build's
+    assumptions rest on. It reports the columns a row actually has, which
+    repository field answered, every licence string met with its count, and how
+    the admitted repositories divided -- and it is cheap enough (a couple of
+    thousand streamed rows) to run before every build rather than once.
+
+    A config that does not resolve is reported as `resolved: false` with the
+    error rather than raised, because the useful output is the whole table: one
+    misspelled directory should not hide the six that were right.
+    """
+    record: dict = {"dataset": GITHUB_CODE_DATASET, "config": config,
+                    "data_files": github_code_data_files(config),
+                    "rows_requested": rows}
+    gate = RepositoryGate(want="train", holdout_frac=holdout_frac, salt=salt,
+                          max_repositories=rows)
+    holdout = RepositoryGate(want="holdout", holdout_frac=holdout_frac, salt=salt,
+                             max_repositories=rows)
+    columns: Dict[str, int] = {}
+    samples: List[dict] = []
+    try:
+        for index, row in enumerate(stream(config) if stream is not None
+                                    else _stream_github_code(config)):
+            if index >= rows:
+                break
+            for key in row:
+                columns[key] = columns.get(key, 0) + 1
+            train_ok, holdout_ok = gate(row), holdout(row)
+            if (train_ok or holdout_ok) and len(samples) < 3:
+                samples.append({"repository": repository_of(row),
+                                "license": normalize_license(row.get("license")),
+                                "split": "train" if train_ok else "holdout",
+                                "chars": len(row.get("code") or "")})
+    except Exception as exc:                    # noqa: BLE001 - reported per config
+        record.update({"resolved": False, "error": repr(exc)})
+        return record
+
+    train_manifest = gate.manifest()
+    record.update({
+        "resolved": gate.seen > 0,
+        "rows_read": gate.seen,
+        "columns": dict(sorted(columns.items())),
+        "repository_fields": train_manifest["repository_fields"],
+        "licenses": train_manifest["licenses"],
+        "admitted": {"train": gate.admitted, "holdout": holdout.admitted},
+        "repositories": {"train": gate.repositories_count,
+                         "holdout": holdout.repositories_count},
+        # The two gates refuse each other's rows under `other_split`, so the
+        # licence and repository refusals are the ones that describe the source.
+        "refused": {reason: train_manifest["refused"][reason]
+                    for reason in REFUSAL_REASONS if reason != "other_split"},
+        "samples": samples,
+    })
+    if gate.seen and not (gate.admitted or holdout.admitted):
+        # The silent failure, named. Every one of these has the same shape --
+        # rows arrived and none survived -- and none of them raises.
+        record["problem"] = (
+            "read {:,} rows and admitted none: the repository field, the "
+            "licence vocabulary or the split is not what this module assumes"
+            .format(gate.seen))
+    return record
+
+
+def _stream_github_code(config: str):
+    """Streaming rows of one `codeparrot/github-code` config.
+
+    Isolated so `probe_source` can be tested without the Hub, and shaped like
+    `dataprep._stream_rows` so both reach the dataset the same way.
+    """
+    from datasets import load_dataset
+
+    return load_dataset(GITHUB_CODE_DATASET, split="train", streaming=True,
+                        revision=GITHUB_CODE_REVISION,
+                        data_files=github_code_data_files(config))
+
+
+def probe_languages(languages: Optional[Sequence[str]] = None, *,
+                    rows: int = 2_000,
+                    stream: Optional[Callable[[str], object]] = None,
+                    holdout_frac: float = DEFAULT_HOLDOUT_FRAC,
+                    salt: str = SPLIT_SALT) -> dict:
+    """`probe_source` over every config of every requested bucket."""
+    buckets = list(languages or GITHUB_CODE_LANGUAGES)
+    unknown = sorted(set(buckets) - set(GITHUB_CODE_LANGUAGES))
+    if unknown:
+        raise ValueError(f"unknown code bucket(s) {unknown}; known buckets are "
+                         f"{sorted(GITHUB_CODE_LANGUAGES)}")
+    report = {"holdout_frac": holdout_frac, "split_salt": salt,
+              "rows_per_config": rows, "languages": {}}
+    for bucket in buckets:
+        report["languages"][bucket] = {
+            "share": CODE_LANGUAGE_SHARES[bucket],
+            "configs": [probe_source(config, rows=rows, stream=stream,
+                                     holdout_frac=holdout_frac, salt=salt)
+                        for config in GITHUB_CODE_LANGUAGES[bucket]],
+        }
+    return report
+
+
+def probe_problems(report: dict) -> List[str]:
+    """Everything in a probe that would make a build quietly produce nothing."""
+    problems: List[str] = []
+    for bucket, entry in sorted((report.get("languages") or {}).items()):
+        for record in entry.get("configs") or []:
+            name = f"{bucket}/{record.get('config')}"
+            if not record.get("resolved"):
+                problems.append(
+                    f"{name} did not resolve: "
+                    f"{record.get('error', 'it yielded no rows at all')}")
+                continue
+            if record.get("problem"):
+                problems.append(f"{name} {record['problem']}")
+            fields = record.get("repository_fields") or {}
+            if not fields:
+                problems.append(f"{name} has no repository field this module reads")
+            elif len(fields) > 1:
+                problems.append(
+                    f"{name} answers to more than one repository field "
+                    f"({', '.join(sorted(fields))}); the source is not shaped "
+                    f"the way this module assumes")
+            unknown = sorted(key for key in (record.get("licenses") or {})
+                             if license_verdict(key) == "unknown")
+            if unknown:
+                # Not fatal -- an unknown licence is refused, which is the safe
+                # direction -- but it is the finding the probe exists to surface.
+                problems.append(
+                    f"{name} carries {len(unknown)} licence value(s) this "
+                    f"module does not classify: {', '.join(repr(u) for u in unknown[:8])}")
+    return problems
 
 
 def split_is_disjoint(repositories: Sequence[str],

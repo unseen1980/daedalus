@@ -732,3 +732,123 @@ def test_the_gate_works_as_the_row_filter_dataprep_actually_calls(monkeypatch):
 
     assert [d.split()[0] for d in documents] == ["KEEP"]
     assert gate.manifest()["rows_seen"] == 3
+
+
+# ---------------------------------------------------------------- the probe ---
+#
+# Every row-shape assumption in the gate is a guess about a dataset until a row
+# of it has been read, and each guess fails in the same silent direction: the
+# gate refuses everything and the build writes an empty shard directory with a
+# zero exit. The probe is what turns that into a two-minute answer, so these
+# tests are about whether the probe would actually *notice*.
+
+
+def _stream(rows, fail=()):
+    def stream(config):
+        if config in fail:
+            raise FileNotFoundError(f"no such config {config!r}")
+        return iter(rows(config) if callable(rows) else rows)
+    return stream
+
+
+def _github_rows(n=50, license_values=("mit", "gpl-3.0"), repo_key="repo_name"):
+    return [{"code": f"print({i})\n" * 20, "path": f"src/{i}.py",
+             "language": "Python", "size": 100 + i,
+             repo_key: f"org-{i % 17}/repo-{i % 17}",
+             "license": license_values[i % len(license_values)]}
+            for i in range(n)]
+
+
+def test_the_probe_reports_the_columns_and_field_a_real_row_actually_has():
+    record = CP.probe_source("Python-all", rows=50,
+                             stream=_stream(_github_rows()))
+
+    assert record["resolved"] is True and record["rows_read"] == 50
+    assert set(record["columns"]) == {"code", "path", "language", "size",
+                                      "repo_name", "license"}
+    assert record["repository_fields"] == {"repo_name": 50}
+    assert record["licenses"] == {"mit": 25, "gpl-3.0": 25}
+    assert record["refused"]["non_permissive"] == 25
+    assert record["admitted"]["train"] + record["admitted"]["holdout"] == 25
+
+
+def test_the_probe_names_the_failure_where_no_row_survives():
+    """The one the build cannot tell from success. Every row arrives, every row
+    is refused, and the shard directory is empty with a zero exit."""
+    rows = _github_rows(repo_key="repository")      # a key the gate does not read
+    record = CP.probe_source("Python-all", rows=50, stream=_stream(rows))
+
+    assert record["admitted"] == {"train": 0, "holdout": 0}
+    assert "admitted none" in record["problem"]
+    assert record["refused"]["no_repository"] == 50
+
+
+def test_a_config_that_does_not_resolve_is_reported_not_raised():
+    """`GO-all` versus `Go-all`, or a `C++` that a path escapes. One misspelled
+    directory must not hide the six that were right."""
+    report = CP.probe_languages(["go", "java"], rows=10,
+                                stream=_stream(_github_rows(10), fail=("GO-all",)))
+
+    go = report["languages"]["go"]["configs"][0]
+    java = report["languages"]["java"]["configs"][0]
+    assert go["resolved"] is False and "GO-all" in go["error"]
+    assert java["resolved"] is True
+    assert any("go/GO-all did not resolve" in p for p in CP.probe_problems(report))
+
+
+def test_the_probe_surfaces_licence_strings_the_gate_cannot_classify():
+    """Refusing an unknown licence is the safe direction, and silently refusing
+    most of a language is still how a bucket comes back empty."""
+    rows = _github_rows(20, license_values=("mit", "wtfpl", "elastic-2.0"))
+    report = CP.probe_languages(["python"], rows=20, stream=_stream(rows))
+
+    problems = CP.probe_problems(report)
+    assert any("does not classify" in p and "wtfpl" in p for p in problems)
+
+
+def test_a_clean_probe_has_nothing_to_report():
+    report = CP.probe_languages(["python"], rows=30,
+                                stream=_stream(_github_rows(30, ("mit", "apache-2.0"))))
+    assert CP.probe_problems(report) == []
+
+
+def test_the_probe_covers_every_bucket_the_plan_gives_a_share_to():
+    report = CP.probe_languages(rows=5, stream=_stream(_github_rows(5)))
+
+    assert set(report["languages"]) == set(CP.CODE_LANGUAGE_SHARES)
+    assert sum(e["share"] for e in report["languages"].values()) == pytest.approx(1.0)
+
+
+def test_an_unknown_bucket_is_refused_rather_than_silently_skipped():
+    with pytest.raises(ValueError, match="unknown code bucket"):
+        CP.probe_languages(["cobol"], stream=_stream([]))
+
+
+def test_the_probe_stops_at_the_row_count_it_was_given():
+    """It runs before every build, so it has to stay a two-minute answer."""
+    record = CP.probe_source("Python-all", rows=7,
+                             stream=_stream(_github_rows(10_000)))
+    assert record["rows_read"] == 7
+
+
+def test_the_cli_writes_the_probe_and_fails_on_what_it_found(
+        tmp_path, monkeypatch, capsys):
+    """The record is written *before* the verdict: what was actually in the rows
+    is the whole output anyone needs to fix the assumption, and a non-zero exit
+    with nothing on disk is not it."""
+    import scripts.codeprep as CLI
+
+    monkeypatch.setattr(
+        CLI, "probe_languages",
+        lambda languages, **kw: CP.probe_languages(
+            languages, stream=_stream(_github_rows(20, ("mit", "wtfpl"))), **kw))
+    out = str(tmp_path / "probe.json")
+
+    rc = CLI._cli(["corpus", "probe", "--language", "python", "--rows", "20",
+                   "--json-out", out])
+
+    assert rc == 3
+    written = json.load(open(out))
+    assert any("wtfpl" in p for p in written["problems"])
+    assert written["languages"]["python"]["configs"][0]["licenses"]["wtfpl"] == 10
+    assert "does not classify" in capsys.readouterr().err

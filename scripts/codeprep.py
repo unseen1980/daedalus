@@ -1,7 +1,16 @@
-"""Build and check the code corpus's frozen decontamination index.
+"""Build and check the code corpus's decontamination index and admission gate.
 
     python scripts/codeprep.py decontam build
     python scripts/codeprep.py decontam verify --json-out runs/codeprep/decontam.json
+    python scripts/codeprep.py corpus probe --rows 2000 --json-out runs/codeprep/probe.json
+
+`corpus probe` is the measurement the corpus build's assumptions rest on. Every
+row-shape assumption in `daedalus/codeprep.py` -- which key holds the
+repository, which licence strings exist -- fails silently and in the same
+direction: the gate refuses every row and the build writes an empty shard
+directory with a zero exit. The probe reads real rows of each language config
+and reports what was actually there, so that failure happens in two minutes
+rather than after a night of streaming.
 
 `build` loads every item of every code benchmark phase 8 is gated on, writes the
 sorted n-gram set and its provenance sidecar, and prints the digest a code
@@ -23,10 +32,12 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from daedalus.codeprep import (DEFAULT_CODE_INDEX_PATH,  # noqa: E402
-                               DEFAULT_CODE_N, IncompleteIndex,
-                               IndexDigestMismatch, build_code_index,
-                               code_coverage_problems, load_index,
+from daedalus.codeprep import (CODE_LANGUAGE_SHARES,  # noqa: E402
+                               DEFAULT_CODE_INDEX_PATH, DEFAULT_CODE_N,
+                               DEFAULT_HOLDOUT_FRAC, GITHUB_CODE_LANGUAGES,
+                               IncompleteIndex, IndexDigestMismatch,
+                               build_code_index, code_coverage_problems,
+                               load_index, probe_languages, probe_problems,
                                sidecar_path, write_index)
 
 
@@ -98,6 +109,66 @@ def _verify(a) -> int:
     return 0
 
 
+def _probe_report(report: dict) -> str:
+    lines = [f"  holdout {report['holdout_frac']:.1%} of repositories, salt "
+             f"{report['split_salt']!r}, {report['rows_per_config']:,} rows per config"]
+    for bucket, entry in sorted(report["languages"].items()):
+        lines.append(f"  {bucket:24s} share {entry['share']:.0%}")
+        for record in entry["configs"]:
+            if not record.get("resolved"):
+                lines.append(f"      {record['config']:16s} UNRESOLVED  "
+                             f"{record.get('error', 'no rows')}")
+                continue
+            admitted = record["admitted"]
+            lines.append(
+                f"      {record['config']:16s} {record['rows_read']:>6,} rows  "
+                f"train {admitted['train']:>6,}  holdout {admitted['holdout']:>5,}  "
+                f"repos {record['repositories']['train'] + record['repositories']['holdout']:>6,}")
+            field = ", ".join(sorted(record["repository_fields"])) or "NONE"
+            lines.append(f"          repository field: {field}")
+            licenses = ", ".join(f"{name or '<empty>'}={count:,}" for name, count
+                                 in sorted(record["licenses"].items(),
+                                           key=lambda kv: -kv[1])[:8])
+            lines.append(f"          licences: {licenses}")
+            refused = ", ".join(f"{name}={count:,}" for name, count
+                                in sorted(record["refused"].items()) if count)
+            lines.append(f"          refused: {refused or 'nothing'}")
+    return "\n".join(lines)
+
+
+def _probe(a) -> int:
+    languages = a.language or sorted(GITHUB_CODE_LANGUAGES)
+    print(f"probing {len(languages)} bucket(s) at {a.rows:,} rows per config ...",
+          flush=True)
+    try:
+        report = probe_languages(languages, rows=a.rows,
+                                 holdout_frac=a.holdout_frac)
+    except ValueError as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+    problems = probe_problems(report)
+    report["problems"] = problems
+    print(_probe_report(report))
+    if a.json_out:
+        # Written before the verdict, so a failing probe leaves the record of
+        # *what was actually in the rows* rather than only a non-zero exit --
+        # which is the entire output anyone needs to fix the assumption.
+        os.makedirs(os.path.dirname(a.json_out) or ".", exist_ok=True)
+        with open(a.json_out, "w") as f:
+            json.dump(report, f, indent=2, sort_keys=True)
+            f.write("\n")
+        print(f"\nwrote {a.json_out}")
+    if problems:
+        print("\nthe corpus build would not do what it says on these sources:",
+              file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 3
+    print("\nevery bucket resolved, and every licence value is one this gate "
+          "classifies")
+    return 0
+
+
 def _cli(argv=None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -126,6 +197,22 @@ def _cli(argv=None) -> int:
     v.add_argument("--expect-digest", default=None)
     v.add_argument("--json-out", default=None)
     v.set_defaults(fn=_verify)
+
+    corpus = sub.add_parser(
+        "corpus", help="the licensed, repository-split code corpus")
+    corpus_action = corpus.add_subparsers(dest="action", required=True)
+
+    probe = corpus_action.add_parser(
+        "probe", help="read real rows and report what the gate found in them")
+    probe.add_argument(
+        "--language", action="append", choices=sorted(GITHUB_CODE_LANGUAGES),
+        help=f"code bucket to probe, repeatable (default: all "
+             f"{len(CODE_LANGUAGE_SHARES)})")
+    probe.add_argument("--rows", type=int, default=2_000,
+                       help="rows to read per config (default 2,000)")
+    probe.add_argument("--holdout-frac", type=float, default=DEFAULT_HOLDOUT_FRAC)
+    probe.add_argument("--json-out", default=None)
+    probe.set_defaults(fn=_probe)
 
     a = p.parse_args(argv)
     if getattr(a, "action", None) == "verify" and not os.path.exists(
