@@ -37,7 +37,7 @@ weighting for every arm, over every held-out window, from the final checkpoint
 rather than from a bounded sample taken mid-decay. `val_bpb` stays on as the
 divergence signal it is.
 
-Subcommands: `arms`, `shape`, `run`, `sweep`, `score`, `derive`.
+Subcommands: `arms`, `shape`, `run`, `sweep`, `score`, `derive`, `report`.
 """
 
 from __future__ import annotations
@@ -728,17 +728,27 @@ def full_pass_bpb(card) -> Dict[str, float]:
     return values
 
 
-def _scored_card(arm: MixtureArm, *, tag: str, out_dir: str) -> tuple:
-    """One arm's scorecard and its per-source BPB, or a refusal naming it."""
+#: What a missing scorecard means to the derivation, and what would produce one.
+#: Passed into `_scored_card` rather than fixed inside it because the selection
+#: pass needs the same refusal for a different reason at a different stage, and a
+#: message naming the wrong one sends the reader to re-run a pass that already
+#: succeeded.
+_DERIVE_NEEDS_SCORES = (
+    "Excess loss is defined against a specialist, so a source whose specialist "
+    "has not been scored has no measured excess and the derived mixture cannot "
+    "be built. Run `score --stage reference` first.")
+
+
+def _scored_card(arm: MixtureArm, *, tag: str, out_dir: str,
+                 missing_note: str = _DERIVE_NEEDS_SCORES) -> tuple:
+    """One arm's scorecard and its path, or a refusal naming both the arm and
+    the pass that would produce it."""
     from daedalus.scorecard import load_scorecard
 
     path = scorecard_path(arm, tag=tag, out_dir=out_dir)
     if not path.exists():
         raise SystemExit(
-            f"arm {arm.name!r} has no scorecard at {path}. Excess loss is "
-            f"defined against a specialist, so a source whose specialist has "
-            f"not been scored has no measured excess and the derived mixture "
-            f"cannot be built. Run `score --stage reference` first.")
+            f"arm {arm.name!r} has no scorecard at {path}. {missing_note}")
     return path, load_scorecard(path)
 
 
@@ -867,6 +877,272 @@ def derive(*, sources: Sequence[str], tag: str,
     }
 
 
+# =================================================================== verdict ===
+# The arms are trained and scored; this is what turns their scorecards into the
+# decision. Every threshold it applies -- the floors, the per-source regression
+# bound, the minimum aggregate gain -- is `daedalus/mixture_opt.py`'s, committed
+# before the first arm was trained, and `select_mixture` applies them. What lives
+# here is the half that can get the *inputs* wrong: which card belongs to which
+# arm, whether it measures the whole corpus, and whether every arm's aggregate is
+# the same weighted average of the same numbers.
+
+#: How far the aggregate recomputed here may sit from the one its scorecard
+#: recorded before the two stop being the same measurement. Both are the same
+#: weighted mean over the same per-source values, summed in the same order, so a
+#: difference above float noise is a difference in the *weighting* -- which is
+#: the one thing every arm has to share.
+AGGREGATE_TOLERANCE = 1e-9
+
+#: A scorecard records the mixture its checkpoint trained on rounded to six
+#: decimals, so this is the tightest comparison that is not asking about the
+#: rounding rather than about the mixture.
+WEIGHT_TOLERANCE = 1e-6
+
+_REPORT_NEEDS_SCORES = (
+    "The verdict is a comparison across the whole candidate stage, so an arm "
+    "without a scorecard is not a smaller comparison -- it is a different one. "
+    "Run `score --stage candidates --derived-weights <artifact>` first.")
+
+
+def verdict_path(tag: str, root: str = REPORT_ROOT) -> Path:
+    """Where `report` writes, tag-scoped like `derived_path` so a rerun under a
+    new tag cannot overwrite the verdict another stage was read from."""
+    return Path(root) / f"mixture-verdict-{tag}.json"
+
+
+def weighted_bpb(values: Dict[str, float], weights: Dict[str, float]) -> float:
+    """Aggregate BPB under one weighting, computed as `summarize_bpb` computes
+    it -- same terms, same order, same normalization -- so the two numbers are
+    comparable to the float rather than merely close."""
+    total = sum(weights.values())
+    return sum(values[name] * share
+               for name, share in sorted(weights.items())) / total
+
+
+def _scored_candidate(arm: MixtureArm, *, sources: Sequence[str], tag: str,
+                      out_dir: str, weights: Dict[str, float]) -> tuple:
+    """One candidate arm's row and its scorecard, checked to be a measurement of
+    *this* arm over the whole corpus.
+
+    Three refusals, each for a way the verdict would otherwise be computed from
+    numbers that are not what they are labelled.
+
+    **A card that did not measure every source.** `scoring_sources` deliberately
+    scores a specialist on one source, and both halves of the selection rule need
+    all of them: the aggregate is a fixed-weight average over the corpus, and the
+    per-source regression check compares a candidate to the baseline source by
+    source. An arm scored on a subset has neither, and averaging what it does
+    have would silently renormalize its aggregate onto a different corpus than
+    every other arm's.
+
+    **A card whose checkpoint trained on a different mixture.** The arm
+    definitions are computed, not typed -- `derived` comes from an artifact that
+    a re-run of `derive` can legitimately change -- so the arm named `derived`
+    today and the checkpoint scored as `derived` yesterday can be two mixtures.
+    Nothing else catches it: the run directory, the scorecard name and the tag
+    all still match. `score_arm` records `train_weights` for exactly this, and
+    comparing them is what makes the verdict a statement about the arms that
+    trained rather than about the arms that happen to be defined now.
+
+    **A card whose own aggregate disagrees with this one.** Recomputing under
+    `evaluation_weights` makes "one weighting for every arm" true by
+    construction rather than by assumption, and the recorded `bpb` is then a
+    free check on it: the two agree to float noise when the card was written
+    under the same weighting, and differ visibly when it was written under
+    another -- an equal-weighted card, or one scored before a source joined the
+    root.
+    """
+    path, card = _scored_card(arm, tag=tag, out_dir=out_dir,
+                              missing_note=_REPORT_NEEDS_SCORES)
+    values = full_pass_bpb(card)
+    missing = sorted(set(sources) - set(values))
+    if missing:
+        raise SystemExit(
+            f"the scorecard {path} for arm {arm.name!r} scored "
+            f"{sorted(values)} and not {missing}. A candidate is read by an "
+            f"aggregate over the whole corpus and by a per-source comparison "
+            f"against the baseline, and neither is defined on a subset.")
+
+    trained = (card.details or {}).get("train_weights")
+    if not isinstance(trained, dict) or not trained:
+        raise SystemExit(
+            f"the scorecard {path} does not record the mixture its checkpoint "
+            f"trained on, so it cannot be tied to arm {arm.name!r}. Re-score "
+            f"the arm with `score`, which writes `details.train_weights`.")
+    drifted = sorted(
+        name for name in set(trained) | set(arm.weights)
+        if abs(float(trained.get(name, 0.0))
+               - float(arm.weights.get(name, 0.0))) > WEIGHT_TOLERANCE)
+    if drifted:
+        raise SystemExit(
+            f"the scorecard {path} scored a checkpoint trained on "
+            f"{dict(sorted(trained.items()))}, but arm {arm.name!r} is now "
+            f"{ {name: round(value, 6) for name, value in sorted(arm.weights.items())} } "
+            f"-- they differ on {drifted}. The card measures a different "
+            f"mixture under the same name; re-derive and re-run the arm, or "
+            f"report against the weights it trained on.")
+
+    aggregate = weighted_bpb(values, weights)
+    recorded = card.metrics.get("bpb")
+    if recorded is None or abs(float(recorded) - aggregate) > AGGREGATE_TOLERANCE:
+        raise SystemExit(
+            f"the scorecard {path} records an aggregate BPB of {recorded}, but "
+            f"its per-source values under the fixed evaluation weighting give "
+            f"{aggregate:.6f}. It was scored under a different weighting "
+            f"({(card.details or {}).get('weighting')!r}), so its aggregate is "
+            f"not comparable with the other arms'. Re-score arm {arm.name!r}.")
+
+    row = {
+        "arm": arm.name,
+        "basis": arm.basis,
+        "is_baseline": arm.is_baseline,
+        "run": arm_run_name(arm, tag),
+        "weights": {name: round(value, 6)
+                    for name, value in sorted(arm.weights.items())},
+        "aggregate_bpb": aggregate,
+        "scorecard_bpb": float(recorded),
+        "per_source_bpb": {name: values[name] for name in sources},
+        "scorecard": str(path),
+        "checkpoint_sha256": card.provenance.artifact.sha256,
+    }
+    return row, card
+
+
+def build_report(*, sources: Sequence[str], tag: str,
+                 out_dir: str = SCORECARD_ROOT,
+                 derived: Optional[dict] = None) -> dict:
+    """Phase 7's verdict: which mixture the scored candidates select, and why.
+
+    The derived weights are required rather than optional. `candidate_arms`
+    omits the derived arm when it has none, which is right for a sweep -- an arm
+    that cannot be built should not be trained -- and wrong here: the resulting
+    artifact would announce a selection between the baseline and the
+    quality-heavy arm, in a phase whose whole point is whether a mixture derived
+    from measured excess loss beats them. A verdict that never saw that arm is
+    not a smaller version of the comparison, it is a different one.
+    """
+    from daedalus.mixture_opt import (ArmResult, baseline_arm, domain_floors,
+                                      domain_shares, select_mixture)
+
+    sources = list(dict.fromkeys(sources))
+    if not derived:
+        raise SystemExit(
+            "no derived weights: the candidate stage is baseline, "
+            "quality-heavy and derived, and a verdict that never saw the "
+            "derived arm is a different comparison from the preregistered one. "
+            "Run `derive` and pass its artifact with --derived-weights.")
+
+    weights = evaluation_weights(sources)
+    rows: List[dict] = []
+    cards: Dict[str, object] = {}
+    results: List = []
+    for arm in candidate_arms(sources, derived):
+        row, card = _scored_candidate(arm, sources=sources, tag=tag,
+                                      out_dir=out_dir, weights=weights)
+        rows.append({**row, "domain_shares": {
+            domain: round(value, 6) for domain, value
+            in sorted(domain_shares(arm.weights).items())}})
+        cards[arm.name] = card
+        results.append(ArmResult(name=arm.name, weights=dict(arm.weights),
+                                 aggregate_bpb=row["aggregate_bpb"],
+                                 per_source_bpb=dict(row["per_source_bpb"])))
+
+    floors = domain_floors(baseline_arm(sources).weights)
+    return {
+        "phase": "phase7-mixture",
+        "stage": "candidates",
+        "tag": tag,
+        "created_at": datetime.now(timezone.utc).isoformat()
+                              .replace("+00:00", "Z"),
+        # The yardstick, carried so the aggregates can be recomputed from the
+        # artifact rather than trusted -- and so two verdicts can be checked for
+        # having used the same one.
+        "evaluation_weights": {name: round(value, 6)
+                               for name, value in weights.items()},
+        "measured_on": _comparable(cards),
+        "unrepresented_floored_domains": unrepresented_floored_domains(sources),
+        "arms": rows,
+        "selection": select_mixture(results, floors),
+    }
+
+
+def render_markdown(report: dict) -> str:
+    """The verdict as a page, with the refusals in it.
+
+    Refused arms are rendered, not dropped. A table showing only the arms that
+    survived reads as though the field was smaller than it was, and whether an
+    arm was excluded by a floor, by a per-source cliff, or simply by losing is
+    the most informative line in the artifact.
+    """
+    selection = report["selection"]
+    sources = sorted({name for row in report["arms"]
+                      for name in row["per_source_bpb"]})
+    baseline = next((row for row in report["arms"] if row["is_baseline"]), None)
+    lines = [
+        f"# Phase 7 mixture selection -- tag `{report['tag']}`",
+        "",
+        f"**Verdict: {selection['verdict']} `{selection['selected']}`**"
+        + (f" ({selection['relative_gain']:.2%} better aggregate BPB than the "
+           f"baseline arm)" if "relative_gain" in selection
+           else f" -- {selection.get('reason', '')}"),
+        "",
+        f"Measured on `{report['measured_on'].get('holdout_root')}` at context "
+        f"{report['measured_on'].get('seq_len')}, full pass, every arm "
+        f"aggregated under one fixed weighting: "
+        + ", ".join(f"`{name}` {share:.3f}" for name, share
+                    in sorted(report["evaluation_weights"].items())) + ".",
+        "",
+        "| arm | aggregate BPB | vs baseline | "
+        + " | ".join(f"BPB {name}" for name in sources) + " | admissible |",
+        "|---|---|---|" + "---|" * (len(sources) + 1),
+    ]
+    refused = {row["arm"]: row for row in selection["refusals"]}
+    for row in report["arms"]:
+        gain = ((baseline["aggregate_bpb"] - row["aggregate_bpb"])
+                / baseline["aggregate_bpb"]) if baseline else 0.0
+        if row["is_baseline"]:
+            standing = "baseline"
+        elif row["arm"] in refused:
+            standing = f"no -- {refused[row['arm']]['reason']}"
+        else:
+            standing = "yes"
+        lines.append(
+            f"| `{row['arm']}` | {row['aggregate_bpb']:.4f} | "
+            f"{gain:+.2%} | "
+            + " | ".join(f"{row['per_source_bpb'][name]:.4f}"
+                         for name in sources)
+            + f" | {standing} |")
+
+    lines += ["", "## Rule", "",
+              f"- floors: "
+              + ", ".join(f"`{domain}` >= {value:.4f}" for domain, value
+                          in sorted(selection["floors"].items())),
+              f"- max per-source regression vs baseline: "
+              f"{selection['max_source_regression']:.2%}",
+              f"- minimum aggregate gain before the mixture changes: "
+              f"{selection['min_aggregate_gain']:.2%}"]
+    if report["unrepresented_floored_domains"]:
+        lines.append(
+            "- floored domains with no source under this root, so with nothing "
+            "to constrain: "
+            + ", ".join(f"`{domain}`" for domain
+                        in report["unrepresented_floored_domains"]))
+    if selection["refusals"]:
+        lines += ["", "## Refusals", ""]
+        for refusal in selection["refusals"]:
+            lines.append(f"- `{refusal['arm']}` -- {refusal['reason']}: "
+                         f"{json.dumps(refusal['detail'], sort_keys=True)}")
+    lines += ["", "## Arms", ""]
+    for row in report["arms"]:
+        lines.append(
+            f"- `{row['arm']}` ({row['basis']}): "
+            + ", ".join(f"{name} {value:.4f}" for name, value
+                        in sorted(row["weights"].items()))
+            + f" -- scorecard `{row['scorecard']}`, checkpoint "
+            f"`{row['checkpoint_sha256'][:12]}`")
+    return "\n".join(lines) + "\n"
+
+
 # ====================================================================== cli ====
 
 def _read_derived(path: Optional[str]) -> Optional[dict]:
@@ -918,7 +1194,7 @@ def main(argv=None) -> int:
 
     sub.add_parser("shape")
 
-    for name in ("score", "derive"):
+    for name in ("score", "derive", "report"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--data-dir", required=True,
                          help="the mixture root the arms trained over; the "
@@ -927,6 +1203,18 @@ def main(argv=None) -> int:
         if name == "derive":
             cmd.add_argument("--out", default=None,
                              help=f"default {derived_path('<tag>')}")
+            continue
+        if name == "report":
+            # Required, not optional: `candidate_arms` omits the derived arm
+            # when it has no weights, and a verdict that quietly compared two
+            # arms instead of three would look exactly like one that compared
+            # three.
+            cmd.add_argument("--derived-weights", required=True,
+                             help="the `derive` artifact the candidate sweep "
+                                  "was launched from")
+            cmd.add_argument("--out", default=None,
+                             help=f"default {verdict_path('<tag>')}, with the "
+                                  f"rendered page beside it")
             continue
         cmd.add_argument("--val-dir", required=True,
                          help="the holdout root, one manifest-backed "
@@ -1001,6 +1289,23 @@ def main(argv=None) -> int:
                           "excess_loss": record["excess_loss"],
                           "excess_scores": record["excess_scores"],
                           "wrote": str(out)}, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "report":
+        record = build_report(sources=sources, tag=args.tag,
+                              out_dir=args.scorecard_root, derived=derived)
+        out = Path(args.out) if args.out else verdict_path(
+            args.tag, args.report_root)
+        _write_json(out, record)
+        page = out.with_suffix(".md")
+        page.write_text(render_markdown(record))
+        print(json.dumps({"verdict": record["selection"]["verdict"],
+                          "selected": record["selection"]["selected"],
+                          "ranking": record["selection"]["ranking"],
+                          "refusals": [refusal["arm"] for refusal
+                                       in record["selection"]["refusals"]],
+                          "wrote": [str(out), str(page)]},
+                         indent=2, sort_keys=True))
         return 0
 
     if args.command == "sweep":

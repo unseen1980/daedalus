@@ -27,10 +27,12 @@ from daedalus.mixture_opt import (DOMAIN_FLOOR_FRACTION, EXCESS_RATIO_CAP,
                                   restrict, select_mixture, specialist_name,
                                   unrepresented_floored_domains)
 from scripts.mixture_opt import (PROBE, arm_checkpoint_path, arm_preflight,
-                                 arm_run_name, derive, discover_sources,
-                                 finished_run, foreign_run, run_arm,
-                                 score_arm, scorecard_name, scoring_sources,
-                                 stage_arms, sweep, train_command, weight_args)
+                                 arm_run_name, build_report, derive,
+                                 discover_sources, finished_run, foreign_run,
+                                 render_markdown, run_arm, score_arm,
+                                 scorecard_name, scoring_sources, stage_arms,
+                                 sweep, train_command, verdict_path,
+                                 weight_args, weighted_bpb)
 
 
 #: The three sources this box actually holds under `data/shards-train`.
@@ -902,3 +904,231 @@ def test_scorecards_measured_against_different_holdouts_are_not_subtracted(
     with pytest.raises(SystemExit, match="not measured against one holdout"):
         derive(sources=BOX_SOURCES, tag="probe",
                out_dir=str(tmp_path / "scorecards"))
+
+
+# ------------------------------------------------------------------ verdict ---
+# `select_mixture`'s rules are exercised above against hand-built results. What
+# these assert is that the reporting pass hands it the right numbers: one
+# weighting for every arm, over the whole corpus, from the checkpoint each arm
+# actually trained -- and that it refuses every input where that is not true.
+
+def _score_candidates(tmp_path, *, quality, derived_bpb):
+    """Both stages as `score` leaves them.
+
+    The reference arms first, because the derived mixture is a function of their
+    scorecards, then the two candidate arms trained against it. The baseline is
+    shared across the stages under one tag, so the report reads the same card
+    the derivation did -- which is how it runs on the box.
+    """
+    _score_reference(tmp_path)
+    weights = derive(sources=BOX_SOURCES, tag="probe",
+                     out_dir=str(tmp_path / "scorecards"))["weights"]
+    arms = {arm.name: arm for arm in candidate_arms(BOX_SOURCES, weights)}
+    for name, values in (("quality-heavy", quality), ("derived", derived_bpb)):
+        _trained(arms[name], tmp_path, f"{name} weights".encode())
+        _score(arms[name], tmp_path, values)
+    return weights, arms
+
+
+def _report(tmp_path, weights):
+    return build_report(sources=BOX_SOURCES, tag="probe",
+                        out_dir=str(tmp_path / "scorecards"), derived=weights)
+
+
+def _better_by(delta, base=None):
+    """A per-source BPB table `delta` bits/byte below the baseline's."""
+    return {name: value - delta for name, value in (base or BASELINE_BPB).items()}
+
+
+def test_the_verdict_adopts_the_best_admissible_arm_and_shows_its_working(
+        tmp_path):
+    """The aggregate is recomputed here under the fixed evaluation weighting
+    rather than read off each card, so "one weighting for every arm" is true by
+    construction; the card's own number is then a free check on it."""
+    weights, _ = _score_candidates(tmp_path, quality=_better_by(0.02),
+                                   derived_bpb=_better_by(0.05))
+    report = _report(tmp_path, weights)
+
+    selection = report["selection"]
+    assert selection["verdict"] == "adopt"
+    assert selection["selected"] == "derived"
+    assert [row["arm"] for row in selection["ranking"]] == ["derived",
+                                                            "quality-heavy"]
+    assert selection["refusals"] == []
+
+    fixed = evaluation_weights(BOX_SOURCES)
+    rows = {row["arm"]: row for row in report["arms"]}
+    assert sorted(rows) == ["baseline", "derived", "quality-heavy"]
+    for row in rows.values():
+        assert row["aggregate_bpb"] == pytest.approx(
+            weighted_bpb(row["per_source_bpb"], fixed))
+        # The card's own aggregate agrees, because it was written under this
+        # same weighting -- that is the check, not a second measurement.
+        assert row["scorecard_bpb"] == pytest.approx(row["aggregate_bpb"])
+        assert sorted(row["per_source_bpb"]) == BOX_SOURCES
+        assert Path(row["scorecard"]).exists()
+        assert len(row["checkpoint_sha256"]) == 64
+    assert rows["derived"]["run"] == arm_run_name(
+        candidate_arms(BOX_SOURCES, weights)[-1], "probe")
+    assert selection["relative_gain"] == pytest.approx(
+        (rows["baseline"]["aggregate_bpb"] - rows["derived"]["aggregate_bpb"])
+        / rows["baseline"]["aggregate_bpb"])
+
+    # Recomputable from the artifact: the yardstick, the holdout, the context.
+    assert report["evaluation_weights"] == pytest.approx(fixed, abs=1e-6)
+    assert report["measured_on"]["seq_len"] == PROBE.seq_len
+    assert Path(report["measured_on"]["holdout_root"]).name == "holdout"
+    assert report["unrepresented_floored_domains"] == ["math"]
+
+    page = render_markdown(report)
+    assert "adopt `derived`" in page
+    for name in rows:
+        assert f"`{name}`" in page
+
+
+def test_a_candidate_that_cannot_clear_the_bar_keeps_the_baseline(tmp_path):
+    """A proxy that cannot separate the arms is evidence about the arms. The
+    plan's instruction is to record that, not to advance the best of a tie."""
+    weights, _ = _score_candidates(tmp_path, quality=_better_by(0.001),
+                                   derived_bpb=_better_by(0.002))
+    report = _report(tmp_path, weights)
+
+    selection = report["selection"]
+    assert selection["verdict"] == "keep-baseline"
+    assert selection["selected"] == "baseline"
+    # Admissible and still not selected: the arms cleared the floors and the
+    # per-source bound, and simply did not win by enough.
+    assert selection["admissible"] == ["derived", "quality-heavy"]
+    assert f"{MIN_AGGREGATE_GAIN:.4%}" in selection["reason"]
+    assert "keep-baseline `baseline`" in render_markdown(report)
+
+
+def test_an_arm_that_falls_off_a_cliff_is_refused_and_the_next_one_wins(
+        tmp_path):
+    """The floors constrain the mixture; this constrains what the mixture
+    produced. An arm can satisfy every floor and still have lost a source."""
+    cliff = {**_better_by(0.10), "stack-edu-python":
+             BASELINE_BPB["stack-edu-python"] * (1 + MAX_SOURCE_REGRESSION * 2)}
+    weights, _ = _score_candidates(tmp_path, quality=_better_by(0.02),
+                                   derived_bpb=cliff)
+    report = _report(tmp_path, weights)
+
+    selection = report["selection"]
+    assert [refusal["arm"] for refusal in selection["refusals"]] == ["derived"]
+    assert selection["refusals"][0]["reason"] == "source-regression"
+    assert selection["refusals"][0]["detail"][0]["source"] == "stack-edu-python"
+    # The refused arm had the better aggregate, which is the whole point.
+    rows = {row["arm"]: row for row in report["arms"]}
+    assert rows["derived"]["aggregate_bpb"] < rows["quality-heavy"][
+        "aggregate_bpb"]
+    assert selection["verdict"] == "adopt"
+    assert selection["selected"] == "quality-heavy"
+
+    # Rendered, not dropped: a table of the survivors reads as though the field
+    # was smaller than it was.
+    page = render_markdown(report)
+    assert "no -- source-regression" in page
+    assert "## Refusals" in page
+
+
+def test_a_verdict_that_never_saw_the_derived_arm_is_refused(tmp_path):
+    """`candidate_arms` omits the derived arm when it has no weights -- right
+    for a sweep, and here it would silently make the artifact a comparison of
+    two arms that describes itself as the comparison of three."""
+    _score_candidates(tmp_path, quality=_better_by(0.02),
+                      derived_bpb=_better_by(0.05))
+    with pytest.raises(SystemExit, match="never saw the derived arm"):
+        _report(tmp_path, None)
+
+
+def test_reporting_before_the_candidates_are_scored_names_the_missing_pass(
+        tmp_path):
+    """An arm without a scorecard is not a smaller comparison, it is a
+    different one -- and the refusal has to send the reader to the candidate
+    stage rather than to the reference stage the derivation needs."""
+    _score_reference(tmp_path)
+    weights = derive(sources=BOX_SOURCES, tag="probe",
+                     out_dir=str(tmp_path / "scorecards"))["weights"]
+
+    with pytest.raises(SystemExit, match="quality-heavy.*has no scorecard"):
+        _report(tmp_path, weights)
+    with pytest.raises(SystemExit, match="score --stage candidates"):
+        _report(tmp_path, weights)
+
+
+def _write_card(arm, tmp_path, values, *, weights, sources=None,
+                train_weights=None):
+    """A scorecard written straight through `run_bpb_eval`, to build the ones
+    `score_arm` would never produce."""
+    from daedalus.scorecard import ArtifactRef
+    from scripts.bpb_eval import run_bpb_eval
+
+    run_bpb_eval(
+        name=scorecard_name(arm, "probe"),
+        holdout_root=str(_holdout_root(tmp_path)),
+        out_dir=str(tmp_path / "scorecards"),
+        artifact=ArtifactRef(path="c", sha256="a" * 64, kind="checkpoint",
+                             config=PROBE.config),
+        tokenizer_ref=ArtifactRef(path="<smollm2-default>", sha256="0" * 64,
+                                  kind="tokenizer"),
+        seed=1, git_sha="deadbee", bpb_fn=lambda d: values[Path(d).name],
+        max_batches=None, weights=weights, sources=sources,
+        runtime={"seq_len": PROBE.seq_len},
+        details_extra={"train_weights": train_weights} if train_weights else {})
+
+
+def test_an_arm_scored_under_a_different_weighting_is_not_comparable(tmp_path):
+    """An equal-weighted aggregate and a blueprint-weighted one are two
+    different averages of the same numbers. Subtracting them ranks arms by which
+    weighting their card happened to carry."""
+    weights, arms = _score_candidates(tmp_path, quality=_better_by(0.02),
+                                      derived_bpb=_better_by(0.05))
+    quality = arms["quality-heavy"]
+    _write_card(quality, tmp_path, _better_by(0.02), weights=None,
+                train_weights={name: round(value, 6) for name, value
+                               in quality.weights.items()})
+
+    with pytest.raises(SystemExit, match="different weighting"):
+        _report(tmp_path, weights)
+
+
+def test_a_card_that_did_not_measure_the_whole_corpus_is_refused(tmp_path):
+    """Both halves of the rule need every source: the aggregate is an average
+    over the corpus and the regression check compares source by source."""
+    weights, arms = _score_candidates(tmp_path, quality=_better_by(0.02),
+                                      derived_bpb=_better_by(0.05))
+    quality = arms["quality-heavy"]
+    _write_card(quality, tmp_path, _better_by(0.02), weights=None,
+                sources=["fineweb-edu"],
+                train_weights={name: round(value, 6) for name, value
+                               in quality.weights.items()})
+
+    with pytest.raises(SystemExit, match="not \\['dclm-baseline'"):
+        _report(tmp_path, weights)
+
+
+def test_a_card_scored_before_the_mixture_was_redefined_is_refused(tmp_path):
+    """The arm definitions are computed, not typed: `derived` comes from an
+    artifact a re-run of `derive` can legitimately change. Nothing else catches
+    it -- the run directory, the scorecard name and the tag all still match."""
+    weights, _ = _score_candidates(tmp_path, quality=_better_by(0.02),
+                                   derived_bpb=_better_by(0.05))
+    rederived = normalized({**weights,
+                            "stack-edu-python": weights["stack-edu-python"] * 1.5})
+
+    with pytest.raises(SystemExit) as refused:
+        _report(tmp_path, rederived)
+    # Every share, not just the one that moved: a re-derivation renormalizes,
+    # so one source's excess loss changing shifts the whole mixture.
+    assert "measures a different mixture under the same name" in str(refused.value)
+    assert "differ on ['dclm-baseline', 'fineweb-edu', 'stack-edu-python']" in str(
+        refused.value)
+    # And the same arms under the weights they trained on still report.
+    assert _report(tmp_path, weights)["selection"]["verdict"] == "adopt"
+
+
+def test_the_verdict_is_tag_scoped_like_every_other_stage_artifact():
+    """Two stages sharing one filename is how a rerun overwrites the evidence
+    another stage was launched from."""
+    assert verdict_path("probe").name == "mixture-verdict-probe.json"
+    assert verdict_path("probe") != verdict_path("rerun")
