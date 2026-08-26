@@ -67,6 +67,10 @@ VALID_ARTIFACT_KINDS = {
     "gguf-q6_k",
     "hf-peer",          # a published peer model scored through our harness
     "tokenizer",
+    # An oracle pass: the benchmark's own reference solutions, scored through
+    # the harness that will score models. What is under test there is the
+    # harness, so the artifact is the dataset and no model is named.
+    "canonical-solutions",
 }
 
 # "not-applicable" is not a dodge: a retrieval or code-execution scorecard

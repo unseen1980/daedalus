@@ -166,6 +166,57 @@ class PromptItem:
 _FENCE_RE = re.compile(r"```(?:python|py)?\n(.*?)(?:```|\Z)", re.DOTALL)
 
 
+#: Top-level lines that begin a definition rather than end one. Used only for a
+#: prompt that does not leave a block open, where the answer *is* a top-level
+#: definition and the HumanEval rule below would cut it away entirely.
+_STARTS_DEFINITION = re.compile(r"(?:async\s+def|def|class|import|from|@)\b")
+
+
+def _leaves_an_open_block(prompt: str) -> bool:
+    """Does a completion of `prompt` continue an indented body?
+
+    True for HumanEval+, whose prompt ends inside a function -- signature, then
+    docstring -- so the answer is indented. False for MBPP+, whose prompt is a
+    module docstring ending at column 0, so the answer is a top-level `def`.
+    """
+
+    for line in reversed(prompt.split("\n")):
+        if line.strip():
+            return line[:1].isspace() or line.rstrip().endswith(":")
+    return False
+
+
+def _standalone_program(completion: str) -> str:
+    """The definitions out of a completion that is a program in its own right.
+
+    Leading prose is skipped rather than kept, the same judgement the fenced
+    block below makes: a model that says "here is the solution:" first has
+    answered in a different shape, not failed. Trailing top-level statements --
+    the model's own `assert`s, a `print`, a worked example -- are cut, because
+    this harness supplies the tests and a candidate's are not evidence.
+
+    A completion with no definition in it is returned whole, so it fails as
+    what it is (a syntax error, or a missing entry point) rather than being
+    silently replaced by nothing.
+    """
+
+    lines = completion.split("\n")
+    start = next((index for index, line in enumerate(lines)
+                  if line.strip() and not line[:1].isspace()
+                  and _STARTS_DEFINITION.match(line.strip())), None)
+    if start is None:
+        return completion.rstrip()
+    kept: List[str] = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if (stripped and not line[:1].isspace()
+                and not _STARTS_DEFINITION.match(stripped)
+                and not line.startswith((")", "]", "}"))):
+            break
+        kept.append(line)
+    return "\n".join(kept).rstrip()
+
+
 def extract_code(prompt: str, completion: str) -> str:
     """Turn a raw completion into the program that will be executed.
 
@@ -174,6 +225,14 @@ def extract_code(prompt: str, completion: str) -> str:
     text would fail items the model actually solved, so the completion is cut at
     the first line that leaves the function body. A fenced block, when present,
     is taken as the model's own answer boundary.
+
+    **Which cut applies depends on the prompt, not on the dataset.** The rule
+    above assumes the prompt left a function body open, which is HumanEval+'s
+    shape and not MBPP+'s: an MBPP+ prompt is a module docstring, so the answer
+    is a top-level `def` and "stop at the first top-level line" discards it on
+    line one, leaving the docstring alone as the program. Every MBPP+ item
+    would have failed with the entry point undefined -- a clean, plausible
+    0.000 that measured this function rather than the model.
     """
 
     fenced = _FENCE_RE.search(completion)
@@ -184,6 +243,11 @@ def extract_code(prompt: str, completion: str) -> str:
         if body.lstrip().startswith(("def ", "from ", "import ", "class ")):
             return body.rstrip()
         completion = body
+
+    if not _leaves_an_open_block(prompt):
+        program = _standalone_program(completion)
+        return f"{prompt.rstrip()}\n{program}".rstrip() if program.strip() \
+            else prompt.rstrip()
 
     kept: List[str] = []
     for line in completion.split("\n"):
@@ -418,6 +482,26 @@ _run_plus_suite()
 '''
 
 
+def _differential_program(problem: dict, inputs, entry_point: str,
+                          suite: str) -> str:
+    """Run the candidate and EvalPlus's reference on the same inputs, compare.
+
+    EvalPlus ships inputs and derives expectations by executing the canonical
+    solution, so this does the same rather than inventing expectations.
+    """
+
+    canonical = problem.get("canonical_solution")
+    prompt = problem.get("prompt")
+    if not inputs or canonical is None or prompt is None:
+        raise ValueError(
+            f"problem {problem.get('task_id')!r} has no {suite} inputs or no "
+            f"reference to derive expectations from; keys are {sorted(problem)}")
+    reference = f"{prompt}{canonical}"
+    return _PLUS_TEMPLATE.format(
+        reference=repr(reference), entry_point=entry_point,
+        inputs=repr(list(inputs)), atol=repr(float(problem.get("atol") or 0.0)))
+
+
 def test_program_for(problem: dict, suite: str) -> str:
     """The assertions to run after a candidate solution, for `base` or `plus`.
 
@@ -427,6 +511,14 @@ def test_program_for(problem: dict, suite: str) -> str:
     as a pass. Every generation that merely parsed measured pass@1 = 1.0.
 
     So there is no default. A problem that cannot produce assertions raises.
+
+    **The two datasets do not share a base-suite schema, and assuming they did
+    cost MBPP+ entirely.** HumanEval+ carries `test`; MBPP+ carries no `test`
+    at all -- its base suite is `base_input`, scored against the reference the
+    same way the extended suite is. `--dataset mbpp-plus` was an advertised
+    choice that raised on its first problem, and nothing caught it because it
+    had never been run and every fixture here was written to the code rather
+    than to the dataset (`test_the_real_mbpp_plus_schema_is_the_one_this_harness_reads`).
     """
 
     entry_point = problem.get("entry_point")
@@ -438,32 +530,24 @@ def test_program_for(problem: dict, suite: str) -> str:
         # `check(candidate)`. Appending it and stopping leaves a program with no
         # assertions in it, which exits zero. Calling it is the whole fix.
         test = (problem.get("test") or "").strip()
-        if not test:
+        if test:
+            if "def check" not in test:
+                raise ValueError(
+                    f"problem {problem.get('task_id')!r} base test defines no "
+                    "check(); this is not the schema this harness knows")
+            return f"{test}\n\ncheck({entry_point})\n"
+        if problem.get("base_input") is None:
             raise ValueError(
-                f"problem {problem.get('task_id')!r} carries no base test; "
-                f"keys are {sorted(problem)}")
-        if "def check" not in test:
-            raise ValueError(
-                f"problem {problem.get('task_id')!r} base test defines no "
-                "check(); this is not the schema this harness knows")
-        return f"{test}\n\ncheck({entry_point})\n"
+                f"problem {problem.get('task_id')!r} carries neither a base "
+                f"test nor base inputs; keys are {sorted(problem)}")
+        return _differential_program(problem, problem.get("base_input"),
+                                     entry_point, "base")
 
     if suite != "plus":
         raise ValueError(f"unknown suite {suite!r}; expected 'base' or 'plus'")
 
-    # The extended suite is inputs only -- EvalPlus derives expectations by
-    # running the reference. So do the same, in-process, and compare.
-    inputs = problem.get("plus_input")
-    canonical = problem.get("canonical_solution")
-    prompt = problem.get("prompt")
-    if not inputs or canonical is None or prompt is None:
-        raise ValueError(
-            f"problem {problem.get('task_id')!r} has no plus inputs or no "
-            f"reference to derive expectations from; keys are {sorted(problem)}")
-    reference = f"{prompt}{canonical}"
-    return _PLUS_TEMPLATE.format(
-        reference=repr(reference), entry_point=entry_point,
-        inputs=repr(list(inputs)), atol=repr(float(problem.get("atol") or 0.0)))
+    return _differential_program(problem, problem.get("plus_input"),
+                                 entry_point, "plus")
 
 
 def evaluate_problems(problems: Dict[str, dict], backend, *,
@@ -576,6 +660,25 @@ def run_code_eval(name: str, problems: Dict[str, dict], backend, *, out_dir,
 
 # --------------------------------------------------------------------- cli ---
 
+class CanonicalBackend:
+    """EvalPlus's own solution for each problem, in place of a generation.
+
+    An oracle pass measures the *harness* -- extraction, sandbox, both suites,
+    the scoring rule -- against the real dataset rather than a fixture, and it
+    is the only thing that separates a model which cannot code from a harness
+    which cannot score one. Both have happened here: HumanEval+ once returned
+    1.000 for programs containing no assertions, and MBPP+ could not run at
+    all. A 0.000 is only a fact about a model once the references score 1.000
+    on the same path.
+    """
+
+    def __init__(self, problems: Dict[str, dict]):
+        self._problems = problems
+
+    def generate(self, item) -> str:
+        return self._problems[item.id]["canonical_solution"]
+
+
 def _git_short_sha() -> str:
     try:
         result = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
@@ -588,7 +691,11 @@ def _git_short_sha() -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", choices=DATASETS, default="humaneval-plus")
-    parser.add_argument("--backend", choices=("torch", "llama-cpp"), required=True)
+    parser.add_argument("--backend", choices=("torch", "llama-cpp"), default=None)
+    parser.add_argument(
+        "--oracle", action="store_true",
+        help="score EvalPlus's own solutions instead of a model's, to show the "
+             "harness can score this dataset at all; writes <dataset>-oracle")
     parser.add_argument("--gguf")
     parser.add_argument("--llama-cli", default="/opt/llama.cpp/build/bin/llama-cli")
     parser.add_argument("--checkpoint")
@@ -606,6 +713,9 @@ def main(argv=None) -> int:
     parser.add_argument("--out-dir", default="runs/eval/code")
     args = parser.parse_args(argv)
 
+    if not args.backend and not args.oracle:
+        parser.error("--backend is required unless --oracle is given")
+
     from scripts.retrieval_eval import LlamaCppBackend, TorchBackend
 
     runtime = {"backend": args.backend, "max_new_tokens": args.max_new_tokens}
@@ -615,7 +725,19 @@ def main(argv=None) -> int:
     except ImportError:
         runtime["evalplus"] = "absent"
 
-    if args.backend == "llama-cpp":
+    problems = load_problems(args.dataset, limit=args.limit)
+    name = args.dataset
+
+    if args.oracle:
+        # No model is loaded and none is named in the provenance: the artifact
+        # under test is the dataset. The scorecard is written under a different
+        # name so an oracle pass can never be read back as a model's score.
+        backend = CanonicalBackend(problems)
+        artifact = ArtifactRef(path=f"evalplus:{args.dataset}", sha256="0" * 64,
+                               kind="canonical-solutions")
+        runtime.update({"backend": "oracle", "oracle": True})
+        name = f"{args.dataset}-oracle"
+    elif args.backend == "llama-cpp":
         if not args.gguf:
             parser.error("--gguf is required for the llama-cpp backend")
         backend = LlamaCppBackend(args.gguf, args.llama_cli, threads=args.threads,
@@ -651,8 +773,7 @@ def main(argv=None) -> int:
                      else ArtifactRef(path="<embedded>", sha256="0" * 64,
                                       kind="tokenizer"))
 
-    problems = load_problems(args.dataset, limit=args.limit)
-    paths = run_code_eval(args.dataset, problems, backend, out_dir=args.out_dir,
+    paths = run_code_eval(name, problems, backend, out_dir=args.out_dir,
                           artifact=artifact, tokenizer_ref=tokenizer_ref,
                           seed=args.seed, git_sha=_git_short_sha(),
                           dataset_revision=args.dataset_revision,

@@ -63,6 +63,62 @@ def test_extract_code_reports_an_empty_generation():
     assert extract_code("def add(a, b):\n", "   \n\n") == "def add(a, b):"
 
 
+# MBPP+ prompts are module docstrings, so the answer is a *top-level* def and
+# the HumanEval rule above would cut it away on its first line -- leaving the
+# docstring alone as the program, and every item failing on an undefined entry
+# point. That reads as a model which cannot code.
+MBPP_PROMPT = '"""\nWrite a function to add two numbers.\nassert add(1, 2) == 3\n"""\n'
+
+
+def test_extract_code_keeps_a_top_level_definition_after_a_docstring_prompt():
+    from scripts.code_eval import extract_code
+
+    solution = extract_code(MBPP_PROMPT, "def add(a, b):\n    return a + b\n")
+
+    assert "def add(a, b):" in solution and "return a + b" in solution
+
+
+def test_extract_code_keeps_the_imports_a_top_level_answer_needs():
+    from scripts.code_eval import extract_code
+
+    solution = extract_code(
+        MBPP_PROMPT, "import math\n\ndef area(r):\n    return math.pi * r * r\n")
+
+    assert "import math" in solution and "def area(r):" in solution
+
+
+def test_extract_code_cuts_a_top_level_answers_own_tests():
+    """The harness supplies the tests; a candidate's own assert is not
+    evidence, and an assert that fails would fail an item the model solved."""
+    from scripts.code_eval import extract_code
+
+    solution = extract_code(
+        MBPP_PROMPT,
+        "def add(a, b):\n    return a + b\n\nassert add(1, 2) == 99\nprint(add(1, 2))\n")
+
+    assert "assert" not in solution.split('"""')[-1]
+    assert "print(" not in solution
+
+
+def test_extract_code_skips_prose_before_a_top_level_answer():
+    from scripts.code_eval import extract_code
+
+    solution = extract_code(
+        MBPP_PROMPT, "Here is the solution:\n\ndef add(a, b):\n    return a + b\n")
+
+    assert "Here is the solution" not in solution
+    assert "def add(a, b):" in solution
+
+
+def test_extract_code_keeps_a_completion_with_no_definition_in_it():
+    """So it fails as what it is, rather than being replaced by nothing."""
+    from scripts.code_eval import extract_code
+
+    solution = extract_code(MBPP_PROMPT, "the answer is 3\n")
+
+    assert "the answer is 3" in solution
+
+
 # ------------------------------------------------------------------ syntax ---
 
 def test_check_syntax_accepts_valid_code():
@@ -372,6 +428,65 @@ def _fake_problems():
     }
 
 
+def _fake_mbpp_problems():
+    """MBPP+'s real shape, which is *not* HumanEval+'s.
+
+    Keys taken from the failure that found this: `['assertion', 'atol',
+    'base_input', 'canonical_solution', 'contract', 'entry_point', 'plus_input',
+    'prompt', 'task_id']`. No `test`, so the base suite is inputs scored against
+    the reference, and the prompt is a module docstring rather than an open
+    function body. `test_the_real_mbpp_plus_schema_is_the_one_this_harness_reads`
+    holds this fixture to the dataset.
+    """
+    return {
+        "Mbpp/2": {
+            "task_id": "Mbpp/2",
+            "prompt": MBPP_PROMPT,
+            "entry_point": "add",
+            "canonical_solution": "def add(a, b):\n    return a + b\n",
+            "assertion": "assert add(1, 2) == 3",
+            "contract": "",
+            "base_input": [[1, 2]],
+            "plus_input": [[-1, 1], [0, 0]],
+            "atol": 0,
+        },
+    }
+
+
+def test_a_base_suite_is_built_from_inputs_when_the_dataset_ships_no_test():
+    """MBPP+ carries no `test` key at all; the base suite is `base_input`."""
+    from scripts.code_eval import test_program_for
+
+    problem = _fake_mbpp_problems()["Mbpp/2"]
+
+    program = test_program_for(problem, "base")
+
+    assert "_run_plus_suite()" in program
+    assert repr([[1, 2]]) in program            # base inputs, not plus inputs
+    assert repr([[-1, 1], [0, 0]]) not in program
+
+
+def test_a_problem_with_neither_a_test_nor_inputs_still_raises():
+    """The no-default rule that the empty-program pass@1 = 1.0 defect cost."""
+    from scripts.code_eval import test_program_for
+
+    problem = dict(_fake_mbpp_problems()["Mbpp/2"])
+    problem.pop("base_input")
+
+    with pytest.raises(ValueError, match="neither a base test nor base inputs"):
+        test_program_for(problem, "base")
+
+
+def test_an_empty_input_list_raises_rather_than_scoring_a_pass():
+    """A program with no assertions in it exits zero and counts as a pass."""
+    from scripts.code_eval import test_program_for
+
+    problem = dict(_fake_mbpp_problems()["Mbpp/2"], base_input=[])
+
+    with pytest.raises(ValueError, match="no base inputs"):
+        test_program_for(problem, "base")
+
+
 class ScriptedBackend:
     """Returns a fixed completion per prompt, so scoring is tested alone."""
 
@@ -421,7 +536,46 @@ def test_plus_tests_only_count_when_the_base_tests_pass():
     assert by_id["HumanEval/0"]["plus_passed"] == 0
 
 
-def test_summarize_code_reports_pass_at_1_and_failure_categories():
+@pytest.mark.slow
+def test_an_mbpp_shaped_problem_scores_end_to_end():
+    """The whole path MBPP+ needs: a docstring prompt, a top-level answer,
+    a base suite with no `test` key, and both suites executed."""
+    from scripts.code_eval import evaluate_problems
+
+    backend = ScriptedBackend({"Mbpp/2": "def add(a, b):\n    return a + b\n"})
+
+    records = evaluate_problems(_fake_mbpp_problems(), backend, timeout_s=10.0)
+
+    assert records[0]["base_passed"] == 1
+    assert records[0]["plus_passed"] == 1
+    assert records[0]["syntax_valid"] == 1
+
+
+@pytest.mark.slow
+def test_a_wrong_mbpp_answer_fails_the_suite_it_is_scored_against():
+    """The other half: the path above must be able to say no."""
+    from scripts.code_eval import evaluate_problems
+
+    backend = ScriptedBackend({"Mbpp/2": "def add(a, b):\n    return a - b\n"})
+
+    records = evaluate_problems(_fake_mbpp_problems(), backend, timeout_s=10.0)
+
+    assert records[0]["base_passed"] == 0
+    assert records[0]["category"] == "assertion_failed"
+
+
+@pytest.mark.slow
+def test_the_oracle_backend_returns_the_datasets_own_solution():
+    """An oracle pass measures the harness, so it must run the reference
+    through the same extraction and sandbox a candidate goes through."""
+    from scripts.code_eval import CanonicalBackend, evaluate_problems
+
+    problems = _fake_mbpp_problems()
+
+    records = evaluate_problems(problems, CanonicalBackend(problems),
+                                timeout_s=10.0)
+
+    assert records[0]["base_passed"] == 1 and records[0]["plus_passed"] == 1
     from scripts.code_eval import summarize_code
 
     records = [
@@ -560,6 +714,32 @@ def test_the_real_evalplus_problems_carry_an_executable_test():
             f"{sorted(problem)}")
         # The exact defect: EvalPlus's `test` only *defines* check(candidate).
         assert f"check({problem['entry_point']})" in base
+
+
+@pytest.mark.slow
+def test_the_real_mbpp_plus_schema_is_the_one_this_harness_reads():
+    """MBPP+ was an advertised `--dataset` choice that had never been run.
+
+    It ships no `test` key at all -- the base suite is inputs, like the plus
+    suite -- so `test_program_for` raised on the first problem of the phase 8
+    baseline. Same shape as the defect phase 2 found in the HumanEval path, and
+    it survived for the same reason: every fixture in this file was written to
+    the code rather than to the dataset.
+    """
+    pytest.importorskip("evalplus", reason="evalplus absent")
+    from scripts.code_eval import load_problems
+
+    problems = load_problems("mbpp-plus", limit=1)
+    task_id, problem = next(iter(problems.items()))
+
+    assert "test" not in problem, f"{task_id} keys: {sorted(problem)}"
+    assert problem["entry_point"], f"{task_id} keys: {sorted(problem)}"
+    assert problem["base_input"], f"{task_id} carries no base inputs"
+    assert problem["plus_input"], f"{task_id} carries no plus inputs"
+    assert problem["canonical_solution"].lstrip().startswith(
+        ("def ", "import ", "from ")), repr(problem["canonical_solution"][:200])
+    assert problem["prompt"].lstrip().startswith('"""'), \
+        repr(problem["prompt"][:200])
 
 
 @pytest.mark.slow
