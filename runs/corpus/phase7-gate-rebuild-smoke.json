@@ -1,0 +1,171 @@
+{
+  "allocation": {
+    "capped_sources": [],
+    "l1_skew_pts": 0.0,
+    "max_epochs": 4.0,
+    "max_epochs_seen": 2.88,
+    "most_repeated_source": "everyday-conversations",
+    "per_source": {
+      "everyday-conversations": {
+        "capped": false,
+        "effective_share": 1.0,
+        "epochs": 2.88,
+        "target_share": 1.0,
+        "tokens_on_disk": 69438
+      }
+    },
+    "supply_basis": {
+      "everyday-conversations": "total_tokens"
+    },
+    "tokens_present_locally": {
+      "everyday-conversations": 69438
+    },
+    "total_run_tokens": 200000,
+    "total_tokens_on_disk": 69438
+  },
+  "budget_tokens": 200000,
+  "created_at": "2026-08-26T13:23:58.544573Z",
+  "criteria": [
+    {
+      "criterion": "decontam-index-complete",
+      "detail": "",
+      "evidence": [
+        "runs/corpus/decontam-index.json"
+      ],
+      "observed": {
+        "arc_easy": {
+          "indexed": true,
+          "items": 2376,
+          "scored_split": "test",
+          "split": "test"
+        },
+        "complete": true,
+        "digest": "sha256:6f1278f0e468c5f29593e05f5287cfe8d5c5d19588095dd733db3bab488c08c6",
+        "hellaswag": {
+          "indexed": true,
+          "items": 10042,
+          "scored_split": "validation",
+          "split": "validation"
+        },
+        "limit": null,
+        "ngrams": 1371773,
+        "openbookqa": {
+          "indexed": true,
+          "items": 500,
+          "scored_split": "test",
+          "split": "test"
+        },
+        "piqa": {
+          "indexed": true,
+          "items": 1838,
+          "scored_split": "validation",
+          "split": "validation"
+        },
+        "winogrande": {
+          "indexed": true,
+          "items": 1267,
+          "scored_split": "validation",
+          "split": "validation"
+        }
+      },
+      "passed": true
+    },
+    {
+      "criterion": "corpus-contamination",
+      "detail": "1 document(s) hit the 'split_gap' index; 1 document(s) hit the 'limit_gap' index; the scan saw 'everyday-conversations' at 403,573 tokens and the corpus holds 69,438, so 334,135 were never scanned; the scan covered ['cosmopedia-v2', 'dclm-baseline', 'finemath-3plus', 'finepdfs-edu', 'finephrase', 'fineweb-edu', 'finewiki-en', 'infiwebmath-3plus', 'stack-edu-python'], which this corpus does not hold",
+      "evidence": [
+        "runs/preflight/contam-exposure.json"
+      ],
+      "observed": {
+        "corpus_tokens": 16988128870,
+        "doc_rate_filtered_upper95": 2.1960050981342178e-05,
+        "doc_rate_limit_gap_upper95": 3.238373527547139e-05,
+        "doc_rate_split_gap_upper95": 3.238373527547139e-05,
+        "docs_filtered": 0,
+        "docs_limit_gap": 1,
+        "docs_scanned": 174932,
+        "docs_split_gap": 1,
+        "sampled_frac": 0.013226496438745228,
+        "scan_source_tokens": {
+          "cosmopedia-v2": 950000576,
+          "dclm-baseline": 3375002145,
+          "everyday-conversations": 403573,
+          "finemath-3plus": 1350008857,
+          "finepdfs-edu": 1200001535,
+          "finephrase": 2066170024,
+          "fineweb-edu": 5035572292,
+          "finewiki-en": 450005019,
+          "infiwebmath-3plus": 1350000198,
+          "stack-edu-python": 1210964651
+        }
+      },
+      "passed": false
+    },
+    {
+      "criterion": "epoch-cap",
+      "detail": "",
+      "evidence": [
+        "data/shards-rebuild-smoke/everyday-conversations/manifest.json"
+      ],
+      "observed": {
+        "budget_tokens": 200000,
+        "capped_sources": [],
+        "epochs": {
+          "everyday-conversations": 2.88
+        },
+        "max_epochs": 4.0,
+        "max_epochs_seen": 2.88,
+        "most_repeated_source": "everyday-conversations"
+      },
+      "passed": true
+    },
+    {
+      "criterion": "mixture-skew",
+      "detail": "",
+      "evidence": [
+        "data/shards-rebuild-smoke/everyday-conversations/manifest.json"
+      ],
+      "observed": {
+        "all_capped_fallback": false,
+        "effective_shares": {
+          "everyday-conversations": 1.0
+        },
+        "l1_skew_pts": 0.0,
+        "max_epochs_seen": 2.88,
+        "max_skew_pts": 5.0,
+        "target_shares": {
+          "everyday-conversations": 1.0
+        }
+      },
+      "passed": true
+    },
+    {
+      "criterion": "manifest-provenance",
+      "detail": "",
+      "evidence": [
+        "data/shards-rebuild-smoke/everyday-conversations/manifest.json"
+      ],
+      "observed": {
+        "everyday-conversations": {
+          "builder_git_sha": "4c5efc69f4048d3567a5a508c7aa3dbabe95c538",
+          "has_filters": true,
+          "license": "apache-2.0",
+          "readable": true,
+          "resolved_commit": "14f543216b9ba42b6b951dc5bd199460d193b162",
+          "source_revision": null
+        }
+      },
+      "passed": true
+    }
+  ],
+  "dropped_sources": [],
+  "gate": "phase7-corpus",
+  "passed": false,
+  "schema": 1,
+  "shards_root": "data/shards-rebuild-smoke",
+  "sources": [
+    "everyday-conversations"
+  ],
+  "supply": "local",
+  "weights_source": "daedalus.dataprep.MIXTURE"
+}

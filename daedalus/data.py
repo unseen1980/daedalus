@@ -145,6 +145,13 @@ def assert_shards_vocab_size(data_dir: str, vocab_size: int) -> None:
     mixture root of them -- because the mismatch is per-directory and a mixture
     can be wrong in one source. A manifest with no fingerprint is passed
     through, so every corpus built before the field existed keeps loading.
+
+    Every source under the root is checked, including one this run's weights
+    might not name. `resolve_mixture` reads whatever has a `manifest.json`, so a
+    tree of another vocabulary sitting in a mixture root is one weight away from
+    being sampled -- and the run that finds it is not necessarily the one that
+    put it there. Roots hold one vocabulary; phase 4 kept its four apart for
+    this reason, and the refusal says which directory broke that.
     """
     mismatched = []
     for path in shard_manifests(data_dir):

@@ -1,0 +1,52 @@
+per-source budgets given; target is their sum: 200,000 tokens across 1 source(s)
+  everyday-conversations            200,000
+loading frozen eval n-gram index from data/decontam/eval-index-13gram.txt.gz ...
+eval n-gram index: 1,371,773 13-grams over 16,023 items (sha256:6f1278f0e468c5f29593e05f5287cfe8d5c5d19588095dd733db3bab488c08c6)
+dispatching 1 group(s) across 1 worker process(es) (per-worker mem limit=4.0 GB, abort if available memory < 6.0 GB)
+=== everyday-conversations (HuggingFaceTB/everyday-conversations-llama3.1-2k) share=1.000 budget=200,000 tokens (group=everyday-conversations) ===
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[everyday-conversations] stream exhausted at 69,438 tokens of a 200,000 budget -- this source has no more documents
+=== done everyday-conversations: tokens=69,438 ===
+{
+  "target_tokens": 200000,
+  "substitutions": {
+    "nvidia/Nemotron-CC-v2": "manually-gated on the Hub; access was not granted at run time (verified live before this run). Its 12% share was redistributed proportionally to fineweb-edu (+7.5pp) and dclm-baseline-1.0 (+4.5pp), the closest-in-kind general high-quality web corpora already in the mixture.",
+    "nvidia/Nemotron-CC-Math-v1": "auto-gated on the Hub; access was not granted at run time. Its portion of AGENT.md's 6% 'finemath \u222a Nemotron-CC-Math-v1' bucket is covered entirely by HuggingFaceTB/finemath (finemath-3plus + infiwebmath-3plus), already in the mixture.",
+    "HuggingFaceTB/smollm-corpus (Stack-Edu/Python config)": "ships only Stack-v2 blob_id/repo/path metadata, not raw text (Stack-v2 license terms require joining against gated raw-content storage). Substituted with codeparrot/github-code (parquet-converted revision) filtered to language=='Python'."
+  },
+  "dedup": {
+    "exact": "64-bit blake2b hash set over normalized text, scoped per near_dup_group (one process per group -- see daedalus/dataprep.py docstring's Parallelism section)",
+    "near_dup": "MinHashLSH threshold=0.85 num_perm=64, reset every 2000000 docs per source-group (bounded memory approximation, see daedalus/dataprep.py docstring)"
+  },
+  "decontam": "8/13-gram overlap vs HellaSwag/ARC-Easy/PIQA/OpenBookQA/WinoGrande",
+  "decontam_index": {
+    "digest": "sha256:6f1278f0e468c5f29593e05f5287cfe8d5c5d19588095dd733db3bab488c08c6",
+    "path": "data/decontam/eval-index-13gram.txt.gz",
+    "n": 13,
+    "ngrams": 1371773,
+    "complete": true,
+    "built_at": "2026-08-26T07:19:08Z",
+    "items": {
+      "arc_easy": 2376,
+      "hellaswag": 10042,
+      "openbookqa": 500,
+      "piqa": 1838,
+      "winogrande": 1267
+    },
+    "splits": {
+      "arc_easy": "test",
+      "hellaswag": "validation",
+      "openbookqa": "test",
+      "piqa": "validation",
+      "winogrande": "validation"
+    }
+  },
+  "dedup_counters": {
+    "kept": 400,
+    "exact_dup": 0,
+    "near_dup": 0,
+    "contaminated": 0
+  },
+  "total_tokens": 69438,
+  "achieved_fraction": 0.34719
+}

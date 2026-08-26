@@ -113,7 +113,7 @@
     "total_tokens_on_disk": 17146050431
   },
   "budget_tokens": 59900000000,
-  "created_at": "2026-08-26T11:42:35.811182Z",
+  "created_at": "2026-08-26T13:24:07.736819Z",
   "criteria": [
     {
       "criterion": "decontam-index-complete",

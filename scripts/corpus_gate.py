@@ -330,7 +330,16 @@ def manifest_provenance_verdict(shards_root, sources: Sequence[str]) -> dict:
             continue
         release = payload.get("source_release") or {}
         revision = payload.get("source_revision")
-        resolved = release.get("resolved_commit")
+        # `sha` is what `dataprep.resolve_source_release` writes -- the commit
+        # the Hub served on the day the source was built. This read `resolved_
+        # commit`, a name no writer produces, so the criterion could not pass on
+        # a correctly provenanced manifest; and it looked right for months
+        # because the corpus it was run against carries no `source_release` at
+        # all, so it failed for the reason it was meant to and not for this one.
+        # A one-source rebuild under `--tokenizer` is what surfaced it: full
+        # provenance on disk, `no source_revision and no resolved commit` in the
+        # verdict. The alias is kept for a manifest written to the other shape.
+        resolved = release.get("sha") or release.get("resolved_commit")
         row = {
             "readable": True,
             "source_revision": revision,

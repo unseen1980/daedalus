@@ -81,9 +81,15 @@ def _manifest(root, name, *, tokens=1_000_000, revision=None, resolved="c0ffee",
     if subset_of is not None:
         payload["subset_of"] = {"shards": 100, "total_tokens": subset_of}
     if resolved is not None:
+        # The shape `dataprep.resolve_source_release` actually writes. It used
+        # to say `resolved_commit`, a key no writer produces -- so this fixture
+        # agreed with the criterion and both disagreed with every real manifest.
+        # `test_provenance_reads_the_record_dataprep_writes` is the tie that
+        # stops that recurring.
         payload["source_release"] = {"repo_id": f"org/{name}",
-                                     "resolved_commit": resolved,
-                                     "license": "odc-by"}
+                                     "requested_revision": revision,
+                                     "resolved": True, "sha": resolved,
+                                     "license": "odc-by", "gated": False}
     if filters:
         payload["filters"] = {"min_chars": 200, "row_filter": False}
     if git_sha is not None:
@@ -336,6 +342,57 @@ def test_provenance_passes_on_a_hub_resolved_commit(tmp_path):
 
     assert verdict["passed"], verdict["detail"]
     assert verdict["observed"]["fineweb-edu"]["license"] == "odc-by"
+
+
+def test_provenance_reads_the_record_dataprep_writes(tmp_path, monkeypatch):
+    """Built by the writer, read by the criterion, with no hand-typed shape in
+    between -- which is the only way this stays true.
+
+    The criterion read `source_release.resolved_commit`; `resolve_source_release`
+    writes `sha`. Nothing caught it: the fixture above was written to the
+    criterion's expectation, and the corpus it runs against carries no
+    `source_release` at all, so it failed for the reason it was designed to and
+    the unpassable-by-construction bug sat underneath. A one-source rebuild --
+    full provenance on disk, `no source_revision and no resolved commit` in the
+    verdict -- is what surfaced it.
+    """
+    from daedalus import dataprep as dp
+
+    monkeypatch.setattr(dp, "_RELEASE_CACHE", {})
+
+    class _CardData:
+        def __init__(self, license_value):
+            self.license = license_value
+
+        def get(self, key, default=None):
+            return getattr(self, key, default)
+
+    class _Info:
+        sha = "14f543216b9ba42b6b951dc5bd199460d193b162"
+        gated = False
+        card_data = _CardData("apache-2.0")
+
+    class _Api:
+        def dataset_info(self, repo_id, revision=None, timeout=None):
+            return _Info()
+
+    spec = dp.SourceSpec("fineweb-edu", "HuggingFaceFW/fineweb-edu", share=1.0)
+    release = dp.resolve_source_release(spec, api=_Api())
+    provenance = dp.source_provenance(spec, min_chars=200, dedup=dp.DedupState(),
+                                      release=release)
+
+    directory = tmp_path / "fineweb-edu"
+    directory.mkdir(parents=True)
+    (directory / "manifest.json").write_text(json.dumps({
+        "source_key": "fineweb-edu", "eos_id": 0, "total_tokens": 10,
+        "shards": [{"file": "fineweb-edu_00000.bin", "tokens": 10}],
+        **provenance}))
+
+    verdict = manifest_provenance_verdict(tmp_path, ["fineweb-edu"])
+
+    assert verdict["passed"], verdict["detail"]
+    assert verdict["observed"]["fineweb-edu"]["resolved_commit"] == _Info.sha
+    assert verdict["observed"]["fineweb-edu"]["license"] == "apache-2.0"
 
 
 def test_provenance_passes_on_an_explicit_revision_without_a_lookup(tmp_path):
