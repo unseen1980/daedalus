@@ -27,6 +27,24 @@ A 150M base scoring ~zero on execution is the expected result, not a broken harn
 
 The number to watch first is **MBPP+ syntax validity at 0.238** against HumanEval+'s 1.000. The base can continue a function body it is given; asked for a program from a prose description it mostly emits something that does not parse. That is the headroom continued pretraining is supposed to take, and it moves long before pass@1 does — which matters for a 250M-token probe, where a gate resting on pass@1 alone would read every arm as identical zero.
 
+## Decontamination, before any corpus is built
+
+`daedalus/eval_index.py` freezes the n-grams of the five multiple-choice tasks and contains nothing from HumanEval+ or MBPP+ — nothing was scored on them when it was built. Filtering a 65%-code corpus against it alone would decontaminate against the benchmarks this model is *not* judged by and leave the two it is. HumanEval and MBPP are public repositories, and their prompts, references and assertions are copied verbatim into tutorials, harness forks and solution sets: ordinary permissive Python that a code corpus ingests happily. The gate below reads "pass@1 improves over untouched base", and an unfiltered corpus can deliver that by memorisation.
+
+So `daedalus/codeprep.py` freezes a second index, content-addressed the same way, built with `python scripts/codeprep.py decontam build`:
+
+| | HumanEval+ | MBPP+ |
+| --- | --- | --- |
+| items | 164 | 378 |
+| prompt | 9,133 13-grams | 5,341 (3 too short) |
+| canonical solution | 2,587 (36 too short) | 2,686 (**197** too short) |
+| reference (prompt + solution) | 13,458 | 11,790 |
+| test | 9,955 | ships none; its assertion is inside the prompt |
+
+34,286 13-grams, `sha256:67d21afc…5cdf78`, EvalPlus 0.3.1. Sidecar in `data/decontam/code-index-13gram.txt.gz.json`, verification record in `runs/codeprep/decontam-index.json`.
+
+Two things are pinned rather than defaulted. **`n` is 13** because `DedupState.keep` calls `is_contaminated` at 13 over one set, so a code build filters against `general | code`; an index at any other length loads without complaint, unions without complaint, and matches nothing, so `code_coverage_problems` refuses it — as it refuses a general sidecar handed in as a code one. And **52% of MBPP+ canonical solutions are under 13 whitespace tokens** and cannot be filtered on alone. That is recorded, not fixed: `return min(x)` is three tokens that occur in every Python corpus ever built, and an index that matched them would empty this one rather than clean it. Every item is still covered through its joined reference, which is what a solutions repo actually contains, and no item is unfilterable outright — that case is a build refusal.
+
 ## Preregistered gates
 
 Set before any arm runs, and not adjusted after seeing a number.
@@ -42,4 +60,4 @@ Final acceptance: code BPB improves ≥5%, HumanEval+/MBPP+ pass@1 and syntax va
 
 ## Status
 
-Branch created from #14's tested SHA; parent recorded in `runs/vast-program/code-run-manifest.json`. Base baselines and both harness oracles are in. No training has started.
+Branch created from #14's tested SHA; parent recorded in `runs/vast-program/code-run-manifest.json`. Base baselines and both harness oracles are in, and the code decontamination index is frozen and verified. No corpus has been built and no training has started.
