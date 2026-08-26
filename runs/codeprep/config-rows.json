@@ -1,0 +1,46 @@
+{
+  "C++-all": {
+    "errors": {},
+    "files": 10,
+    "files_read": 10,
+    "rows": 389000
+  },
+  "C-all": {
+    "errors": {},
+    "files": 10,
+    "files_read": 10,
+    "rows": 354000
+  },
+  "Java-all": {
+    "errors": {},
+    "files": 10,
+    "files_read": 10,
+    "rows": 828000
+  },
+  "JavaScript-all": {
+    "errors": {},
+    "files": 10,
+    "files_read": 10,
+    "rows": 605000
+  },
+  "Python-all": {
+    "errors": {},
+    "files": 10,
+    "files_read": 10,
+    "rows": 641000
+  },
+  "TypeScript-all": {
+    "errors": {},
+    "files": 10,
+    "files_read": 10,
+    "rows": 369000
+  },
+  "all-all": {
+    "errors": {
+      "all-all/partial-train/0009.parquet": "HfHubHTTPError('(Request ID: 01M0ZT5W8WZWAATFBMCQPQ6XJJ)\\n\\n429 Too Many Requests for url: https://us.aws.cdn.hf.co/xet-bridge-us/621ffdd236468d709f183929/ab025c77118a84d775286e7d38620591e17223e21c754de48f4f37029a9fe01f?response-content-disposition=inline%3B+filename*%3DUTF-8%27%270009.parquet%3B+filename%3D%220009.parquet%22%3B&user_id=public&X-Xet-Cas-Uid=public&Expires=1787777638&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjIxZmZkZDIzNjQ2OGQ3MDlmMTgzOTI5L2FiMDI1Yzc3MTE4YTg0ZDc3NTI4NmU3ZDM4NjIwNTkxZTE3MjIzZTIxYzc1NGRlNDhmNGYzNzAyOWE5ZmUwMWZcXD9yZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3MDAwOS5wYXJxdWV0JTNCK2ZpbGVuYW1lJTNEJTIyMDAwOS5wYXJxdWV0JTIyJTNCJnVzZXJfaWQ9cHVibGljJlgtWGV0LUNhcy1VaWQ9cHVibGljIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3ODc3Nzc2Mzh9fX1dfQ__&Signature=MEQCIBd5Oc2jVNWoEp30B0wRd5rUqMLR-cgyRhNFIRCJhy-GAiB5XsykBY-SgHmwGKRNoiaA3YjLGotdUTvmN8hLWmYadg__&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F.')"
+    },
+    "files": 10,
+    "files_read": 9,
+    "rows": 547000
+  }
+}

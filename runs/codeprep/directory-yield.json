@@ -1,0 +1,534 @@
+{
+  "holdout_frac": 0.02,
+  "languages": {
+    "c-cpp": {
+      "configs": [
+        {
+          "admitted": {
+            "holdout": 11,
+            "train": 829
+          },
+          "admitted_bytes": {
+            "holdout": 42608,
+            "train": 7836914
+          },
+          "admitted_languages": {
+            "c": {
+              "bytes": 7879522,
+              "rows": 840
+            }
+          },
+          "columns": {
+            "code": 2000,
+            "language": 2000,
+            "license": 2000,
+            "path": 2000,
+            "repo_name": 2000,
+            "size": 2000
+          },
+          "config": "C-all",
+          "data_files": "C-all/partial-train/*.parquet",
+          "dataset": "codeparrot/github-code",
+          "languages": {
+            "C": 2000
+          },
+          "languages_kept": null,
+          "licenses": {
+            "agpl-3.0": 33,
+            "apache-2.0": 172,
+            "bsd-2-clause": 41,
+            "bsd-3-clause": 158,
+            "cc0-1.0": 1,
+            "epl-1.0": 4,
+            "gpl-2.0": 600,
+            "gpl-3.0": 340,
+            "isc": 20,
+            "lgpl-2.1": 92,
+            "lgpl-3.0": 71,
+            "mit": 431,
+            "mpl-2.0": 20,
+            "unlicense": 17
+          },
+          "refused": {
+            "no_repository": 0,
+            "non_permissive": 1160,
+            "other_language": 0,
+            "unknown_license": 0
+          },
+          "repositories": {
+            "holdout": 11,
+            "train": 735
+          },
+          "repository_fields": {
+            "repo_name": 2000
+          },
+          "resolved": true,
+          "rows_read": 2000,
+          "rows_requested": 2000,
+          "samples": [
+            {
+              "chars": 38477,
+              "license": "isc",
+              "repository": "markokr/libusual",
+              "split": "train"
+            },
+            {
+              "chars": 12744,
+              "license": "isc",
+              "repository": "arssivka/naomech",
+              "split": "train"
+            },
+            {
+              "chars": 438,
+              "license": "isc",
+              "repository": "skarnet/s6-networking",
+              "split": "train"
+            }
+          ],
+          "stream_amplification": 2.38
+        },
+        {
+          "admitted": {
+            "holdout": 14,
+            "train": 953
+          },
+          "admitted_bytes": {
+            "holdout": 106871,
+            "train": 12102181
+          },
+          "admitted_languages": {
+            "c++": {
+              "bytes": 12209052,
+              "rows": 967
+            }
+          },
+          "columns": {
+            "code": 2000,
+            "language": 2000,
+            "license": 2000,
+            "path": 2000,
+            "repo_name": 2000,
+            "size": 2000
+          },
+          "config": "C++-all",
+          "data_files": "C++-all/partial-train/*.parquet",
+          "dataset": "codeparrot/github-code",
+          "languages": {
+            "C++": 2000
+          },
+          "languages_kept": null,
+          "licenses": {
+            "agpl-3.0": 19,
+            "apache-2.0": 168,
+            "artistic-2.0": 1,
+            "bsd-2-clause": 24,
+            "bsd-3-clause": 249,
+            "cc0-1.0": 3,
+            "epl-1.0": 4,
+            "gpl-2.0": 545,
+            "gpl-3.0": 312,
+            "isc": 7,
+            "lgpl-2.1": 89,
+            "lgpl-3.0": 54,
+            "mit": 502,
+            "mpl-2.0": 9,
+            "unlicense": 14
+          },
+          "refused": {
+            "no_repository": 0,
+            "non_permissive": 1033,
+            "other_language": 0,
+            "unknown_license": 0
+          },
+          "repositories": {
+            "holdout": 13,
+            "train": 809
+          },
+          "repository_fields": {
+            "repo_name": 2000
+          },
+          "resolved": true,
+          "rows_read": 2000,
+          "rows_requested": 2000,
+          "samples": [
+            {
+              "chars": 16790,
+              "license": "isc",
+              "repository": "danielaeoluslaude/dpf-ntk",
+              "split": "train"
+            },
+            {
+              "chars": 1069,
+              "license": "isc",
+              "repository": "spratt/sumofdistances",
+              "split": "train"
+            },
+            {
+              "chars": 6563,
+              "license": "mit",
+              "repository": "dan-42/turbo-broccoli",
+              "split": "train"
+            }
+          ],
+          "stream_amplification": 2.07
+        }
+      ],
+      "share": 0.1
+    },
+    "java": {
+      "configs": [
+        {
+          "admitted": {
+            "holdout": 17,
+            "train": 1096
+          },
+          "admitted_bytes": {
+            "holdout": 67203,
+            "train": 5588318
+          },
+          "admitted_languages": {
+            "java": {
+              "bytes": 5655521,
+              "rows": 1113
+            }
+          },
+          "columns": {
+            "code": 2000,
+            "language": 2000,
+            "license": 2000,
+            "path": 2000,
+            "repo_name": 2000,
+            "size": 2000
+          },
+          "config": "Java-all",
+          "data_files": "Java-all/partial-train/*.parquet",
+          "dataset": "codeparrot/github-code",
+          "languages": {
+            "Java": 2000
+          },
+          "languages_kept": null,
+          "licenses": {
+            "agpl-3.0": 69,
+            "apache-2.0": 606,
+            "cc0-1.0": 2,
+            "epl-1.0": 71,
+            "gpl-2.0": 203,
+            "gpl-3.0": 370,
+            "isc": 1,
+            "lgpl-2.1": 57,
+            "lgpl-3.0": 102,
+            "mit": 482,
+            "mpl-2.0": 15,
+            "unlicense": 22
+          },
+          "refused": {
+            "no_repository": 0,
+            "non_permissive": 887,
+            "other_language": 0,
+            "unknown_license": 0
+          },
+          "repositories": {
+            "holdout": 17,
+            "train": 1019
+          },
+          "repository_fields": {
+            "repo_name": 2000
+          },
+          "resolved": true,
+          "rows_read": 2000,
+          "rows_requested": 2000,
+          "samples": [
+            {
+              "chars": 2828,
+              "license": "isc",
+              "repository": "tealcube/strife",
+              "split": "train"
+            },
+            {
+              "chars": 278,
+              "license": "mit",
+              "repository": "xiongmaoshouzha/test",
+              "split": "train"
+            },
+            {
+              "chars": 2402,
+              "license": "mit",
+              "repository": "selvasingh/azure-sdk-for-java",
+              "split": "train"
+            }
+          ],
+          "stream_amplification": 1.8
+        }
+      ],
+      "share": 0.05
+    },
+    "javascript-typescript": {
+      "configs": [
+        {
+          "admitted": {
+            "holdout": 33,
+            "train": 1631
+          },
+          "admitted_bytes": {
+            "holdout": 99487,
+            "train": 10193188
+          },
+          "admitted_languages": {
+            "javascript": {
+              "bytes": 10292675,
+              "rows": 1664
+            }
+          },
+          "columns": {
+            "code": 2000,
+            "language": 2000,
+            "license": 2000,
+            "path": 2000,
+            "repo_name": 2000,
+            "size": 2000
+          },
+          "config": "JavaScript-all",
+          "data_files": "JavaScript-all/partial-train/*.parquet",
+          "dataset": "codeparrot/github-code",
+          "languages": {
+            "JavaScript": 2000
+          },
+          "languages_kept": null,
+          "licenses": {
+            "agpl-3.0": 53,
+            "apache-2.0": 243,
+            "artistic-2.0": 3,
+            "bsd-2-clause": 19,
+            "bsd-3-clause": 59,
+            "cc0-1.0": 170,
+            "epl-1.0": 7,
+            "gpl-2.0": 88,
+            "gpl-3.0": 141,
+            "isc": 19,
+            "lgpl-2.1": 8,
+            "lgpl-3.0": 16,
+            "mit": 1141,
+            "mpl-2.0": 20,
+            "unlicense": 13
+          },
+          "refused": {
+            "no_repository": 0,
+            "non_permissive": 336,
+            "other_language": 0,
+            "unknown_license": 0
+          },
+          "repositories": {
+            "holdout": 30,
+            "train": 1397
+          },
+          "repository_fields": {
+            "repo_name": 2000
+          },
+          "resolved": true,
+          "rows_read": 2000,
+          "rows_requested": 2000,
+          "samples": [
+            {
+              "chars": 266,
+              "license": "isc",
+              "repository": "mshick/velvet",
+              "split": "train"
+            },
+            {
+              "chars": 886,
+              "license": "isc",
+              "repository": "burninggarden/burninggarden",
+              "split": "train"
+            },
+            {
+              "chars": 515,
+              "license": "isc",
+              "repository": "pikachumetal/cursoangular05",
+              "split": "train"
+            }
+          ],
+          "stream_amplification": 1.2
+        },
+        {
+          "admitted": {
+            "holdout": 36,
+            "train": 1703
+          },
+          "admitted_bytes": {
+            "holdout": 487368,
+            "train": 21897416
+          },
+          "admitted_languages": {
+            "typescript": {
+              "bytes": 22384784,
+              "rows": 1739
+            }
+          },
+          "columns": {
+            "code": 2000,
+            "language": 2000,
+            "license": 2000,
+            "path": 2000,
+            "repo_name": 2000,
+            "size": 2000
+          },
+          "config": "TypeScript-all",
+          "data_files": "TypeScript-all/partial-train/*.parquet",
+          "dataset": "codeparrot/github-code",
+          "languages": {
+            "TypeScript": 2000
+          },
+          "languages_kept": null,
+          "licenses": {
+            "agpl-3.0": 47,
+            "apache-2.0": 326,
+            "artistic-2.0": 1,
+            "bsd-2-clause": 8,
+            "bsd-3-clause": 55,
+            "cc0-1.0": 3,
+            "epl-1.0": 7,
+            "gpl-2.0": 35,
+            "gpl-3.0": 128,
+            "isc": 6,
+            "lgpl-2.1": 20,
+            "lgpl-3.0": 11,
+            "mit": 1332,
+            "mpl-2.0": 12,
+            "unlicense": 9
+          },
+          "refused": {
+            "no_repository": 0,
+            "non_permissive": 261,
+            "other_language": 0,
+            "unknown_license": 0
+          },
+          "repositories": {
+            "holdout": 25,
+            "train": 1380
+          },
+          "repository_fields": {
+            "repo_name": 2000
+          },
+          "resolved": true,
+          "rows_read": 2000,
+          "rows_requested": 2000,
+          "samples": [
+            {
+              "chars": 213,
+              "license": "mit",
+              "repository": "aredotna/ervell",
+              "split": "train"
+            },
+            {
+              "chars": 5649,
+              "license": "mit",
+              "repository": "bsmr-x-script/vscode",
+              "split": "train"
+            },
+            {
+              "chars": 1649,
+              "license": "mit",
+              "repository": "hankaibo/myangular",
+              "split": "train"
+            }
+          ],
+          "stream_amplification": 1.15
+        }
+      ],
+      "share": 0.12
+    },
+    "python": {
+      "configs": [
+        {
+          "admitted": {
+            "holdout": 23,
+            "train": 1225
+          },
+          "admitted_bytes": {
+            "holdout": 221057,
+            "train": 8004352
+          },
+          "admitted_languages": {
+            "python": {
+              "bytes": 8225409,
+              "rows": 1248
+            }
+          },
+          "columns": {
+            "code": 2000,
+            "language": 2000,
+            "license": 2000,
+            "path": 2000,
+            "repo_name": 2000,
+            "size": 2000
+          },
+          "config": "Python-all",
+          "data_files": "Python-all/partial-train/*.parquet",
+          "dataset": "codeparrot/github-code",
+          "languages": {
+            "Python": 2000
+          },
+          "languages_kept": null,
+          "licenses": {
+            "agpl-3.0": 89,
+            "apache-2.0": 301,
+            "artistic-2.0": 1,
+            "bsd-2-clause": 40,
+            "bsd-3-clause": 170,
+            "cc0-1.0": 5,
+            "epl-1.0": 2,
+            "gpl-2.0": 246,
+            "gpl-3.0": 360,
+            "isc": 6,
+            "lgpl-2.1": 18,
+            "lgpl-3.0": 26,
+            "mit": 711,
+            "mpl-2.0": 10,
+            "unlicense": 15
+          },
+          "refused": {
+            "no_repository": 0,
+            "non_permissive": 752,
+            "other_language": 0,
+            "unknown_license": 0
+          },
+          "repositories": {
+            "holdout": 23,
+            "train": 1184
+          },
+          "repository_fields": {
+            "repo_name": 2000
+          },
+          "resolved": true,
+          "rows_read": 2000,
+          "rows_requested": 2000,
+          "samples": [
+            {
+              "chars": 4971,
+              "license": "isc",
+              "repository": "ithinksw/philo",
+              "split": "train"
+            },
+            {
+              "chars": 26779,
+              "license": "isc",
+              "repository": "nficano/python-lambda",
+              "split": "train"
+            },
+            {
+              "chars": 25314,
+              "license": "isc",
+              "repository": "mfil/getebook",
+              "split": "train"
+            }
+          ],
+          "stream_amplification": 1.6
+        }
+      ],
+      "share": 0.55
+    }
+  },
+  "problems": [],
+  "rows_per_config": 2000,
+  "split_salt": "vast/daedalus-code-20260824"
+}

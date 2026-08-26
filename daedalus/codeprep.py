@@ -508,6 +508,14 @@ MIN_BUCKET_SHARE = 0.005
 #: budget without re-reading a row.
 DEFAULT_INTERLEAVE_PASSES = 1.0
 
+#: Bytes per token the released 49,152-entry SmolLM2 tokenizer achieves on code
+#: -- the tokenizer Daedalus-Code inherits, so the one its budgets are counted
+#: in. Measured by phase 4's fertility pass over 327 code documents
+#: (`runs/tokenizer-lab/measurements.json`, `49152-smollm2`/`fertility`/`code`),
+#: not assumed at the ~4.0 that general text gives: code is denser, and taking
+#: the general figure would understate every directory's supply by 40%.
+CODE_BYTES_PER_TOKEN = 2.862
+
 GITHUB_CODE_DATASET = "codeparrot/github-code"
 
 #: The parquet-converted revision, as `dataprep.MIXTURE`'s `stack-edu-python`
@@ -1277,6 +1285,173 @@ def source_plan(*, available: Dict[str, int], interleaved: dict,
                    if entry["share"] > 0},
         "redistributed": round(shortfall, 6),
     }
+
+
+def _parquet_row_count(url: str) -> int:
+    """Rows in one parquet file, read from its footer.
+
+    Isolated the way `_stream_github_code` is, so the supply measurement can be
+    tested without the Hub.
+    """
+    import fsspec
+    import pyarrow.parquet as pq
+
+    with fsspec.open(url) as handle:
+        return pq.ParquetFile(handle).metadata.num_rows
+
+
+def config_row_counts(configs: Sequence[str], *,
+                      dataset: str = GITHUB_CODE_DATASET,
+                      revision: str = GITHUB_CODE_REVISION,
+                      api=None,
+                      count_rows: Optional[Callable[[str], int]] = None,
+                      ) -> Dict[str, dict]:
+    """How many rows each directory holds, from parquet footers.
+
+    The one number the probe cannot supply. A probe measures the *rate* a
+    directory admits bytes at, over the first few thousand rows; a supply is
+    that rate times how many rows are actually there, and nothing in a stream
+    says how many that is until it ends.
+
+    Cheap enough to run before a build rather than after one: a footer is a few
+    kilobytes at the end of a file, so a directory costs ten range requests
+    instead of a pass over gigabytes. Phase 7 learned the same lesson the
+    expensive way -- `stack-edu-python` was 139M tokens short of its share, and
+    one metadata call would have said so before a document was streamed.
+
+    A file whose footer cannot be read is recorded in `errors` and left out of
+    the total, so a partial answer is visibly partial rather than a small one.
+    """
+    if api is None:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+    count_rows = count_rows if count_rows is not None else _parquet_row_count
+    paths = [path for path in api.list_repo_files(dataset, repo_type="dataset",
+                                                  revision=revision)
+             if path.endswith(".parquet")]
+    counts: Dict[str, dict] = {}
+    for config in configs:
+        prefix = f"{config}/"
+        wanted = sorted(path for path in paths if path.startswith(prefix))
+        entry: dict = {"files": len(wanted), "files_read": 0, "rows": 0,
+                       "errors": {}}
+        for path in wanted:
+            url = f"hf://datasets/{dataset}@{revision}/{path}"
+            try:
+                entry["rows"] += int(count_rows(url))
+            except Exception as exc:            # noqa: BLE001 - reported per file
+                entry["errors"][path] = repr(exc)
+                continue
+            entry["files_read"] += 1
+        if not entry["files_read"]:
+            # Zero readable files is not a directory of zero rows, and a supply
+            # built on it would silently be zero. Say which it was.
+            entry["rows"] = None
+        counts[config] = entry
+    return counts
+
+
+def bucket_supply(*, plan: dict, row_counts: Dict[str, dict],
+                  probes: Dict[str, dict],
+                  bytes_per_token: float = CODE_BYTES_PER_TOKEN,
+                  ) -> Dict[str, dict]:
+    """Unique tokens each planned bucket can actually deliver.
+
+    Two measured factors and no assumed ones: the rate a directory admits bytes
+    at, from a probe of its real rows, times the rows it holds, from its parquet
+    footers -- then over the tokenizer's measured bytes per token of code.
+
+    This is the check `source_plan` cannot make on itself. Redistributing the
+    unreachable buckets' 14 points onto the four with directories raises Python
+    from 55% to 64%, and that is only sound if `Python-all` holds 64% of the
+    budget. Otherwise the shortfall has not been fixed, only moved from a bucket
+    that announces it to one that does not.
+
+    A bucket missing either factor is reported with `unique_tokens` 0 and a
+    basis that names what was missing, which reads downstream as infinite epochs
+    -- the safe direction, and distinguishable from a measured zero.
+    """
+    supply: Dict[str, dict] = {}
+    for bucket, entry in sorted((plan.get("buckets") or {}).items()):
+        source = entry.get("source")
+        if source == "directories":
+            draws = [(config, _admitted_bytes(probes.get(config)))
+                     for config in entry.get("configs") or []]
+        elif source == "interleaved":
+            config = entry.get("source_config") or INTERLEAVED_CONFIG
+            draws = [(config, _admitted_language_bytes(
+                probes.get(config), entry.get("languages") or []))]
+        else:
+            supply[bucket] = {"share": entry.get("share", 0.0),
+                              "unique_bytes": 0, "unique_tokens": 0,
+                              "configs": [], "missing": [], "partial": [],
+                              "lower_bound": False,
+                              "basis": f"{bucket} is not drawn from this "
+                                       f"revision: {entry.get('reason', '')}"}
+            continue
+
+        unique_bytes = 0.0
+        missing: List[str] = []
+        partial: List[str] = []
+        parts: List[str] = []
+        for config, admitted in draws:
+            probe = probes.get(config) or {}
+            rows_read = probe.get("rows_read") or 0
+            counted = row_counts.get(config) or {}
+            total = counted.get("rows")
+            if admitted is None or not rows_read or not total:
+                missing.append(config)
+                continue
+            per_row = admitted / rows_read
+            unique_bytes += per_row * total
+            files, files_read = counted.get("files") or 0, counted.get("files_read")
+            of_files = ""
+            if files and files_read is not None and files_read < files:
+                # A directory counted from some of its files is a floor, not a
+                # measurement -- one 429 that outlasts its retries takes a tenth
+                # of `all-all` with it. It matters in one direction: a floor that
+                # clears the epoch cap has cleared it, but a floor that fails it
+                # may be failing on the files nobody read.
+                partial.append(config)
+                of_files = f" ({files_read} of {files} files read)"
+            parts.append(f"{total:,} rows of {config}{of_files} at "
+                         f"{per_row:,.0f} admitted bytes/row read")
+        basis = " + ".join(parts)
+        if partial:
+            basis = f"lower bound -- {basis}"
+        if missing:
+            basis = ((basis + "; " if basis else "")
+                     + "unmeasured: " + ", ".join(missing))
+        supply[bucket] = {
+            "share": entry.get("share", 0.0),
+            "unique_bytes": int(unique_bytes),
+            "unique_tokens": int(unique_bytes / bytes_per_token)
+            if bytes_per_token > 0 else 0,
+            "configs": [config for config, _ in draws],
+            "missing": missing,
+            "partial": partial,
+            "lower_bound": bool(partial),
+            "basis": basis or "no directory measured for this bucket",
+        }
+    return supply
+
+
+def _admitted_bytes(probe: Optional[dict]) -> Optional[int]:
+    """Bytes one probe admitted, over both splits."""
+    if not probe or probe.get("admitted_bytes") is None:
+        return None
+    return sum((probe.get("admitted_bytes") or {}).values())
+
+
+def _admitted_language_bytes(probe: Optional[dict],
+                             languages: Sequence[str]) -> Optional[int]:
+    """Bytes one probe admitted in the named languages."""
+    if not probe or probe.get("admitted_languages") is None:
+        return None
+    admitted = probe["admitted_languages"]
+    return sum(admitted.get(normalize_language(name), {}).get("bytes", 0)
+               for name in languages)
 
 
 def plan_problems(plan: dict) -> List[str]:

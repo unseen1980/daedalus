@@ -1197,6 +1197,243 @@ def test_the_cli_plans_from_the_two_measurements_already_on_disk(
     assert sum(written["shares"].values()) == pytest.approx(1.0, abs=1e-6)
 
 
+# ------------------------------------------------------------ the supply ---
+
+def _directory_probe(config, *, rows_read=2_000, admitted_bytes=8_000_000):
+    """A `probe_source` record for one per-language directory."""
+    return {"config": config, "resolved": True, "rows_read": rows_read,
+            "admitted_bytes": {"train": admitted_bytes, "holdout": 0}}
+
+
+def _supply_inputs(**row_overrides):
+    plan = CP.source_plan(available=AVAILABLE, interleaved=_allall())
+    probes = {config: _directory_probe(config)
+              for config in ("Python-all", "JavaScript-all", "TypeScript-all",
+                             "C-all", "C++-all", "Java-all")}
+    probes["all-all"] = _allall()
+    rows = {config: {"files": 10, "files_read": 10, "rows": 500_000,
+                     "errors": {}}
+            for config in list(probes)}
+    # The interleaved directory carries thirty languages, so it holds far more
+    # rows than any one of them -- and a fallback bucket's supply is a slice of
+    # it, not the whole thing.
+    rows["all-all"] = {"files": 10, "files_read": 10, "rows": 20_000_000,
+                       "errors": {}}
+    rows.update(row_overrides)
+    return plan, rows, probes
+
+
+def test_a_buckets_supply_is_the_rate_it_admits_bytes_times_the_rows_there():
+    """Two measured factors, no assumed ones: a probe gives the rate over a few
+    thousand real rows, the footers give how many rows are actually there."""
+    plan, rows, probes = _supply_inputs()
+
+    supply = CP.bucket_supply(plan=plan, row_counts=rows, probes=probes,
+                              bytes_per_token=2.862)
+
+    # 8,000,000 admitted bytes per 2,000 rows read, over 500,000 rows.
+    expected_bytes = 8_000_000 / 2_000 * 500_000
+    assert supply["python"]["unique_bytes"] == expected_bytes
+    assert supply["python"]["unique_tokens"] == int(expected_bytes / 2.862)
+    assert "500,000 rows of Python-all" in supply["python"]["basis"]
+    # Two directories, summed.
+    assert supply["javascript-typescript"]["unique_bytes"] == 2 * expected_bytes
+
+
+def test_an_interleaved_buckets_supply_counts_only_its_own_languages():
+    """Go is 2.8% of the interleaved directory. A supply that credited it with
+    the whole directory's admitted bytes would say the bucket has 35 times the
+    tokens it has."""
+    plan, rows, probes = _supply_inputs()
+
+    supply = CP.bucket_supply(plan=plan, row_counts=rows, probes=probes)
+
+    interleaved = supply["go"]
+    assert interleaved["configs"] == ["all-all"]
+    # 280,000 of the interleaved directory's 10,000,000 admitted bytes.
+    assert interleaved["unique_bytes"] == int(280_000 / 200_000 * 20_000_000)
+    assert supply["rust"]["unique_tokens"] == 0
+    assert "not drawn from this revision" in supply["rust"]["basis"]
+
+
+def test_a_fallback_capped_by_rate_can_still_be_short_of_rows():
+    """`source_plan` caps Go at the *rate* one pass yields it. Whether the
+    directory holds enough rows to deliver even that reduced share is a second
+    question, and the plan cannot answer it -- a rate says nothing about how
+    long the stream is."""
+    from scripts.source_headroom import SHORT, Supply, epoch_curve
+
+    plan, rows, probes = _supply_inputs(
+        **{"all-all": {"files": 10, "files_read": 10, "rows": 400_000,
+                       "errors": {}}})
+
+    supply = CP.bucket_supply(plan=plan, row_counts=rows, probes=probes)
+    curve = epoch_curve(
+        {bucket: Supply(key=bucket, unique_tokens=entry["unique_tokens"],
+                        realized_tokens=0, basis=entry["basis"])
+         for bucket, entry in supply.items()},
+        [(bucket, entry["share"], 1) for bucket, entry in supply.items()
+         if entry["share"] > 0],
+        budgets=[int(1_000_000_000 * CP.CORPUS_SHARES["code"])])
+
+    totals = curve[0]["totals"]
+    assert totals["verdict"] == SHORT
+    assert totals["binding_source"] in ("go", "shell-sql-other")
+    assert supply["python"]["unique_tokens"] > 0
+
+
+def test_a_directory_counted_from_some_of_its_files_is_a_floor_not_a_number():
+    """One 429 that outlasted its retries took the tenth file of `all-all` with
+    it. The nine that were read are a floor, and a floor that *fails* the epoch
+    cap may be failing on the file nobody counted -- so the two have to be
+    distinguishable at the point the verdict is read."""
+    plan, rows, probes = _supply_inputs(
+        **{"all-all": {"files": 10, "files_read": 9, "rows": 547_000,
+                       "errors": {"all-all/partial-train/0009.parquet": "429"}}})
+
+    supply = CP.bucket_supply(plan=plan, row_counts=rows, probes=probes)
+
+    assert supply["go"]["lower_bound"] is True
+    assert supply["go"]["partial"] == ["all-all"]
+    assert supply["go"]["basis"].startswith("lower bound -- ")
+    assert "(9 of 10 files read)" in supply["go"]["basis"]
+    # A directory read in full is not hedged.
+    assert supply["python"]["lower_bound"] is False
+    assert "of 10 files read" not in supply["python"]["basis"]
+
+
+def test_a_bucket_missing_either_factor_reads_as_no_supply_not_as_a_number():
+    """A directory whose footers could not be read is not a directory of zero
+    rows, and the difference decides whether a build launches."""
+    plan, rows, probes = _supply_inputs(
+        **{"Python-all": {"files": 10, "files_read": 0, "rows": None,
+                          "errors": {"Python-all/partial-train/0000.parquet":
+                                     "HTTPError(504)"}}})
+
+    supply = CP.bucket_supply(plan=plan, row_counts=rows, probes=probes)
+
+    assert supply["python"]["unique_tokens"] == 0
+    assert supply["python"]["missing"] == ["Python-all"]
+    assert "unmeasured: Python-all" in supply["python"]["basis"]
+
+
+def test_the_row_count_is_read_from_footers_and_a_bad_file_is_named():
+    """Ten range requests rather than a pass over gigabytes -- and a file that
+    could not be read is left out of the total instead of counted as empty."""
+    listed = [f"Python-all/partial-train/{i:04d}.parquet" for i in range(3)]
+    listed += ["Python-all/README.md", "Java-all/partial-train/0000.parquet"]
+
+    class _Api:
+        def list_repo_files(self, dataset, repo_type=None, revision=None):
+            return listed
+
+    def count(url):
+        if url.endswith("0002.parquet"):
+            raise OSError("range request refused")
+        return 40_000
+
+    counts = CP.config_row_counts(["Python-all", "Java-all"], api=_Api(),
+                                  count_rows=count)
+
+    assert counts["Python-all"] == {"files": 3, "files_read": 2, "rows": 80_000,
+                                    "errors": {listed[2]: repr(OSError(
+                                        "range request refused"))}}
+    assert counts["Java-all"]["rows"] == 40_000
+
+
+def test_a_directory_whose_every_footer_failed_is_unknown_not_empty():
+    class _Api:
+        def list_repo_files(self, dataset, repo_type=None, revision=None):
+            return ["Python-all/partial-train/0000.parquet"]
+
+    def count(url):
+        raise OSError("no")
+
+    counts = CP.config_row_counts(["Python-all"], api=_Api(), count_rows=count)
+
+    assert counts["Python-all"]["rows"] is None
+    assert counts["Python-all"]["files_read"] == 0
+
+
+def test_the_headroom_cli_reuses_phase_sevens_epoch_cap_and_verdicts(
+        tmp_path, capsys):
+    """The question is phase 7's -- can this source fill its share without being
+    re-read past the cap -- so the arithmetic and the verdict strings are phase
+    7's too. What phase 8 supplies is the supply."""
+    import scripts.codeprep as CLI
+
+    plan, rows, probes = _supply_inputs()
+    plan_json = tmp_path / "plan.json"
+    plan_json.write_text(json.dumps(plan))
+    probe_json = tmp_path / "probes.json"
+    probe_json.write_text(json.dumps({"languages": {"unbucketed": {
+        "configs": list(probes.values())}}}))
+    rows_json = tmp_path / "rows.json"
+    rows_json.write_text(json.dumps(rows))
+    out = str(tmp_path / "headroom.json")
+
+    rc = CLI._cli(["corpus", "headroom", "--plan-json", str(plan_json),
+                   "--probe-json", str(probe_json), "--rows-json",
+                   str(rows_json), "--budget-tokens", "1000000000",
+                   "--json-out", out])
+
+    printed = capsys.readouterr().out
+    assert "SUPPORTED" in printed
+    assert rc == 0
+    written = json.load(open(out))
+    # 650M code tokens of a 1B budget, and the footers are read once and cached.
+    assert written["budgets"][0]["budget"] == 650_000_000
+    assert written["supply"]["python"]["unique_tokens"] > 0
+
+
+def test_the_headroom_cli_fails_the_budget_a_directory_cannot_fill(
+        tmp_path, capsys):
+    """The failure this exists to catch: the plan moved 14 points onto Python,
+    and a Python directory that cannot carry them turns a fixed shortfall into a
+    hidden one."""
+    import scripts.codeprep as CLI
+
+    plan, rows, probes = _supply_inputs(
+        **{"Python-all": {"files": 10, "files_read": 10, "rows": 1_000,
+                          "errors": {}}})
+    plan_json = tmp_path / "plan.json"
+    plan_json.write_text(json.dumps(plan))
+    probe_json = tmp_path / "probes.json"
+    probe_json.write_text(json.dumps({"languages": {"unbucketed": {
+        "configs": list(probes.values())}}}))
+    rows_json = tmp_path / "rows.json"
+    rows_json.write_text(json.dumps(rows))
+
+    rc = CLI._cli(["corpus", "headroom", "--plan-json", str(plan_json),
+                   "--probe-json", str(probe_json), "--rows-json",
+                   str(rows_json), "--budget-tokens", "1000000000"])
+
+    assert rc == 3
+    assert "python would be read" in capsys.readouterr().err
+
+
+def test_the_headroom_cli_takes_the_budget_it_is_given_not_three_of_them(
+        tmp_path, capsys):
+    """A repeatable flag with a list default appends to it, so one
+    `--budget-tokens` would quietly mean four."""
+    import scripts.codeprep as CLI
+
+    plan, rows, probes = _supply_inputs()
+    for name, value in (("plan.json", plan), ("rows.json", rows)):
+        (tmp_path / name).write_text(json.dumps(value))
+    (tmp_path / "probes.json").write_text(json.dumps(
+        {"languages": {"unbucketed": {"configs": list(probes.values())}}}))
+    out = str(tmp_path / "headroom.json")
+
+    CLI._cli(["corpus", "headroom", "--plan-json", str(tmp_path / "plan.json"),
+              "--probe-json", str(tmp_path / "probes.json"),
+              "--rows-json", str(tmp_path / "rows.json"),
+              "--budget-tokens", "250000000", "--json-out", out])
+
+    assert [b["budget"] for b in json.load(open(out))["budgets"]] == \
+        [int(round(250_000_000 * CP.CORPUS_SHARES["code"]))]
+
+
 def test_the_cli_refuses_a_plan_whose_evidence_names_no_such_directory(capsys):
     """The interleaved record is looked up by name; a report that does not
     contain it must not be read as an empty directory."""

@@ -38,12 +38,13 @@ from daedalus.codeprep import (CODE_LANGUAGE_SHARES,  # noqa: E402
                                GITHUB_CODE_LANGUAGES, INTERLEAVED_CONFIG,
                                IncompleteIndex, IndexDigestMismatch,
                                GITHUB_CODE_DATASET, GITHUB_CODE_REVISION,
-                               MIN_BUCKET_SHARE, build_code_index,
+                               MIN_BUCKET_SHARE, CODE_BYTES_PER_TOKEN,
+                               CORPUS_SHARES, build_code_index, bucket_supply,
                                code_coverage_problems, config_near_misses,
-                               github_code_configs, load_index, missing_configs,
-                               plan_problems, probe_languages, probe_problems,
-                               probe_record, sidecar_path, source_plan,
-                               write_index)
+                               config_row_counts, github_code_configs,
+                               load_index, missing_configs, plan_problems,
+                               probe_languages, probe_problems, probe_record,
+                               sidecar_path, source_plan, write_index)
 
 
 def _report(provenance: dict) -> str:
@@ -314,6 +315,124 @@ def _plan(a) -> int:
     return 0
 
 
+#: Training budgets phase 8's gates are set at, in total tokens. The code
+#: portion of each is what a code directory has to supply.
+DEFAULT_CODE_BUDGETS = (250_000_000, 1_000_000_000, 3_000_000_000)
+
+
+def _headroom(a) -> int:
+    # Phase 7 already answers "can this source fill its share without being
+    # re-read past the cap", down to the verdict strings and the shortfall
+    # arithmetic. What phase 8 lacks is the *supply*, because there are no shard
+    # manifests to count yet -- so it measures one and borrows the rest.
+    from scripts.source_headroom import EPOCH_CAP, Supply, epoch_curve
+
+    try:
+        with open(a.plan_json) as f:
+            plan = json.load(f)
+        probes: dict = {}
+        for path in a.probe_json:
+            with open(path) as f:
+                report = json.load(f)
+            for entry in (report.get("languages") or {}).values():
+                for record in entry.get("configs") or []:
+                    if record.get("config"):
+                        probes[record["config"]] = record
+    except OSError as e:
+        print(f"REFUSE: {e}", file=sys.stderr)
+        return 2
+
+    configs = sorted({config for entry in (plan.get("buckets") or {}).values()
+                      for config in (entry.get("configs") or [])
+                      if entry.get("source") == "directories"}
+                     | {entry["source_config"]
+                        for entry in (plan.get("buckets") or {}).values()
+                        if entry.get("source") == "interleaved"})
+    if a.rows_json and os.path.exists(a.rows_json) and not a.remeasure:
+        with open(a.rows_json) as f:
+            row_counts = json.load(f)
+        print(f"row counts from {a.rows_json}")
+    else:
+        print(f"reading parquet footers for {len(configs)} directory(s) ...",
+              flush=True)
+        row_counts = config_row_counts(configs, revision=a.revision)
+        if a.rows_json:
+            os.makedirs(os.path.dirname(a.rows_json) or ".", exist_ok=True)
+            with open(a.rows_json, "w") as f:
+                json.dump(row_counts, f, indent=2, sort_keys=True)
+                f.write("\n")
+            print(f"wrote {a.rows_json}")
+
+    supply = bucket_supply(plan=plan, row_counts=row_counts, probes=probes,
+                           bytes_per_token=a.bytes_per_token)
+    supplies = {bucket: Supply(key=bucket, unique_tokens=entry["unique_tokens"],
+                               realized_tokens=0, basis=entry["basis"])
+                for bucket, entry in supply.items()}
+    mixture = [(bucket, entry["share"], 1) for bucket, entry in supply.items()
+               if entry["share"] > 0]
+    # The code *portion* of each budget, since the rest of the mixture is
+    # technical prose and general replay and no code directory supplies it.
+    code_share = CORPUS_SHARES["code"]
+    curve = epoch_curve(supplies, mixture,
+                        budgets=[int(round(total * code_share))
+                                 for total in a.budget_tokens],
+                        epoch_cap=a.epoch_cap)
+
+    print(f"\n  {a.bytes_per_token:g} bytes/token of code, {code_share:.0%} of "
+          f"each budget is code, epoch cap {a.epoch_cap:g}")
+    for bucket, entry in sorted(supply.items(),
+                                key=lambda kv: -kv[1]["share"]):
+        print(f"  {bucket:24s} share {entry['share']:6.1%}  "
+              f"{entry['unique_tokens'] / 1e6:9,.1f}M unique tokens   "
+              f"{entry['basis']}")
+    for point in curve:
+        totals = point["totals"]
+        print(f"\n  code budget {point['budget'] / 1e6:,.0f}M tokens  "
+              f"({point['budget'] / code_share / 1e6:,.0f}M total)  "
+              f"{totals['verdict']}")
+        for row in point["sources"]:
+            print(f"      {row.line()}")
+
+    bounded = sorted({config for entry in supply.values()
+                      for config in entry["partial"]})
+    if bounded:
+        print(f"\n  {', '.join(bounded)} was counted from some of its files, so "
+              f"every bucket drawn from it is a floor rather than a "
+              f"measurement; re-run with --remeasure to close it")
+
+    short = [point for point in curve if point["totals"]["verdict"] != "SUPPORTED"]
+    record = {"bytes_per_token": a.bytes_per_token, "epoch_cap": a.epoch_cap,
+              "code_share": code_share, "supply": supply,
+              "row_counts": row_counts,
+              "budgets": [{"budget": point["budget"],
+                           "totals": {key: value for key, value
+                                      in point["totals"].items()},
+                           "sources": [vars(row) for row in point["sources"]]}
+                          for point in curve],
+              "evidence": {"plan": a.plan_json, "probes": list(a.probe_json)}}
+    if a.json_out:
+        os.makedirs(os.path.dirname(a.json_out) or ".", exist_ok=True)
+        with open(a.json_out, "w") as f:
+            json.dump(record, f, indent=2, sort_keys=True, default=str)
+            f.write("\n")
+        print(f"\nwrote {a.json_out}")
+    if short:
+        print(f"\n{len(short)} budget(s) cannot be filled inside the epoch cap:",
+              file=sys.stderr)
+        for point in short:
+            totals = point["totals"]
+            binding = supply.get(totals["binding_source"]) or {}
+            floor = (" -- on a lower-bound supply, so re-measure "
+                     f"{', '.join(binding['partial'])} before believing it"
+                     if binding.get("lower_bound") else "")
+            print(f"  - {point['budget'] / 1e6:,.0f}M code tokens: "
+                  f"{totals['binding_source']} would be read "
+                  f"{totals['binding_epochs']:,.1f} times{floor}",
+                  file=sys.stderr)
+        return 3
+    return 0
+
+
 def _cli(argv=None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -395,6 +514,38 @@ def _cli(argv=None) -> int:
     plan.add_argument("--json-out", default=None)
     plan.set_defaults(fn=_plan)
 
+    headroom = corpus_action.add_parser(
+        "headroom", help="whether each planned bucket's directories hold the "
+                         "share the plan gives it, inside the epoch cap")
+    headroom.add_argument("--plan-json", default="runs/codeprep/source-plan.json",
+                          help="`corpus plan --json-out` output")
+    headroom.add_argument(
+        "--probe-json", action="append",
+        default=None,
+        help="probe reports supplying each directory's admitted bytes per row, "
+             "repeatable (default: the per-directory and interleaved yields)")
+    headroom.add_argument("--rows-json", default="runs/codeprep/config-rows.json",
+                          help="cached parquet footer row counts; measured and "
+                               "written when absent")
+    headroom.add_argument("--remeasure", action="store_true",
+                          help="re-read the footers even if the cache exists")
+    headroom.add_argument("--revision", default=GITHUB_CODE_REVISION)
+    headroom.add_argument("--bytes-per-token", type=float,
+                          default=CODE_BYTES_PER_TOKEN,
+                          help=f"measured code fertility of the tokenizer the "
+                               f"budgets are counted in "
+                               f"(default {CODE_BYTES_PER_TOKEN:g}, phase 4's "
+                               f"49152-smollm2 reading)")
+    headroom.add_argument("--budget-tokens", type=int, action="append",
+                          default=None,
+                          help="total training budget in tokens, repeatable "
+                               "(default 250M, 1B, 3B -- phase 8's three gates)")
+    headroom.add_argument("--epoch-cap", type=float, default=4.0,
+                          help="the plan's ceiling: no source read more than "
+                               "this many times")
+    headroom.add_argument("--json-out", default=None)
+    headroom.set_defaults(fn=_headroom)
+
     configs = corpus_action.add_parser(
         "configs", help="list the parquet directories the revision really has")
     configs.add_argument(
@@ -406,6 +557,15 @@ def _cli(argv=None) -> int:
     configs.set_defaults(fn=_configs)
 
     a = p.parse_args(argv)
+    if getattr(a, "fn", None) is _headroom:
+        # Repeatable flags cannot carry a list default -- argparse appends to it
+        # rather than replacing it, so one `--probe-json` would silently mean
+        # three.
+        if a.probe_json is None:
+            a.probe_json = ["runs/codeprep/directory-yield.json",
+                            "runs/codeprep/allall-yield.json"]
+        if a.budget_tokens is None:
+            a.budget_tokens = list(DEFAULT_CODE_BUDGETS)
     if getattr(a, "action", None) == "verify" and not os.path.exists(
             sidecar_path(a.out)):
         print(f"REFUSE: no index at {a.out} (build it first)", file=sys.stderr)
