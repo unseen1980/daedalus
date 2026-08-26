@@ -27,7 +27,7 @@ import argparse
 import json
 import os
 import sys
-from typing import Tuple
+from typing import Optional, Tuple
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -506,6 +506,20 @@ def _build_order(holdout, train):
     return [source for pair in zip(holdout, train) for source in pair]
 
 
+def _uncap_exhaustion(stats: dict, max_docs: Optional[int]) -> dict:
+    """Under a document cap, "this source has no more documents" is not known.
+
+    `run_source` records exhaustion from the stream ending, and under
+    `max_docs` the stream ends at the cap -- so a 25-document smoke manifested
+    `Java-all`, a directory with millions of rows left in it, as exhausted. That
+    is the reassuring kind of false record: a later reader takes it as a
+    measurement of the source rather than of the cap.
+    """
+    if max_docs and stats.pop("exhausted", None):
+        stats["stopped_by_doc_cap"] = True
+    return stats
+
+
 def _source_row(source, stats: dict) -> str:
     achieved = stats.get("achieved_fraction") or 0.0
     note = ""
@@ -513,6 +527,8 @@ def _source_row(source, stats: dict) -> str:
         note = f"  ERROR {stats['error'][:60]}"
     elif stats.get("exhausted"):
         note = "  EXHAUSTED"
+    elif stats.get("stopped_by_doc_cap"):
+        note = "  CAPPED"
     elif stats.get("incomplete"):
         note = "  INCOMPLETE"
     return (f"  {source.split:8s} {source.key:28s} {source.config:16s} "
@@ -664,6 +680,7 @@ def _build_corpus(a) -> int:
             print(f"FAILED {source.key}: {e!r}", file=sys.stderr, flush=True)
             stats = dict(recovered) or {"key": source.key, "tokens": 0}
             stats["error"] = repr(e)
+        stats = _uncap_exhaustion(stats, a.max_docs_per_source)
 
         # Merged only when the resume restored a stream *position*. The replay
         # fallback re-reads the prefix from row zero and the gate is consulted

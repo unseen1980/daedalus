@@ -2126,6 +2126,51 @@ def test_a_source_that_stops_short_of_its_budget_fails_the_build(
     assert "stopped short" in capsys.readouterr().err
 
 
+def test_a_capped_smoke_does_not_manifest_the_directory_as_exhausted(
+        tmp_path, monkeypatch, capsys):
+    """`run_source` reads exhaustion off the stream ending, and under a document
+    cap the stream ends at the cap. A 25-document live smoke manifested
+    `Java-all` -- a directory with millions of rows left -- as having no more
+    documents, which is a claim about the source made from a measurement of the
+    cap."""
+    import scripts.codeprep as CLI
+    from daedalus import data as DATA
+
+    _write_code_index(tmp_path)
+    monkeypatch.setattr(DATA, "get_tokenizer", lambda name=None: _FakeTokenizer())
+    _github_stream(monkeypatch, _code_rows(400))
+
+    rc = CLI._cli(_build_argv(tmp_path, _one_bucket_plan(tmp_path),
+                              **{"holdout-frac": 0.5, "max-docs-per-source": 5}))
+
+    assert rc == 0, capsys.readouterr().err
+    manifest = json.load(open(tmp_path / "code-shards" / "manifest.json"))
+    train = next(e for e in manifest["sources"] if e["split"] == "train")
+    assert "exhausted" not in train
+    assert train["stopped_by_doc_cap"] is True
+
+
+def test_a_source_that_really_runs_out_still_says_so(tmp_path, monkeypatch,
+                                                     capsys):
+    """The other half of the same distinction: with no cap in force, a stream
+    that ends *is* the source running out, and that is the finding."""
+    import scripts.codeprep as CLI
+    from daedalus import data as DATA
+
+    _write_code_index(tmp_path)
+    monkeypatch.setattr(DATA, "get_tokenizer", lambda name=None: _FakeTokenizer())
+    _github_stream(monkeypatch, _code_rows(4))
+
+    rc = CLI._cli(_build_argv(tmp_path, _one_bucket_plan(tmp_path),
+                              **{"holdout-frac": 0.5}))
+
+    assert rc == 3
+    manifest = json.load(open(tmp_path / "code-shards" / "manifest.json"))
+    train = next(e for e in manifest["sources"] if e["split"] == "train")
+    assert train["exhausted"] is True
+    assert "stream exhausted" in capsys.readouterr().err
+
+
 def test_a_dry_run_prints_the_budgets_without_reading_a_row(tmp_path, capsys):
     import scripts.codeprep as CLI
 
