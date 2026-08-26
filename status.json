@@ -4,19 +4,106 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 51.19,
-    "finalization_in_hours": 84.81,
+    "elapsed_hours": 51.2,
+    "finalization_in_hours": 84.8,
     "hard_hours": 144.0,
-    "remaining_hours": 92.81,
+    "remaining_hours": 92.8,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
-    "memory_used_mb": 402,
+    "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T13:56:16.588815Z",
+  "heartbeat_at": "2026-08-26T13:56:39.553268Z",
+  "lanes": {
+    "evidence": {
+      "details": {
+        "attempts": 1,
+        "command": [
+          "python",
+          "scripts/architecture_evidence.py",
+          "--shape",
+          "stage-b",
+          "--tag",
+          "stageb",
+          "decode",
+          "--threads",
+          "8",
+          "--note",
+          "stage-B decode, 8 of 24 threads; GPU idle, no other lane running, no scoring or training pass on the box"
+        ],
+        "returncodes": [
+          0
+        ]
+      },
+      "phase": "phase6-stageb-decode",
+      "status": "passed",
+      "updated_at": "2026-08-26T06:42:38.703092Z"
+    },
+    "inspect": {
+      "details": {
+        "attempts": 1,
+        "command": [
+          "python",
+          "scripts/contam_scan.py",
+          "--shards-root",
+          "data/shards-rebuild-smoke",
+          "--out",
+          "runs/corpus/rebuild-smoke-contam.md",
+          "--json-out",
+          "runs/corpus/rebuild-smoke-contam.json"
+        ],
+        "returncodes": [
+          0
+        ]
+      },
+      "phase": "phase7-step9-rebuild-scan",
+      "status": "passed",
+      "updated_at": "2026-08-26T13:27:50.137332Z"
+    },
+    "retrieval": {
+      "details": {
+        "attempts": 1,
+        "command": [
+          "python",
+          "scripts/architecture_evidence.py",
+          "--shape",
+          "stage-a",
+          "--tag",
+          "stagea",
+          "retrieval",
+          "--arms-from-report",
+          "stagea",
+          "--threads",
+          "8"
+        ],
+        "returncodes": [
+          0
+        ]
+      },
+      "phase": "phase6-stagea-retrieval-remeasure",
+      "status": "passed",
+      "updated_at": "2026-08-26T06:08:18.500211Z"
+    },
+    "selfcheck": {
+      "details": {
+        "attempts": 1,
+        "command": [
+          "python",
+          "-c",
+          "print('lane ok')"
+        ],
+        "returncodes": [
+          0
+        ]
+      },
+      "phase": "phase6-lane-selfcheck",
+      "status": "passed",
+      "updated_at": "2026-08-25T22:19:31.346973Z"
+    }
+  },
   "metrics": {},
   "phase": "phase7-mixture-report",
   "schema": 1,
