@@ -272,6 +272,91 @@ def test_a_source_that_pins_nothing_records_the_null_rather_than_omitting_it(
     assert manifest["filters"]["row_filter"] is False
 
 
+class _FakeCardData(dict):
+    """A `DatasetCardData` stand-in: dict-like, which is how the real one is read."""
+
+
+class _FakeHubApi:
+    def __init__(self, info=None, error=None):
+        self.info, self.error, self.calls = info, error, []
+
+    def dataset_info(self, repo_id, *, revision=None, timeout=None):
+        self.calls.append((repo_id, revision, timeout))
+        if self.error is not None:
+            raise self.error
+        return self.info
+
+
+class _FakeInfo:
+    def __init__(self, sha, license_value, gated=False):
+        self.sha = sha
+        self.card_data = _FakeCardData(license=license_value)
+        self.gated = gated
+
+
+def test_the_release_lookup_records_the_commit_that_was_actually_served(
+        monkeypatch):
+    """`spec.revision` is None for eight of the ten sources, so what pinned
+    them was the day they ran. The resolved sha is that day's answer written
+    down -- and the license has to be read rather than recalled."""
+    monkeypatch.setattr(dp, "_RELEASE_CACHE", {})
+    spec = SourceSpec("fineweb-edu", "HuggingFaceFW/fineweb-edu", share=1.0)
+    api = _FakeHubApi(_FakeInfo("abc123", "odc-by"))
+
+    record = dp.resolve_source_release(spec, api=api)
+
+    assert record["resolved"] is True
+    assert record["sha"] == "abc123"
+    assert record["license"] == "odc-by"
+    assert record["requested_revision"] is None
+    assert record["resolved_at"].endswith("Z")
+    assert api.calls == [("HuggingFaceFW/fineweb-edu", None,
+                          dp.RELEASE_LOOKUP_TIMEOUT_SEC)]
+
+    # Cached per (repo, revision): a respawned source must not ask twice.
+    dp.resolve_source_release(spec, api=api)
+    assert len(api.calls) == 1
+
+
+def test_a_failed_release_lookup_is_recorded_rather_than_dropped(monkeypatch):
+    """A corpus built offline or behind a gated repo has weaker provenance, not
+    a failed build -- and a gated repo is exactly where the license is most
+    interesting and least readable. An absent field reads as an older manifest;
+    a recorded failure reads as what it was."""
+    monkeypatch.setattr(dp, "_RELEASE_CACHE", {})
+    spec = SourceSpec("gated-src", "some/gated", share=1.0)
+    api = _FakeHubApi(error=RuntimeError("401 Client Error: gated repo"))
+
+    record = dp.resolve_source_release(spec, api=api)
+
+    assert record["resolved"] is False
+    assert "gated repo" in record["error"]
+    assert record["repo_id"] == "some/gated"
+
+
+def test_the_release_record_reaches_the_manifest_and_is_omitted_when_absent(
+        tmp_path, monkeypatch):
+    """A caller that never looked and a lookup that failed are different facts,
+    and only the second has an error worth recording."""
+    spec = SourceSpec("fake-src", "fake/dataset", share=1.0,
+                      text_fn=lambda r: r["text"])
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(5))
+    release = {"resolved": True, "sha": "deadbeef", "license": "cc-by-4.0"}
+
+    with_release = run_source(spec, FakeTokenizer(), token_budget=10**9,
+                              out_dir=str(tmp_path / "with"), dedup=DedupState(),
+                              eval_ngram_index=None, release=release,
+                              log=lambda *a, **k: None)
+    without = run_source(spec, FakeTokenizer(), token_budget=10**9,
+                         out_dir=str(tmp_path / "without"), dedup=DedupState(),
+                         eval_ngram_index=None, log=lambda *a, **k: None)
+
+    with open(with_release["manifest_path"]) as f:
+        assert json.load(f)["source_release"] == release
+    with open(without["manifest_path"]) as f:
+        assert "source_release" not in json.load(f)
+
+
 def test_the_drop_counts_are_this_sources_and_not_the_whole_workers(
         tmp_path, monkeypatch):
     """`DedupState` is shared by every source a worker handles, so its counters

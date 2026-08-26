@@ -663,8 +663,82 @@ def builder_git_sha() -> str:
     return _GIT_SHA
 
 
+#: How long a provenance lookup may hold up a corpus build before it is
+#: recorded as unresolved. Provenance that can stall a 40-hour run is a
+#: liability, and `requests` has no default timeout of its own.
+RELEASE_LOOKUP_TIMEOUT_SEC = 20.0
+
+_RELEASE_CACHE: Dict[tuple, dict] = {}
+
+
+def _utcnow_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def resolve_source_release(spec: SourceSpec, *, api=None,
+                           timeout: float = RELEASE_LOOKUP_TIMEOUT_SEC) -> dict:
+    """The dataset's resolved commit and license, asked of the Hub.
+
+    Two of the fields Phase 7 step 3 asks for cannot come from the spec at all.
+    The **license** lives on the dataset card, is the owner's to change, and is
+    the field a reader most needs before redistributing anything built from it
+    -- so it has to be read, not recalled; a license string written from memory
+    into a provenance artifact is worse than an absent one, because it will be
+    believed. The **resolved commit** is the single thing that makes an unpinned
+    source reproducible after the fact: `spec.revision` is `None` for eight of
+    the ten sources here, so what pinned them was the day they ran, and `sha` is
+    that day's answer written down.
+
+    Never raises and never blocks past `timeout`. A corpus built offline, behind
+    a gated repo, or through a rate-limited Hub is a corpus with weaker
+    provenance, not a failed one -- and a gated repo is precisely the case where
+    the license is both most interesting and least readable. A failure is
+    recorded as `resolved: false` with the error rather than omitted: an absent
+    field reads as an older manifest, a recorded failure reads as what it was.
+
+    `resolved_at` is stamped because a license is a claim about a moment. The
+    card can change after these shards are written, and a manifest that says
+    when it looked is honest about what it knows.
+    """
+    key = (spec.dataset, spec.revision)
+    if key in _RELEASE_CACHE:
+        return dict(_RELEASE_CACHE[key])
+    record = {"repo_id": spec.dataset, "requested_revision": spec.revision,
+              "resolved_at": _utcnow_iso()}
+    try:
+        if api is None:
+            from huggingface_hub import HfApi
+
+            api = HfApi()
+        info = api.dataset_info(spec.dataset, revision=spec.revision,
+                                timeout=timeout)
+        card = getattr(info, "card_data", None)
+        if card is None:
+            license_value = None
+        elif hasattr(card, "get"):
+            license_value = card.get("license")
+        else:
+            license_value = getattr(card, "license", None)
+        if not isinstance(license_value, (str, list, type(None))):
+            license_value = str(license_value)
+        record.update({
+            "resolved": True,
+            # The commit these shards were actually built from, whatever
+            # `requested_revision` did or did not ask for.
+            "sha": getattr(info, "sha", None),
+            "license": license_value,
+            "gated": getattr(info, "gated", None),
+        })
+    except Exception as e:                     # noqa: BLE001 - provenance must
+        record.update({"resolved": False,      # not bite the build
+                       "error": repr(e)})
+    _RELEASE_CACHE[key] = dict(record)
+    return record
+
+
 def source_provenance(spec: SourceSpec, *, min_chars: int,
-                      dedup: DedupState) -> dict:
+                      dedup: DedupState,
+                      release: Optional[dict] = None) -> dict:
     """What it took to build this source, recorded beside the shards it built.
 
     The corpus manifest already carries the dedup parameters and the frozen
@@ -680,13 +754,18 @@ def source_provenance(spec: SourceSpec, *, min_chars: int,
 
     `source_revision` is `None` for most sources and that is a real answer, not
     a missing one: the build took whatever the dataset's default branch pointed
-    at on the day it ran, so the source is pinned by nothing. Recording the null
-    is what makes that visible; Phase 7 step 3's revision pinning is the fix.
+    at on the day it ran, so the source is pinned by nothing that this file
+    knows. `release` is what closes that -- see `resolve_source_release`, which
+    reads the commit the Hub actually served, and the license, at build time.
+    It is omitted rather than stubbed when absent, because a caller that never
+    looked and a lookup that failed are different facts and only the second one
+    has an error worth recording.
     """
     return {
         "source_split": spec.split,
         "source_revision": spec.revision,
         "source_load_kwargs": dict(spec.load_kwargs),
+        **({"source_release": release} if release is not None else {}),
         "filters": {
             "min_chars": min_chars,
             # A lambda has no name worth recording, so what is recorded is
@@ -739,6 +818,7 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
                 rss_soft_limit_gb: Optional[float] = None,
                 resume_skip: int = 0, resume_seed: Optional[dict] = None,
                 resume_stream_state: Optional[dict] = None,
+                release: Optional[dict] = None,
                 log=print) -> dict:
     """`rss_soft_limit_gb` (issue #3's within-source respawn fix) is a second,
     *lower* threshold checked alongside the existing hard `rss_limit_gb` cap.
@@ -806,7 +886,8 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
                   + int(dedup.counters.get(name, 0)) - int(drops_before.get(name, 0))
             for name in _DEDUP_DROPS}
 
-    provenance = source_provenance(spec, min_chars=min_chars, dedup=dedup)
+    provenance = source_provenance(spec, min_chars=min_chars, dedup=dedup,
+                                   release=release)
     prior_elapsed_s = resume_seed.get("elapsed_s", 0.0)
     t0 = time.time()
     incomplete = False
@@ -1087,7 +1168,12 @@ def _run_group_worker(group_key: str, spec_keys: List[str], target_tokens: int, 
                                 checkpoint_every=checkpoint_every,
                                 resume_skip=resume.get("resume_skip", 0),
                                 resume_seed=resume.get("resume_seed"),
-                                resume_stream_state=resume.get("stream_state"))
+                                resume_stream_state=resume.get("stream_state"),
+                                # Resolved here, in the worker that is about to
+                                # stream this dataset anyway, and cached per
+                                # (repo, revision) so a respawned source does
+                                # not ask twice.
+                                release=resolve_source_release(spec))
         except Exception as e:  # a broken source must not sink the whole run
             print(f"FAILED source {spec.key}: {e!r}; recording and continuing")
             stats = _recover_source_stats(spec.key, out_root)
