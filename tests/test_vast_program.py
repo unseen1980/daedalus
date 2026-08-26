@@ -925,6 +925,55 @@ def test_a_supervised_phase_command_may_not_carry_its_own_resume(tmp_path):
         ])
 
 
+def test_the_supervised_checkpoint_is_read_out_of_the_trainer_command(tmp_path):
+    """Composed by `train.py`'s own resolver, so the two sides cannot drift."""
+
+    from scripts.vast_program import trainer_checkpoint_for
+
+    assert trainer_checkpoint_for(
+        ["python", "train.py", "--run-name", "phase8-code-probe"]
+    ) == os.path.join("runs", "phase8-code-probe", "checkpoint.pt")
+    assert trainer_checkpoint_for(
+        ["python", "train.py", "--run-name=phase8-code-probe",
+         "--run-dir=/data/phase8"]
+    ) == os.path.join("/data/phase8", "checkpoint.pt")
+    # Not a trainer, so there is nothing to check and nothing to refuse: a
+    # sweep script or an evaluation pass names its own runs.
+    assert trainer_checkpoint_for(
+        ["python", "scripts/conv_health.py", "sweep"]) is None
+    assert trainer_checkpoint_for(["python", "train.py"]) is None
+
+
+def test_a_supervised_phase_is_refused_a_checkpoint_its_trainer_never_writes(tmp_path):
+    """The failure is silent, which is why it is worth a refusal.
+
+    A path `train.py` does not write leaves the in-flight marker beside a file
+    that never appears: `resumed` stays False forever, every relaunch starts at
+    step zero, and the run looks healthy throughout. The phase 5 smoke found it
+    by composing the path instead of asking, and a hand-typed launch flag is a
+    better chance to make the same mistake than an orchestrator ever was.
+    """
+
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+
+    with pytest.raises(SystemExit, match="restart from step zero"):
+        main([
+            "--state", str(state),
+            "run-phase",
+            "--phase", "phase8-code-probe",
+            "--supervise-checkpoint", "runs/phase8-code-probe/rolling.pt",
+            "--", "python", "train.py",
+            "--run-name", "phase8-code-probe", "--data-dir", "data/code",
+        ])
+
+    # Refused before anything was claimed: the state and the lease are untouched.
+    assert json.loads(state.read_text())["phase"] == "bootstrap"
+    assert not (tmp_path / "controller.lock").exists()
+
+
 def test_an_unsupervised_phase_leaves_no_marker_behind(tmp_path):
     """Most phases are scoring passes and report generators, not resumable runs.
     Marking one in flight would offer `boot_resume` a run to continue that has

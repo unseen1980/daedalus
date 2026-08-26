@@ -477,6 +477,49 @@ def supervised_runner(
     return run
 
 
+def _flag_value(command: Sequence[str], flag: str) -> Optional[str]:
+    """`--flag value` or `--flag=value` out of a phase command, or None."""
+
+    argv = [str(part) for part in command]
+    for index, part in enumerate(argv):
+        if part == flag and index + 1 < len(argv):
+            return argv[index + 1]
+        if part.startswith(f"{flag}="):
+            return part.split("=", 1)[1]
+    return None
+
+
+def trainer_checkpoint_for(command: Sequence[str]) -> Optional[str]:
+    """The checkpoint a `train.py` phase command will write, or None.
+
+    Asked of `train.py` rather than composed, because the two sides have to
+    agree and only one of them knows: hand `run_with_resume` a path the trainer
+    never writes and the in-flight marker sits beside a file that never appears,
+    every relaunch restarts from step zero, and nothing anywhere reports a
+    problem. The phase 5 smoke found exactly that. A hand-typed
+    `--supervise-checkpoint` is more likely to get it wrong than an orchestrator
+    was, so the launcher checks it.
+
+    None means "not checkable" -- not a trainer, no `--run-name`, or `train.py`
+    would not import -- and a launch must never be blocked by that.
+    """
+
+    argv = [str(part) for part in command]
+    if not any(part.endswith("train.py") for part in argv):
+        return None
+    run_name = _flag_value(argv, "--run-name")
+    if not run_name:
+        return None
+    try:
+        from train import TrainArgs, checkpoint_path_for
+
+        return checkpoint_path_for(TrainArgs(
+            run_name=run_name, data_dir="",
+            run_dir=_flag_value(argv, "--run-dir")))
+    except Exception:                       # noqa: BLE001 - advisory check only
+        return None
+
+
 def detached_phase_argv(
     *,
     state,
@@ -750,6 +793,15 @@ def main(argv=None) -> int:
             f"--supervise-checkpoint adds --resume itself on a retry or a "
             f"relaunch, and an explicit one makes attempt one train nothing "
             f"and exit 0. Use --init-from to start from existing weights.")
+
+    if args.supervise_checkpoint:
+        writes = trainer_checkpoint_for(command)
+        if writes and os.path.abspath(writes) != os.path.abspath(args.supervise_checkpoint):
+            raise SystemExit(
+                f"phase {args.phase!r} supervises {args.supervise_checkpoint} "
+                f"but its trainer writes {writes}. The marker would sit beside "
+                f"a file that never appears and every relaunch would restart "
+                f"from step zero without saying so.")
 
     if (not args.detach and args.estimated_hours >= DETACH_REQUIRED_HOURS
             and not running_in_own_session()):
