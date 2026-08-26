@@ -2,12 +2,12 @@
 
 > **Action required.** lane inspect: phase8-codeprep-allall-coverage failed
 
-- Heartbeat: `2026-08-26T17:26:26.594253Z`
-- Phase: `phase8-code-decontam-index`
+- Heartbeat: `2026-08-26T17:31:27.981050Z`
+- Phase: `phase8-codeprep-gate`
 - Status: `passed`
-- Source: `vast/daedalus-code-20260824` at `c769a177b859`
-- Elapsed: `54.7h` of `144.0h`
-- Finalization window opens in: `81.3h`
+- Source: `vast/daedalus-code-20260824` at `cbbf68d7f735`
+- Elapsed: `54.78h` of `144.0h`
+- Finalization window opens in: `81.22h`
 - Deadline stage: `active`
 
 ## Lanes
