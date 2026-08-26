@@ -110,6 +110,30 @@ One caveat is carried rather than hidden: `all-all`'s tenth file lost its footer
 
 One trap worth carrying forward: a probe that finished, printed its verdict and wrote its JSON still exits `-6`. pyarrow aborts in `PyGILState_Release` during interpreter finalization, *after* everything is written, so the controller records the phase as failed and the return code says nothing about whether the work succeeded. Read the JSON, not the exit code. A long build will hit this too.
 
+## The build
+
+`scripts/codeprep.py corpus build` runs the plan through `dataprep.run_source` unchanged. The shard format, the O(1) stream-position resume, the per-source manifest and the memory discipline are the general corpus's; a code-specific shard writer would have been a second implementation of all four, and the RSS caps and resume semantics in that one were paid for over ten dataprep attempts.
+
+Shards go to `<root>/train/<key>` and `<root>/holdout/<key>`, so each side is an ordinary mixture root — the shape `--data-dir` and `--holdout-root` already take, with one key naming both sides of a source the way `make_mixture_holdout_split` does. `C-all` and `C++-all` get distinct keys: they differ only in characters a naive slug throws away, and under one key the second source's shards would land in the first's directory and be read back as an interrupted run of it.
+
+Three decisions are worth naming.
+
+**A bucket's budget is divided across its directories on the supply already measured, not evenly.** `bucket_supply` summed per-directory unique tokens and kept only the sum, so an even split was the only division available — and the measurement says `TypeScript-all` holds **1,443M** unique tokens against `JavaScript-all`'s **1,088M**, and `C++-all` 830M against `C-all`'s 487M. An even split would ask the smaller directory for more than it has, and that shortfall would be reported per directory and invisible per bucket, which is the miscount the whole headroom pass exists to prevent. Where no supply was measured it still splits evenly and the basis says so, because a budget that was guessed and one that was measured must not read alike in a manifest.
+
+**The holdout is capped, not sized as a share.** The holdout pass reads the whole directory and keeps the 2% of repositories on its side, so every holdout token costs roughly fifty tokens of streaming. At 3B total an uncapped holdout is ~39M tokens and ~2B tokens of streaming to collect them, to measure a BPB that a few million measure as well. Capped at 2M per bucket, and it scales down below the cap so a small build is not all holdout.
+
+**A resumed source's gate manifest is merged only when the resume restored a stream *position*.** The replay fallback re-reads the prefix from row zero and `_DocumentStream` consults the gate on every replayed row before it skips it, so that attempt's manifest already covers the whole source; folding the previous one onto it would report a licence histogram twice the size of the corpus it describes. Merging is refused outright across a difference in split side, holdout fraction, salt or language filter — those counters are not addable.
+
+Resume is the **default**, not a flag: a relaunch after a crash costs the remainder rather than the corpus, which is what makes `--max-attempts 3` on the controller mean anything. A source that stops short of the budget headroom said it could fill exits non-zero rather than leaving a log line under a corpus that will be read as whole. A source that trips the resident-memory cap stops the process rather than starting the next one in it — `_run_group_worker`'s rule, after the eighth dataprep incident, where a graceful cap trip was followed moments later by a raw C-level malloc failure that took every other source's in-flight progress with it.
+
+The corpus is filtered against **`general | code`**: 1,406,059 13-grams, 34,286 from HumanEval+/MBPP+ and 1,371,773 from the five general tasks. Dropping the general half to add the code half would decontaminate against the benchmarks phase 8 added and re-contaminate against the ones it inherited; both records, with their digests, are in the corpus manifest.
+
+A 25-document live smoke over all sixteen sources resolved every directory, admitted rows on both sides of every split, and wrote shards and manifests — and found one false record on the way out. `run_source` reads exhaustion off the stream ending, and under a document cap the stream ends at the cap, so the smoke manifested `Java-all` — a directory holding 0.82B unique tokens — as having no more documents. That is recorded as `stopped_by_doc_cap` now; an uncapped stream that really ends still says so, because that one is the finding.
+
+**Running:** the corpus for the 250M and 1B gates — 1B total, so **650M code tokens** — is building detached under the controller (`phase8-code-corpus-build`, three attempts, log in `runs/codeprep/corpus-build.log`). The 3B continuation needs the same command at a larger `--total-tokens`, which resumes each source from where this one leaves it rather than rebuilding.
+
+**One operator ask.** Every Hub read in this program is unauthenticated: the runtime environment carries `HF_TOKEN_WRITE` but not `HF_TOKEN`, which is the name `huggingface_hub` reads. It has already cost one measurement — the 429 that took `all-all`'s tenth footer and made two buckets a flagged lower bound — and it is a worse risk over a multi-GB streaming build. Not repaired here: the fix belongs in the approved wrapper, which is control-plane and lives on #14, and the installed copy is only refreshed by an operator run of `ops/vast/install_supervisor.sh`. Promoting a write-scoped credential into `HF_TOKEN` from inside a build script would put a secret in code. Adding a read-scoped `HF_TOKEN` to the runtime environment closes it.
+
 ## Preregistered gates
 
 Set before any arm runs, and not adjusted after seeing a number.
@@ -127,4 +151,6 @@ Final acceptance: code BPB improves ≥5%, HumanEval+/MBPP+ pass@1 and syntax va
 
 Branch created from #14's tested SHA; parent recorded in `runs/vast-program/code-run-manifest.json`. Base baselines and both harness oracles are in, the code decontamination index is frozen and verified, and the admission gate is written and measured against the real sources.
 
-The mixture decision is closed: the plan is measured, Rust is dropped by name, the remainder is redistributed, and every bucket's directories have been shown to hold the share the plan gives them inside the four-epoch cap. No corpus has been built and no training has started; the next slice is the build itself, which now has a mixture to build.
+The mixture decision is closed: the plan is measured, Rust is dropped by name, the remainder is redistributed, and every bucket's directories have been shown to hold the share the plan gives them inside the four-epoch cap.
+
+The build is written, smoked against the real sources, and **running** for the 250M and 1B gates — 650M code tokens across sixteen sources, detached under the controller so it outlives the session that started it. No training has started. The next slice is the three 250M probes, which now have a corpus to read.
