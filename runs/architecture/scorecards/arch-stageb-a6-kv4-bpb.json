@@ -1,0 +1,55 @@
+{
+  "created_at": "2026-08-26T05:47:58.049709Z",
+  "details": {
+    "arm": "a6-kv4",
+    "holdout_root": "data/holdout",
+    "phase": "phase6-architecture",
+    "preset": "arch-b-a6-kv4",
+    "run": "arch-stageb-a6-kv4",
+    "sources_requested": [
+      "fineweb-edu"
+    ],
+    "tag": "stageb",
+    "weighting": "equal",
+    "weights": null
+  },
+  "item_count": 1,
+  "item_digest": "f8cb850d571cbcc2875a54c0ab7015e1",
+  "kind": "bpb",
+  "metrics": {
+    "bpb": 1.0946384807981915,
+    "bpb_equal_weight": 1.0946384807981915,
+    "bpb_fineweb-edu": 1.0946384807981915,
+    "bpb_token_weighted": 1.0946384807981915,
+    "n_sources": 1.0,
+    "tokens_fineweb-edu": 53588955.0
+  },
+  "name": "arch-stageb-a6-kv4-bpb",
+  "provenance": {
+    "artifact": {
+      "config": "arch-b-a6-kv4",
+      "kind": "checkpoint",
+      "path": "runs/arch-stageb-a6-kv4/checkpoint.pt",
+      "revision": null,
+      "sha256": "3df80aed3b9a6c7d6f5314e82a314279535501e9fd58b81aa1fdf989329052e7"
+    },
+    "bpb_mode": "full",
+    "bpb_sample_batches": null,
+    "git_sha": "ca9a59b",
+    "runtime": {
+      "batch_size": 8,
+      "device": "cuda",
+      "seq_len": 2048
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<smollm2-default>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}
