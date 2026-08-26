@@ -558,37 +558,49 @@ def test_score_arm_measures_a_full_pass_over_the_matched_source(tmp_path):
 # ones did not object. Every test below pins a refusal.
 
 def _retrieval_card(path, *, task, depths, artifact_kind="gguf-q4_0",
-                    per_depth=100):
-    """A retrieval scorecard shaped as `daedalus.retrieval.summarize` writes."""
+                    per_depth=100, template_mode="raw-completion"):
+    """A retrieval scorecard shaped as `daedalus.retrieval.summarize` writes.
+
+    `template_mode` defaults to the raw-completion path because that is the
+    only mode in which a llama.cpp card measures a base model; a card without
+    it is the defective case and is asked for explicitly.
+    """
     metrics = {"exact_match": sum(depths.values()) / len(depths),
                "query_accuracy": 1.0, "n": float(per_depth * len(depths))}
     for depth, score in depths.items():
         metrics[f"exact_match_d{depth}"] = score
         metrics[f"n_d{depth}"] = float(per_depth)
+    runtime = {"backend": "llama-cpp"}
+    if template_mode is not None:
+        runtime["template_mode"] = template_mode
     card = Scorecard(
         kind="retrieval", name=f"retrieval-{task}",
         provenance=Provenance(
             artifact=ArtifactRef(path="m.gguf", sha256="b" * 64,
                                  kind=artifact_kind),
             tokenizer=ArtifactRef(path="tok", sha256="0" * 64, kind="tokenizer"),
-            seed=1, git_sha="deadbee", bpb_mode="not-applicable"),
+            seed=1, git_sha="deadbee", bpb_mode="not-applicable",
+            runtime=runtime),
         metrics=metrics, created_at="2026-08-25T00:00:00Z", item_count=1)
     return write_scorecard(path, card)
 
 
 def _write_retrieval(root, arm_run, *, depths, artifact_kind="gguf-q4_0",
-                     per_depth=100):
+                     per_depth=100, template_mode="raw-completion"):
     for task in RETRIEVAL_GATE_TASKS:
         _retrieval_card(Path(root) / arm_run / f"retrieval-{task}.json",
                         task=task, depths=depths, artifact_kind=artifact_kind,
-                        per_depth=per_depth)
+                        per_depth=per_depth, template_mode=template_mode)
 
 
-def _scored(depths, *, items=100, artifact_kind="gguf-q4_0"):
+def _scored(depths, *, items=100, artifact_kind="gguf-q4_0",
+            template_mode="raw-completion"):
     """The in-memory shape `read_retrieval` returns, for the pure-rule tests."""
     return {task: {"depths": {depth: {"exact_match": score, "n": items}
                               for depth, score in depths.items()},
-                   "artifact_kind": artifact_kind}
+                   "artifact_kind": artifact_kind,
+                   "backend": "llama-cpp",
+                   "template_mode": template_mode}
             for task in RETRIEVAL_GATE_TASKS}
 
 
@@ -736,6 +748,56 @@ def test_retrieval_passes_when_every_cell_is_within_the_gate():
 
     assert check["status"] == "pass"
     assert len(check["cells"]) == len(depths) * len(RETRIEVAL_GATE_TASKS)
+
+
+def test_a_chat_templated_card_is_unmeasured_however_good_its_cells_look():
+    """A templated card measures the template, not retention -- at any score.
+
+    This is the defect that cost phase 6 its retrieval column: the pinned
+    `llama-cli` advertises only `-st`, which runs one *conversation* turn, so
+    every prompt reached the model chat-wrapped. The released base model scores
+    the copy-control 1.0 through torch and 0.0 that way on the same weights.
+
+    Checked before the cells rather than through them, because the cell
+    arithmetic cannot see it: templated cards come back a uniform zero, which
+    lands `no-power` for the right arithmetic and entirely the wrong reason.
+    Here the cells would otherwise read as a clean pass.
+    """
+    depths = {256: 0.90, 512: 0.85, 1024: 0.80, 2048: 0.75}
+    arm = _scored(depths, template_mode="chat-single-turn")
+
+    check = retrieval_check(arm, _scored(depths))
+
+    assert check["status"] == "unmeasured"
+    assert "chat template" in check["note"]
+    assert check["templated_scorecards"] or check["cells"] == []
+
+
+def test_a_llama_cpp_card_that_does_not_state_its_mode_is_treated_as_templated():
+    """Unstated is not unknown-in-principle: it is the old path with no field.
+
+    Every card written before the backend recorded `template_mode` came from
+    the pinned build, and that build can only run the templated turn. Reading a
+    missing field as raw completion would let exactly the stage-A cards that
+    motivated this check pass as measurements.
+    """
+    depths = {256: 0.90, 2048: 0.75}
+    arm = _scored(depths, template_mode=None)
+
+    check = retrieval_check(arm, _scored(depths))
+
+    assert check["status"] == "unmeasured"
+    assert "chat template" in check["note"]
+
+
+def test_a_torch_card_needs_no_template_mode():
+    """A torch backend feeds the prompt directly; there is no template to apply,
+    so the rule must not spread to the path it does not describe."""
+    depths = {256: 0.90, 2048: 0.75}
+    arm = _scored(depths, artifact_kind="checkpoint", template_mode=None)
+    control = _scored(depths, artifact_kind="checkpoint", template_mode=None)
+
+    assert retrieval_check(arm, control)["status"] == "pass"
 
 
 def test_a_depth_the_arm_never_ran_is_unmeasured_rather_than_dropped():

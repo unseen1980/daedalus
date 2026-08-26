@@ -770,12 +770,46 @@ def read_retrieval_depths(path) -> Optional[dict]:
         count = card.metrics.get(f"n_d{depth}")
         depths[depth] = {"exact_match": float(value),
                          "n": int(count) if count is not None else 0}
+    runtime = card.provenance.runtime or {}
     return {
         "depths": depths,
         "artifact_kind": card.provenance.artifact.kind,
         "artifact_sha256": card.provenance.artifact.sha256,
+        "backend": runtime.get("backend"),
+        # Absent on every card written before the backend recorded it. Not
+        # defaulted to the good value -- see `templated_cards`.
+        "template_mode": runtime.get("template_mode"),
         "scorecard": str(path),
     }
+
+
+#: The only mode in which a llama.cpp card measures a *base* model. `-st`
+#: exits after one turn but still applies the chat template, so a card produced
+#: that way scores the template rather than the model.
+RAW_COMPLETION_MODE = "raw-completion"
+
+
+def templated_cards(*records: dict) -> List[dict]:
+    """The cards among these that cannot be shown to be raw completions.
+
+    Only llama.cpp cards are judged: a torch card feeds the model its prompt
+    directly and has no template to apply.
+
+    A *missing* `template_mode` counts as templated rather than raw, which is
+    the whole reason this is a separate function. Every card written before the
+    backend recorded the field came from the pinned build, and that build can
+    only run `-st` -- so "unstated" is not "unknown in principle", it is the
+    templated path with no field to say so. Reading it the other way would let
+    exactly the stage-A cards that motivated this check pass as measurements.
+    """
+
+    suspect = []
+    for record in records:
+        if not (record.get("artifact_kind") or "").startswith("gguf-"):
+            continue
+        if record.get("template_mode") != RAW_COMPLETION_MODE:
+            suspect.append(record)
+    return suspect
 
 
 def read_retrieval(arm: ArchArm, *, tag: str = "stagea",
@@ -896,6 +930,30 @@ def retrieval_check(arm_tasks: dict, control_tasks: dict, *,
         return _check(CHECK_UNMEASURED,
                       "the control has no retrieval scorecard, so there is "
                       "nothing to retain against", cells=[])
+
+    # Before any cell is scored: a chat-templated card is not a weaker
+    # measurement of retrieval, it is a measurement of something else. The
+    # released base model scores the copy-control 1.0 through torch and 0.0
+    # through a templated llama.cpp turn on the same weights, so these cards
+    # read as a uniform zero whatever the architecture does -- and a uniform
+    # zero is what the depth curve would look like if the arms genuinely could
+    # not retrieve. Scoring them anyway produces `no-power` for the right
+    # arithmetic and the wrong reason.
+    templated = templated_cards(*arm_tasks.values(), *control_tasks.values())
+    if templated:
+        return _check(
+            CHECK_UNMEASURED,
+            f"{len(templated)} of {len(arm_tasks) + len(control_tasks)} "
+            "retrieval cards were produced through llama.cpp without a "
+            f"recorded {RAW_COMPLETION_MODE!r} mode, so the prompts reached "
+            "the model wrapped in its chat template and the scores measure "
+            "the template rather than retention. Re-run the retrieval pass "
+            "against a llama-cli built with -DLLAMA_BUILD_UI=OFF, or a "
+            "llama-completion binary.",
+            cells=[], templated_scorecards=[path for path in
+                                            (record.get("scorecard")
+                                             for record in templated)
+                                            if path])
 
     cells: List[dict] = []
     for task in RETRIEVAL_GATE_TASKS:
