@@ -824,6 +824,39 @@ def test_an_unknown_bucket_is_refused_rather_than_silently_skipped():
         CP.probe_languages(["cobol"], stream=_stream([]))
 
 
+def test_the_probe_reports_which_languages_a_directory_actually_contains():
+    """A directory's name says what it should hold; only the histogram says what
+    it does. With four buckets' directories missing entirely, whether the
+    interleaved `all-all` reaches a language at a usable rate is the question
+    that decides the mixture."""
+    rows = ([{"code": "x" * 50, "repo_name": f"o/r{i}", "license": "mit",
+              "language": "Go"} for i in range(3)]
+            + [{"code": "x" * 50, "repo_name": f"o/p{i}", "license": "mit",
+                "language": "Python"} for i in range(17)])
+    record = CP.probe_source("all-all", rows=20, stream=_stream(rows))
+
+    assert record["languages"] == {"Python": 17, "Go": 3}
+
+
+def test_a_named_directory_can_be_probed_without_being_given_a_share_first():
+    report = CP.probe_languages(configs=["all-all"], rows=5,
+                                stream=_stream(_github_rows(5)))
+
+    assert set(report["languages"]) == {"unbucketed"}
+    assert report["languages"]["unbucketed"]["configs"][0]["config"] == "all-all"
+    assert report["languages"]["unbucketed"]["share"] == 0.0
+
+
+def test_the_cli_refuses_to_probe_buckets_and_directories_at_once(capsys):
+    import scripts.codeprep as CLI
+
+    rc = CLI._cli(["corpus", "probe", "--config", "all-all",
+                   "--language", "python"])
+
+    assert rc == 2
+    assert "one or the other" in capsys.readouterr().err
+
+
 def test_the_probe_stops_at_the_row_count_it_was_given():
     """It runs before every build, so it has to stay a two-minute answer."""
     record = CP.probe_source("Python-all", rows=7,

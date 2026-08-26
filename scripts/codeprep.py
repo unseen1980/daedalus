@@ -148,6 +148,14 @@ def _configs(a) -> int:
                         " -- no near miss; this config was never converted")
                 print(f"  - {bucket}/{config}{hint}", file=sys.stderr)
         return 3
+    if a.dataset != GITHUB_CODE_DATASET:
+        # Not "every bucket's directory exists": the buckets were never checked
+        # against this repository, and saying so would be the reassuring kind of
+        # success line -- `codeparrot/github-code-clean` printed exactly that
+        # while carrying none of the four languages the listing was run to find.
+        print(f"\nlisted {a.dataset}; its layout was not checked against this "
+              f"module's buckets, which are defined over {GITHUB_CODE_DATASET}")
+        return 0
     print("\nevery bucket's directory exists on this revision")
     return 0
 
@@ -169,6 +177,10 @@ def _probe_report(report: dict) -> str:
                 f"repos {record['repositories']['train'] + record['repositories']['holdout']:>6,}")
             field = ", ".join(sorted(record["repository_fields"])) or "NONE"
             lines.append(f"          repository field: {field}")
+            seen = record.get("languages") or {}
+            top = ", ".join(f"{name}={count:,}" for name, count
+                            in list(seen.items())[:8])
+            lines.append(f"          languages ({len(seen)}): {top or 'none reported'}")
             licenses = ", ".join(f"{name or '<empty>'}={count:,}" for name, count
                                  in sorted(record["licenses"].items(),
                                            key=lambda kv: -kv[1])[:8])
@@ -180,11 +192,16 @@ def _probe_report(report: dict) -> str:
 
 
 def _probe(a) -> int:
-    languages = a.language or sorted(GITHUB_CODE_LANGUAGES)
-    print(f"probing {len(languages)} bucket(s) at {a.rows:,} rows per config ...",
+    if a.config and a.language:
+        print("REFUSE: --config probes named directories and --language probes "
+              "the mixture's buckets; pass one or the other", file=sys.stderr)
+        return 2
+    what = a.config or (a.language or sorted(GITHUB_CODE_LANGUAGES))
+    print(f"probing {len(what)} "
+          f"{'directory' if a.config else 'bucket'}(s) at {a.rows:,} rows each ...",
           flush=True)
     try:
-        report = probe_languages(languages, rows=a.rows,
+        report = probe_languages(a.language, configs=a.config, rows=a.rows,
                                  holdout_frac=a.holdout_frac)
     except ValueError as e:
         print(f"REFUSE: {e}", file=sys.stderr)
@@ -251,6 +268,11 @@ def _cli(argv=None) -> int:
         "--language", action="append", choices=sorted(GITHUB_CODE_LANGUAGES),
         help=f"code bucket to probe, repeatable (default: all "
              f"{len(CODE_LANGUAGE_SHARES)})")
+    probe.add_argument(
+        "--config", action="append",
+        help="probe this parquet directory by name instead of the mixture's "
+             "buckets, repeatable -- how a directory with no share yet (the "
+             "interleaved 'all-all', a candidate substitute) gets measured")
     probe.add_argument("--rows", type=int, default=2_000,
                        help="rows to read per config (default 2,000)")
     probe.add_argument("--holdout-frac", type=float, default=DEFAULT_HOLDOUT_FRAC)

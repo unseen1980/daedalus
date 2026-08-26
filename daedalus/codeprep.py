@@ -734,6 +734,7 @@ def probe_source(config: str, *, rows: int = 2_000,
     holdout = RepositoryGate(want="holdout", holdout_frac=holdout_frac, salt=salt,
                              max_repositories=rows)
     columns: Dict[str, int] = {}
+    languages: Dict[str, int] = {}
     samples: List[dict] = []
     try:
         for index, row in enumerate(stream(config) if stream is not None
@@ -742,6 +743,14 @@ def probe_source(config: str, *, rows: int = 2_000,
                 break
             for key in row:
                 columns[key] = columns.get(key, 0) + 1
+            # What is *in* the directory, as opposed to what its name says. The
+            # per-language directories this module reaches for turned out not to
+            # exist for four of the plan's buckets, which makes the interleaved
+            # `all-all` the fallback -- and whether a language is reachable there
+            # at a usable rate is a question only the histogram answers.
+            language = str(row.get("language") or "").strip()
+            if language:
+                languages[language] = languages.get(language, 0) + 1
             train_ok, holdout_ok = gate(row), holdout(row)
             if (train_ok or holdout_ok) and len(samples) < 3:
                 samples.append({"repository": repository_of(row),
@@ -757,6 +766,7 @@ def probe_source(config: str, *, rows: int = 2_000,
         "resolved": gate.seen > 0,
         "rows_read": gate.seen,
         "columns": dict(sorted(columns.items())),
+        "languages": dict(sorted(languages.items(), key=lambda kv: (-kv[1], kv[0]))),
         "repository_fields": train_manifest["repository_fields"],
         "licenses": train_manifest["licenses"],
         "admitted": {"train": gate.admitted, "holdout": holdout.admitted},
@@ -859,10 +869,26 @@ def _stream_github_code(config: str):
 
 def probe_languages(languages: Optional[Sequence[str]] = None, *,
                     rows: int = 2_000,
+                    configs: Optional[Sequence[str]] = None,
                     stream: Optional[Callable[[str], object]] = None,
                     holdout_frac: float = DEFAULT_HOLDOUT_FRAC,
                     salt: str = SPLIT_SALT) -> dict:
-    """`probe_source` over every config of every requested bucket."""
+    """`probe_source` over every config of every requested bucket.
+
+    `configs` probes named directories instead, under the bucket key
+    `"unbucketed"`. That is how a directory nobody has assigned a share to yet
+    -- the interleaved `all-all`, a candidate substitute source -- gets the same
+    measurement as one that has one, without first pretending it is part of the
+    mixture.
+    """
+    if configs:
+        return {"holdout_frac": holdout_frac, "split_salt": salt,
+                "rows_per_config": rows,
+                "languages": {"unbucketed": {
+                    "share": 0.0,
+                    "configs": [probe_source(config, rows=rows, stream=stream,
+                                             holdout_frac=holdout_frac, salt=salt)
+                                for config in configs]}}}
     buckets = list(languages or GITHUB_CODE_LANGUAGES)
     unknown = sorted(set(buckets) - set(GITHUB_CODE_LANGUAGES))
     if unknown:
