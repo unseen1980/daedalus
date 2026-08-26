@@ -466,6 +466,44 @@ def epoch_curve(supplies: Dict[str, Supply], mixture: Sequence[Any],
     return points
 
 
+def budget_limits(supplies: Dict[str, Supply], mixture: Sequence[Any],
+                  epoch_cap: float = EPOCH_CAP) -> List[dict]:
+    """The largest total budget each source can feed without passing the cap.
+
+    The inverse of the curve, and the form a target is actually read off in: a
+    source holding `unique` tokens at share `s` supports a total budget of
+    `cap * unique / s`, whatever the budget turns out to be. Sorted ascending,
+    the first row is the corpus's ceiling and the rest are the order in which
+    sources fail as a successor grows -- which is the thing to fix, in order.
+    """
+    out: List[dict] = []
+    for spec in mixture:
+        key, share, _ = _spec_row(spec)
+        supply = supplies.get(key)
+        unique = int(supply.unique_tokens) if supply else 0
+        out.append({
+            "key": key,
+            "share": share,
+            "unique_tokens": unique,
+            # A zero-share source is never demanded, so nothing bounds it.
+            "max_total_budget": (epoch_cap * unique / share) if share > 0 else float("inf"),
+            "basis": supply.basis if supply else "unknown -- no shard manifest for this source",
+        })
+    return sorted(out, key=lambda r: (r["max_total_budget"], r["key"]))
+
+
+def render_limits(limits: Sequence[dict], epoch_cap: float = EPOCH_CAP) -> str:
+    out = [f"=== largest total budget each source feeds at {epoch_cap:g} epochs, "
+           f"worst first"]
+    for row in limits:
+        limit = row["max_total_budget"]
+        out.append(f"  {row['key']:24s} share {row['share']:5.3f} "
+                   f"unique {row['unique_tokens'] / 1e9:10,.2f}B  "
+                   f"supports {'unbounded' if math.isinf(limit) else f'{limit / 1e9:12,.1f}B'}")
+    out.append("")
+    return "\n".join(out)
+
+
 def curve_exit_status(points: Sequence[dict]) -> int:
     """Always 0. The curve is a measurement, not a gate.
 
@@ -554,6 +592,7 @@ def run_epochs(args) -> int:
 
     budgets = [float(b) for b in args.budget] or list(DEFAULT_BUDGET_CURVE)
     points = epoch_curve(supplies, specs, budgets, epoch_cap=args.epoch_cap)
+    limits = budget_limits(supplies, specs, epoch_cap=args.epoch_cap)
 
     report = {
         "schema": 1,
@@ -562,6 +601,7 @@ def run_epochs(args) -> int:
         "shards_root": str(args.shards_root),
         "hub_file_metadata": bool(args.hub),
         "supplies": _jsonable({k: v for k, v in sorted(supplies.items())}),
+        "limits": _jsonable(limits),
         "curve": _jsonable(points),
     }
     if args.out:
@@ -571,6 +611,7 @@ def run_epochs(args) -> int:
     if args.json_out:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
+        print(render_limits(limits, args.epoch_cap))
         print(render_curve(points))
     return curve_exit_status(points)
 

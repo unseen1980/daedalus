@@ -14,6 +14,7 @@ file lists are injected.
 from __future__ import annotations
 
 import importlib.util
+import math
 import os
 import sys
 
@@ -382,6 +383,43 @@ class TestEpochCurve:
         assert all(r.basis == sh.UNKNOWN.lower() or "unknown" in r.basis.lower()
                    for r in rows)
         assert curve[0]["totals"]["verdict"] == sh.SHORT
+
+
+class TestBudgetLimits:
+    """`cap x unique / share`: the budget question asked the other way round."""
+
+    SPECS = [("fineweb-edu", 0.375, 1), ("stack-edu-python", 0.09, 1),
+             ("everyday-conversations", 0.02, 20)]
+
+    SUPPLIES = {
+        "fineweb-edu": sh.Supply(key="fineweb-edu", unique_tokens=1_424_317_277_390,
+                                 realized_tokens=5_193_493_853, basis="measured"),
+        "stack-edu-python": sh.Supply(key="stack-edu-python",
+                                      unique_tokens=1_210_964_651,
+                                      realized_tokens=1_210_964_651, basis="measured"),
+        "everyday-conversations": sh.Supply(key="everyday-conversations",
+                                            unique_tokens=403_573,
+                                            realized_tokens=403_573, basis="measured"),
+    }
+
+    def test_the_exhausted_code_source_caps_the_whole_corpus_near_54b(self):
+        rows = {r["key"]: r for r in sh.budget_limits(self.SUPPLIES, self.SPECS)}
+        assert abs(rows["stack-edu-python"]["max_total_budget"]
+                   - 4 * 1_210_964_651 / 0.09) < 1
+        assert 53.8e9 < rows["stack-edu-python"]["max_total_budget"] < 53.9e9
+
+    def test_rows_are_ordered_worst_first_so_the_ceiling_reads_first(self):
+        got = [r["key"] for r in sh.budget_limits(self.SUPPLIES, self.SPECS)]
+        assert got == ["everyday-conversations", "stack-edu-python", "fineweb-edu"]
+
+    def test_a_source_with_no_share_is_unbounded_rather_than_a_zero_divide(self):
+        rows = sh.budget_limits(self.SUPPLIES, [("fineweb-edu", 0.0, 1)])
+        assert math.isinf(rows[0]["max_total_budget"])
+
+    def test_an_unmeasured_source_supports_nothing_and_says_why(self):
+        rows = sh.budget_limits({}, [("fineweb-edu", 0.375, 1)])
+        assert rows[0]["max_total_budget"] == 0.0
+        assert "unknown" in rows[0]["basis"]
 
 
 class TestTheCurveIsAReportNotAGate:
