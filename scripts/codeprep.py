@@ -175,6 +175,18 @@ def _probe_report(report: dict) -> str:
                 f"      {record['config']:16s} {record['rows_read']:>6,} rows  "
                 f"train {admitted['train']:>6,}  holdout {admitted['holdout']:>5,}  "
                 f"repos {record['repositories']['train'] + record['repositories']['holdout']:>6,}")
+            kept = record.get("languages_kept")
+            if kept:
+                # The yield, on the line that reports the filter that caused it.
+                # A share is only affordable if the amplification is, and the
+                # two numbers are one fact about whether this bucket can be
+                # served from this directory at all.
+                amplification = record.get("stream_amplification")
+                megabytes = sum(record.get("admitted_bytes", {}).values()) / 1e6
+                lines.append(
+                    f"          kept {', '.join(kept)}: "
+                    f"{'no rows' if amplification is None else f'{amplification:,.1f} rows streamed per row kept'}"
+                    f", {megabytes:,.1f} MB admitted")
             field = ", ".join(sorted(record["repository_fields"])) or "NONE"
             lines.append(f"          repository field: {field}")
             seen = record.get("languages") or {}
@@ -197,12 +209,14 @@ def _probe(a) -> int:
               "the mixture's buckets; pass one or the other", file=sys.stderr)
         return 2
     what = a.config or (a.language or sorted(GITHUB_CODE_LANGUAGES))
+    kept = f", keeping {', '.join(a.keep_language)}" if a.keep_language else ""
     print(f"probing {len(what)} "
-          f"{'directory' if a.config else 'bucket'}(s) at {a.rows:,} rows each ...",
-          flush=True)
+          f"{'directory' if a.config else 'bucket'}(s) at {a.rows:,} rows each"
+          f"{kept} ...", flush=True)
     try:
         report = probe_languages(a.language, configs=a.config, rows=a.rows,
-                                 holdout_frac=a.holdout_frac)
+                                 holdout_frac=a.holdout_frac,
+                                 keep_languages=a.keep_language)
     except ValueError as e:
         print(f"REFUSE: {e}", file=sys.stderr)
         return 2
@@ -273,6 +287,12 @@ def _cli(argv=None) -> int:
         help="probe this parquet directory by name instead of the mixture's "
              "buckets, repeatable -- how a directory with no share yet (the "
              "interleaved 'all-all', a candidate substitute) gets measured")
+    probe.add_argument(
+        "--keep-language", action="append",
+        help="keep only rows of this language, repeatable -- how a bucket with "
+             "no directory of its own is measured against the interleaved "
+             "'all-all'. Reports rows streamed per row kept, which is what "
+             "decides whether the bucket's share is affordable. Needs --config")
     probe.add_argument("--rows", type=int, default=2_000,
                        help="rows to read per config (default 2,000)")
     probe.add_argument("--holdout-frac", type=float, default=DEFAULT_HOLDOUT_FRAC)

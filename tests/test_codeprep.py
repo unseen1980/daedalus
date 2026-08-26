@@ -838,6 +838,140 @@ def test_the_probe_reports_which_languages_a_directory_actually_contains():
     assert record["languages"] == {"Python": 17, "Go": 3}
 
 
+# ------------------------------------------ reading a bucket out of all-all ---
+#
+# Rust, Go, Shell and SQL -- 18% of the plan's code mixture -- have no directory
+# on the pinned revision. The interleaved `all-all` carries them, and everything
+# else besides, so a language filter is the only way to read one of those buckets
+# at all. Whether that is *affordable* is a separate question, and the only
+# honest answer to it is a measured rate.
+
+
+def _mixed_rows(n=100, rust_every=10):
+    """`all-all` in miniature: mostly Python, a little Rust, and copyleft rows
+    interleaved so the licence gate has something to refuse in both."""
+    return [{"code": "x" * (100 if i % rust_every else 400),
+             "repo_name": f"org-{i}/repo-{i}",
+             "license": "mit" if i % 3 else "gpl-3.0",
+             "language": "Rust" if i % rust_every == 0 else "Python"}
+            for i in range(n)]
+
+
+def test_a_bucket_with_no_directory_is_read_out_of_the_interleaved_one():
+    record = CP.probe_source("all-all", rows=100, languages=["Rust"],
+                             stream=_stream(_mixed_rows()))
+
+    kept = record["admitted"]["train"] + record["admitted"]["holdout"]
+    assert 0 < kept <= 10
+    assert record["languages_kept"] == ["rust"]
+    # Every non-Rust row refused on language, and none of them counted against
+    # the licence or repository vocabulary.
+    assert record["refused"]["other_language"] == 90
+    assert record["refused"]["no_repository"] == 0
+
+
+def test_the_language_a_row_says_is_matched_however_the_dataset_spells_it():
+    """`GO` is upper-case in this dataset's own vocabulary where `Rust` is not.
+    An exact-match filter against the plan's spelling would refuse every row --
+    the same failure the `GO-all` directory name already caused once, in a place
+    where nothing raises."""
+    rows = [{"code": "x" * 50, "repo_name": f"o/r{i}", "license": "mit",
+             "language": "GO"} for i in range(8)]
+
+    record = CP.probe_source("all-all", rows=8, languages=["Go"],
+                             stream=_stream(rows))
+
+    assert record["admitted"]["train"] + record["admitted"]["holdout"] == 8
+
+
+def test_a_filtered_gate_manifests_its_own_languages_licences_not_the_directorys():
+    """The shard is drawn from one language; a manifest that reported the whole
+    interleaved directory's licence mix would describe a corpus that was never
+    built."""
+    rows = ([{"code": "x", "repo_name": f"o/r{i}", "license": "mit",
+              "language": "Rust"} for i in range(5)]
+            + [{"code": "x", "repo_name": f"o/p{i}", "license": "wtfpl",
+                "language": "Python"} for i in range(20)])
+    gate = CP.RepositoryGate(want="train", languages=["rust"])
+
+    for row in rows:
+        gate(row)
+
+    manifest = gate.manifest()
+    assert manifest["licenses"] == {"mit": 5}
+    assert manifest["languages"] == ["rust"]
+    assert manifest["rows_seen"] == 25 and manifest["refused"]["other_language"] == 20
+
+
+def test_an_unfiltered_gate_still_says_so_in_its_manifest():
+    assert CP.RepositoryGate(want="train").manifest()["languages"] is None
+
+
+def test_a_language_allow_list_that_names_nothing_is_refused():
+    """An empty allow-list refuses every row, which on a corpus build is
+    indistinguishable from a language with no permissive code in it."""
+    with pytest.raises(ValueError, match="pass None to keep every language"):
+        CP.RepositoryGate(want="train", languages=[])
+
+
+def test_the_probe_reports_what_streaming_a_rare_language_actually_costs():
+    """The number the mixture decision divides by. A language reachable in
+    principle is still unaffordable if a token of it costs a hundred rows of
+    something else, and that rate cannot be read off a histogram taken over rows
+    the licence gate had not yet refused."""
+    record = CP.probe_source("all-all", rows=100, languages=["Rust"],
+                             stream=_stream(_mixed_rows()))
+
+    kept = record["admitted"]["train"] + record["admitted"]["holdout"]
+    assert record["stream_amplification"] == pytest.approx(100 / kept, abs=0.01)
+    assert sum(record["admitted_bytes"].values()) == 400 * kept
+
+
+def test_a_language_the_directory_does_not_carry_is_named_not_guessed_at():
+    """Refusing every row looks identical whether the language is absent or its
+    name is spelled the way the plan spells it. The counter distinguishes
+    them."""
+    record = CP.probe_source("all-all", rows=100, languages=["Cobol"],
+                             stream=_stream(_mixed_rows()))
+
+    assert record["admitted"] == {"train": 0, "holdout": 0}
+    assert record["stream_amplification"] is None
+    assert "no row of cobol survived" in record["problem"]
+    assert "100 were refused on language alone" in record["problem"]
+    assert any("all-all" in p for p in CP.probe_problems(
+        {"languages": {"unbucketed": {"configs": [record]}}}))
+
+
+def test_a_language_filter_over_a_buckets_own_directory_is_refused():
+    """`Python-all` is already Python. A filter over it can only refuse rows it
+    should have kept, and would do so silently."""
+    with pytest.raises(ValueError, match="already the language"):
+        CP.probe_languages(["python"], keep_languages=["Python"],
+                           stream=_stream(_github_rows(5)))
+
+
+def test_the_cli_probes_the_interleaved_directory_for_one_language(
+        tmp_path, monkeypatch, capsys):
+    import scripts.codeprep as CLI
+
+    monkeypatch.setattr(
+        CLI, "probe_languages",
+        lambda languages, **kw: CP.probe_languages(
+            languages, stream=_stream(_mixed_rows()), **kw))
+    out = str(tmp_path / "probe.json")
+
+    rc = CLI._cli(["corpus", "probe", "--config", "all-all",
+                   "--keep-language", "Rust", "--rows", "100",
+                   "--json-out", out])
+
+    assert rc == 0
+    assert "rows streamed per row kept" in capsys.readouterr().out
+    written = json.load(open(out))
+    record = written["languages"]["unbucketed"]["configs"][0]
+    assert record["languages_kept"] == ["rust"]
+    assert record["stream_amplification"] > 10
+
+
 def test_a_named_directory_can_be_probed_without_being_given_a_share_first():
     report = CP.probe_languages(configs=["all-all"], rows=5,
                                 stream=_stream(_github_rows(5)))

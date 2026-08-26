@@ -501,6 +501,23 @@ def normalize_license(value) -> str:
     return str(value).strip().lower()
 
 
+def normalize_language(value) -> str:
+    """One case-folded language name out of whatever a row carries.
+
+    Case-folded because this dataset's own vocabulary is inconsistent about it
+    -- `GO` and `FORTRAN` are upper-case where `Python` and `Rust` are not --
+    and an exact-match language filter against the wrong spelling fails exactly
+    the way an exact-match *directory* name did: every row refused, an empty
+    shard directory, a zero exit. That mistake has already been made once here
+    (`GO-all`), and it cost a probe to find.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    return str(value).strip().lower()
+
+
 def license_verdict(value) -> str:
     """`"permissive"`, `"non-permissive"` or `"unknown"` for one licence value.
 
@@ -581,8 +598,8 @@ def repository_split(repository: str, *, holdout_frac: float = DEFAULT_HOLDOUT_F
 #: manifest always carries every key -- an absent counter and a zero one read
 #: identically otherwise, and "this build refused nothing for licence reasons"
 #: is a claim worth being able to make.
-REFUSAL_REASONS = ("no_repository", "non_permissive", "unknown_license",
-                   "other_split")
+REFUSAL_REASONS = ("other_language", "no_repository", "non_permissive",
+                   "unknown_license", "other_split")
 
 
 @dataclass
@@ -599,12 +616,22 @@ class RepositoryGate:
     total and pure, so every repository is admitted by exactly one of them and
     no document can reach both. That is what makes the holdout a second
     independent stream rather than a second reading of the first.
+
+    `languages`, when given, additionally keeps only rows of those languages.
+    Four of the plan's seven buckets -- Rust, Go, Shell and SQL, 18% of the code
+    mixture -- have no per-language directory on the pinned revision, and the
+    interleaved `all-all` directory that does carry them carries everything
+    else too. A language filter is the only way to read a bucket out of it, and
+    it is deliberately *not* the default: a filter over a directory that is
+    already one language costs a comparison per row and hides a misspelling.
     """
 
     want: str
     holdout_frac: float = DEFAULT_HOLDOUT_FRAC
     salt: str = SPLIT_SALT
     max_repositories: int = DEFAULT_MAX_REPOSITORIES
+    #: Language names to keep, case-folded, or None to keep every language.
+    languages: Optional[frozenset] = None
     seen: int = 0
     admitted: int = 0
     refusals: Dict[str, int] = field(
@@ -626,9 +653,29 @@ class RepositoryGate:
         # Validated here rather than at the first row, so a units mistake is a
         # refusal at construction instead of an empty corpus hours later.
         repository_split("", holdout_frac=self.holdout_frac, salt=self.salt)
+        if self.languages is not None:
+            wanted = frozenset(normalize_language(name)
+                               for name in self.languages) - {""}
+            if not wanted:
+                # An empty allow-list refuses every row, which is
+                # indistinguishable from a language with no permissive code in
+                # it. `languages=None` is how "every language" is asked for.
+                raise ValueError(
+                    "languages was given but names no language; pass None to "
+                    "keep every language")
+            self.languages = wanted
 
     def __call__(self, row: dict) -> bool:
         self.seen += 1
+        if self.languages is not None and \
+                normalize_language(row.get("language")) not in self.languages:
+            # Checked before the licence is tallied, not after: a gate scoped to
+            # one language out of an interleaved directory must manifest *that
+            # language's* licence vocabulary. Tallying every row first would
+            # describe the directory instead, and the manifest would report a
+            # licence mix no document in the shard was drawn from.
+            self.refusals["other_language"] += 1
+            return False
         license_key = normalize_license(row.get("license"))
         self.licenses[license_key] = self.licenses.get(license_key, 0) + 1
 
@@ -690,6 +737,12 @@ class RepositoryGate:
             "holdout_frac": self.holdout_frac,
             "split_salt": self.salt,
             "split_fn": "blake2b-64(salt\\0repository) / 2**64",
+            # Recorded for the reason the split parameters are: a shard read out
+            # of the interleaved directory under a language filter is a
+            # different corpus from the same directory read whole, and nothing
+            # in the shards themselves says which one this was.
+            "languages": (None if self.languages is None
+                          else sorted(self.languages)),
             "rows_seen": self.seen,
             "rows_admitted": self.admitted,
             "refused": dict(self.refusals),
@@ -705,7 +758,8 @@ class RepositoryGate:
 def probe_source(config: str, *, rows: int = 2_000,
                  stream: Optional[Callable[[str], object]] = None,
                  holdout_frac: float = DEFAULT_HOLDOUT_FRAC,
-                 salt: str = SPLIT_SALT) -> dict:
+                 salt: str = SPLIT_SALT,
+                 languages: Optional[Sequence[str]] = None) -> dict:
     """Run the gate over real rows of one source and report what it found.
 
     Every field name and licence string in this module is a *guess* about a
@@ -725,16 +779,31 @@ def probe_source(config: str, *, rows: int = 2_000,
     A config that does not resolve is reported as `resolved: false` with the
     error rather than raised, because the useful output is the whole table: one
     misspelled directory should not hide the six that were right.
+
+    `languages` scopes the gate to those languages, which is how a bucket with
+    no directory of its own gets measured against the interleaved `all-all`.
+    What that measurement is *for* is `stream_amplification` and
+    `admitted_bytes`: reading Rust out of a directory that is 0.27% Rust means
+    streaming, decompressing and gate-checking some hundreds of rows per row
+    kept, and whether that is affordable at the bucket's preregistered share is
+    a question about the rate, not about whether the rows exist. Estimating it
+    from a language histogram taken over *unadmitted* rows would be wrong in the
+    one direction that matters, since the licence gate refuses about a third of
+    this dataset and there is no reason its refusal rate is uniform by language.
     """
     record: dict = {"dataset": GITHUB_CODE_DATASET, "config": config,
                     "data_files": github_code_data_files(config),
-                    "rows_requested": rows}
+                    "rows_requested": rows,
+                    "languages_kept": (None if languages is None
+                                       else sorted(normalize_language(name)
+                                                   for name in languages))}
     gate = RepositoryGate(want="train", holdout_frac=holdout_frac, salt=salt,
-                          max_repositories=rows)
+                          max_repositories=rows, languages=languages)
     holdout = RepositoryGate(want="holdout", holdout_frac=holdout_frac, salt=salt,
-                             max_repositories=rows)
+                             max_repositories=rows, languages=languages)
     columns: Dict[str, int] = {}
-    languages: Dict[str, int] = {}
+    seen_languages: Dict[str, int] = {}
+    admitted_bytes = {"train": 0, "holdout": 0}
     samples: List[dict] = []
     try:
         for index, row in enumerate(stream(config) if stream is not None
@@ -750,26 +819,39 @@ def probe_source(config: str, *, rows: int = 2_000,
             # at a usable rate is a question only the histogram answers.
             language = str(row.get("language") or "").strip()
             if language:
-                languages[language] = languages.get(language, 0) + 1
+                seen_languages[language] = seen_languages.get(language, 0) + 1
             train_ok, holdout_ok = gate(row), holdout(row)
+            chars = len(row.get("code") or "")
+            if train_ok:
+                admitted_bytes["train"] += chars
+            elif holdout_ok:
+                admitted_bytes["holdout"] += chars
             if (train_ok or holdout_ok) and len(samples) < 3:
                 samples.append({"repository": repository_of(row),
                                 "license": normalize_license(row.get("license")),
                                 "split": "train" if train_ok else "holdout",
-                                "chars": len(row.get("code") or "")})
+                                "chars": chars})
     except Exception as exc:                    # noqa: BLE001 - reported per config
         record.update({"resolved": False, "error": repr(exc)})
         return record
 
     train_manifest = gate.manifest()
+    kept = gate.admitted + holdout.admitted
     record.update({
         "resolved": gate.seen > 0,
         "rows_read": gate.seen,
         "columns": dict(sorted(columns.items())),
-        "languages": dict(sorted(languages.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "languages": dict(sorted(seen_languages.items(),
+                                 key=lambda kv: (-kv[1], kv[0]))),
         "repository_fields": train_manifest["repository_fields"],
         "licenses": train_manifest["licenses"],
         "admitted": {"train": gate.admitted, "holdout": holdout.admitted},
+        "admitted_bytes": dict(admitted_bytes),
+        # Rows that must be streamed per row kept. The number a token budget
+        # divides by, and the reason a language reachable in principle can still
+        # be unaffordable: `None` rather than a division by zero when nothing
+        # survived, since "infinitely expensive" is already said by `problem`.
+        "stream_amplification": (round(gate.seen / kept, 2) if kept else None),
         "repositories": {"train": gate.repositories_count,
                          "holdout": holdout.repositories_count},
         # The two gates refuse each other's rows under `other_split`, so the
@@ -778,13 +860,22 @@ def probe_source(config: str, *, rows: int = 2_000,
                     for reason in REFUSAL_REASONS if reason != "other_split"},
         "samples": samples,
     })
-    if gate.seen and not (gate.admitted or holdout.admitted):
+    if gate.seen and not kept:
         # The silent failure, named. Every one of these has the same shape --
         # rows arrived and none survived -- and none of them raises.
-        record["problem"] = (
-            "read {:,} rows and admitted none: the repository field, the "
-            "licence vocabulary or the split is not what this module assumes"
-            .format(gate.seen))
+        cause = ("the repository field, the licence vocabulary or the split is "
+                 "not what this module assumes")
+        if languages is not None:
+            # With a filter on, the likeliest cause is a language name spelled
+            # the way the plan spells it rather than the way the dataset does,
+            # and `refused.other_language` says which of the two it was.
+            cause = ("no row of {} survived; {:,} were refused on language "
+                     "alone, so check the spelling against the `languages` "
+                     "histogram before concluding the language is absent"
+                     .format(", ".join(record["languages_kept"]),
+                             train_manifest["refused"]["other_language"]))
+        record["problem"] = "read {:,} rows and admitted none: {}".format(
+            gate.seen, cause)
     return record
 
 
@@ -872,7 +963,8 @@ def probe_languages(languages: Optional[Sequence[str]] = None, *,
                     configs: Optional[Sequence[str]] = None,
                     stream: Optional[Callable[[str], object]] = None,
                     holdout_frac: float = DEFAULT_HOLDOUT_FRAC,
-                    salt: str = SPLIT_SALT) -> dict:
+                    salt: str = SPLIT_SALT,
+                    keep_languages: Optional[Sequence[str]] = None) -> dict:
     """`probe_source` over every config of every requested bucket.
 
     `configs` probes named directories instead, under the bucket key
@@ -880,14 +972,23 @@ def probe_languages(languages: Optional[Sequence[str]] = None, *,
     -- the interleaved `all-all`, a candidate substitute source -- gets the same
     measurement as one that has one, without first pretending it is part of the
     mixture.
+
+    `keep_languages` narrows those directories to a language, and belongs only
+    to the `configs` path: a bucket's own directory is already one language, so
+    a filter over it can only ever refuse rows it should have kept.
     """
+    if keep_languages and not configs:
+        raise ValueError(
+            "keep_languages narrows a named directory and needs `configs`; a "
+            "bucket's own directory is already the language it is named for")
     if configs:
         return {"holdout_frac": holdout_frac, "split_salt": salt,
                 "rows_per_config": rows,
                 "languages": {"unbucketed": {
                     "share": 0.0,
                     "configs": [probe_source(config, rows=rows, stream=stream,
-                                             holdout_frac=holdout_frac, salt=salt)
+                                             holdout_frac=holdout_frac, salt=salt,
+                                             languages=keep_languages)
                                 for config in configs]}}}
     buckets = list(languages or GITHUB_CODE_LANGUAGES)
     unknown = sorted(set(buckets) - set(GITHUB_CODE_LANGUAGES))
