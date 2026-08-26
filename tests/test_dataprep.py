@@ -357,6 +357,83 @@ def test_the_release_record_reaches_the_manifest_and_is_omitted_when_absent(
         assert "source_release" not in json.load(f)
 
 
+class VocabTokenizer(FakeTokenizer):
+    """A stand-in that answers the fields a fingerprint is built from.
+
+    `FakeTokenizer` deliberately answers none of them, which is the *partial*
+    case; this is the other one, and the two vocabularies below differ in the
+    field the guard compares.
+    """
+
+    def __init__(self, vocab_size, name="fake/tokenizer"):
+        self.vocab_size = vocab_size
+        self.name_or_path = name
+
+    def encode(self, text, add_special_tokens=True):
+        # Deterministic and vocabulary-dependent -- `hash()` is salted per
+        # process, and a probe digest that changes between runs would make the
+        # guard below pass or fail for a reason that is not the vocabulary.
+        return [(len(word) * 7 + self.vocab_size) % self.vocab_size
+                for word in text.split()]
+
+    def convert_tokens_to_ids(self, token):
+        return 0
+
+
+def test_the_source_manifest_records_the_vocabulary_that_produced_its_ids(
+        tmp_path, monkeypatch):
+    """A shard file is uint16 ids under every vocabulary, so nothing about
+    reading one under the wrong tokenizer raises: it trains, logs a loss and
+    exports. `assert_manifest_tokenizer` is the guard, and until now the corpus
+    manifests gave it nothing to check."""
+    spec = SourceSpec("fake-src", "fake/dataset", share=1.0,
+                      text_fn=lambda r: r["text"])
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(5))
+
+    stats = run_source(spec, VocabTokenizer(32_768), token_budget=10**9,
+                       out_dir=str(tmp_path / "v2"), dedup=DedupState(),
+                       eval_ngram_index=None,
+                       tokenizer_name="runs/tokenizer-lab/tok-32768",
+                       log=lambda *a, **k: None)
+
+    with open(stats["manifest_path"]) as f:
+        manifest = json.load(f)
+    assert manifest["tokenizer"]["name"] == "runs/tokenizer-lab/tok-32768"
+    assert manifest["tokenizer"]["vocab_size"] == 32_768
+    assert "partial" not in manifest["tokenizer"]
+
+    from daedalus.data import assert_manifest_tokenizer
+
+    # The guard the field exists for: same shard dtype, same manifest schema,
+    # a vocabulary that means something else.
+    assert_manifest_tokenizer(manifest, VocabTokenizer(32_768))
+    with pytest.raises(ValueError, match="shard tokenizer mismatch"):
+        assert_manifest_tokenizer(manifest, VocabTokenizer(49_152))
+
+
+def test_a_tokenizer_that_cannot_be_fingerprinted_records_what_it_could(
+        tmp_path, monkeypatch):
+    """Recorded as partial rather than faked, so a stand-in degrades to the
+    same non-guard as a manifest written before the field existed -- and a
+    build under a real tokenizer cannot be mistaken for one."""
+    spec = SourceSpec("fake-src", "fake/dataset", share=1.0,
+                      text_fn=lambda r: r["text"])
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(3))
+
+    stats = run_source(spec, FakeTokenizer(), token_budget=10**9,
+                       out_dir=str(tmp_path / "partial"), dedup=DedupState(),
+                       eval_ngram_index=None, log=lambda *a, **k: None)
+
+    with open(stats["manifest_path"]) as f:
+        recorded = json.load(f)["tokenizer"]
+    assert recorded["partial"] is True
+
+    from daedalus.data import assert_manifest_tokenizer
+
+    assert_manifest_tokenizer(recorded and {"tokenizer": recorded},
+                              VocabTokenizer(49_152))
+
+
 def test_the_drop_counts_are_this_sources_and_not_the_whole_workers(
         tmp_path, monkeypatch):
     """`DedupState` is shared by every source a worker handles, so its counters
@@ -764,7 +841,7 @@ def test_run_group_worker_threads_stream_position_into_run_source(tmp_path, monk
         seen[spec.key] = kw.get("resume_stream_state")
         return {"key": spec.key, "tokens": 1, "shards": []}
 
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "run_source", fake_run_source)
     # Required whenever `_run_group_worker` is called directly rather than in
     # a forked child -- otherwise it permanently caps THIS pytest process's
@@ -993,9 +1070,61 @@ def _fake_mixture(n_sources=2):
     ]
 
 
+def _observing_tokenizer_group_worker(group_key, spec_keys, target_tokens,
+                                      out_root, *a, **kw):
+    """Reports the vocabulary the *forked child* sees.
+
+    Module-level so `_run_group_worker`'s replacement pickles by qualified
+    name, and returned through the stats for the reason
+    `_echo_resume_state_group_worker` does: the child is a real process, so a
+    value it writes into a parent-side structure is written into its own copy.
+    """
+    return group_key, [{"key": spec_keys[0], "tokens": 7, "n_seen": 1,
+                        "shards": [{"file": f"{spec_keys[0]}_00000.bin",
+                                    "tokens": 7}],
+                        "observed_tokenizer": dp._ACTIVE_TOKENIZER_NAME}], {}
+
+
+@_NEEDS_FORK
+def test_the_chosen_vocabulary_reaches_the_forked_workers(tmp_path, monkeypatch):
+    """Phase 7 step 9 builds shards under the selected V2 tokenizer, and a
+    rebuild that quietly fell back to SmolLM2 would look exactly like one that
+    worked -- same dtype, same schema, ids that mean something else. The choice
+    travels the way the mixture does, so it cannot be lost in the respawn or
+    crash-recovery paths that never carried it."""
+    monkeypatch.setattr(dp, "_run_group_worker",
+                        _observing_tokenizer_group_worker)
+
+    manifest = run_dataprep(
+        target_tokens=1000, out_root=str(tmp_path / "shards"),
+        manifest_path=str(tmp_path / "manifest.json"), mixture=_fake_mixture(1),
+        skip_decontam=True, max_workers=1, log=lambda *a, **k: None,
+        tokenizer_name="runs/tokenizer-lab/tok-32768")
+
+    assert manifest["sources"][0]["observed_tokenizer"] == (
+        "runs/tokenizer-lab/tok-32768")
+
+
+@_NEEDS_FORK
+def test_a_build_that_names_no_vocabulary_still_packs_under_smollm2(
+        tmp_path, monkeypatch):
+    """The default has to stay `None` all the way into the worker: every shard
+    tree this program has built, and every one phase 8 continues from, is
+    SmolLM2's 49,152."""
+    monkeypatch.setattr(dp, "_run_group_worker",
+                        _observing_tokenizer_group_worker)
+
+    manifest = run_dataprep(
+        target_tokens=1000, out_root=str(tmp_path / "shards"),
+        manifest_path=str(tmp_path / "manifest.json"), mixture=_fake_mixture(1),
+        skip_decontam=True, max_workers=1, log=lambda *a, **k: None)
+
+    assert manifest["sources"][0]["observed_tokenizer"] is None
+
+
 @_NEEDS_FORK
 def test_run_dataprep_end_to_end_offline(tmp_path, monkeypatch):
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(200))
 
     manifest = run_dataprep(
@@ -1016,7 +1145,7 @@ def test_run_dataprep_resume_skips_completed_sources(tmp_path, monkeypatch):
     # be tracked via a real file (visible across the fork boundary), not an
     # in-memory dict (each fork gets its own private copy-on-write copy, and
     # mutations inside a worker would never be seen back in this test process).
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     calls_file = tmp_path / "calls.log"
 
     def counting_stream(spec):
@@ -1047,7 +1176,7 @@ def test_run_dataprep_resume_retries_errored_sources(tmp_path, monkeypatch):
     finepdfs-edu and finemath-3plus stopped at 11% and 2.8% in the real run.
     Its manifest entry must not be treated as "done" on --resume, or it is
     skipped forever. A clean completion still must not be re-streamed."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     calls_file = tmp_path / "calls.log"
 
     def counting_stream(spec):
@@ -1091,7 +1220,7 @@ def test_resume_does_not_restream_a_source_that_met_its_budget(tmp_path, monkeyp
     Guards the obvious regression from _demote_short_sources -- a rule that
     reopened everything would re-stream the whole corpus on every --resume.
     """
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     calls_file = tmp_path / "calls.log"
 
     def counting_stream(spec):
@@ -1124,7 +1253,7 @@ def test_an_exhausted_source_is_not_retried_forever(tmp_path, monkeypatch):
     Without the `exhausted` marker, _demote_short_sources would re-dispatch it
     on every single --resume to discover the same emptiness again.
     """
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     calls_file = tmp_path / "calls.log"
 
     def counting_stream(spec):
@@ -1153,7 +1282,7 @@ def test_an_exhausted_source_is_not_retried_forever(tmp_path, monkeypatch):
 
 def test_run_source_marks_an_exhausted_stream(tmp_path, monkeypatch):
     """The marker is set where it is observed: the stream ran out, no break."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(3))
     spec = SourceSpec("fake-src", "fake/dataset", share=1.0, text_fn=lambda r: r["text"])
     stats = run_source(spec, FakeTokenizer(), token_budget=10_000_000,
@@ -1165,7 +1294,7 @@ def test_run_source_marks_an_exhausted_stream(tmp_path, monkeypatch):
 
 def test_run_source_does_not_mark_exhausted_when_the_budget_is_met(tmp_path, monkeypatch):
     """Breaking on the budget is the normal path and must not look exhausted."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(500))
     spec = SourceSpec("fake-src", "fake/dataset", share=1.0, text_fn=lambda r: r["text"])
     stats = run_source(spec, FakeTokenizer(), token_budget=50, out_dir=str(tmp_path),
@@ -1180,7 +1309,7 @@ def test_run_dataprep_shares_dedup_within_group_across_sources(tmp_path, monkeyp
     """Sources sharing a near_dup_group must run in the same worker process
     sharing one DedupState, so cross-source exact/near-dup catching (e.g. the
     real fineweb-edu+dclm-baseline overlap) survives the parallel-group split."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     shared_doc = "same shared document text repeated many times for length here " * 5
 
     def stream(spec):
@@ -1203,7 +1332,7 @@ def test_run_dataprep_shares_dedup_within_group_across_sources(tmp_path, monkeyp
 
 @_NEEDS_FORK
 def test_run_dataprep_no_resume_redoes_everything(tmp_path, monkeypatch):
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(200))
     manifest_path = str(tmp_path / "manifest.json")
     out_root = str(tmp_path / "shards")
@@ -1218,7 +1347,7 @@ def test_run_dataprep_no_resume_redoes_everything(tmp_path, monkeypatch):
 
 @_NEEDS_FORK
 def test_run_dataprep_source_failure_is_recorded_not_fatal(tmp_path, monkeypatch):
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
 
     def boom(spec):
         if spec.key == "src0":
@@ -1244,7 +1373,7 @@ def test_run_dataprep_group_setup_failure_is_recorded_not_fatal(tmp_path, monkey
     raised -- a bare `get_tokenizer()` call outside try/except previously let
     this crash the whole worker's future, which (before the fut.result()
     hardening below) would have taken down every other in-flight group too."""
-    def boom_tokenizer():
+    def boom_tokenizer(name=None):
         raise RuntimeError("simulated tokenizer load failure")
 
     monkeypatch.setattr(dp, "get_tokenizer", boom_tokenizer)
@@ -1332,7 +1461,7 @@ def test_recover_source_stats_returns_none_when_nothing_flushed(tmp_path):
 
 @_NEEDS_FORK
 def test_run_dataprep_survives_worker_crash_that_escapes_internal_handling(tmp_path, monkeypatch):
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(200))
     monkeypatch.setattr(dp, "_run_group_worker", _crashing_group_worker)
 
@@ -1360,7 +1489,7 @@ def test_run_group_worker_skips_remaining_sources_after_rss_cap_trip(tmp_path, m
     def always_over_cap(limit_gb):
         raise dp.WorkerMemoryExceeded("boom, always over cap")
 
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_check_worker_rss", always_over_cap)
     # _run_group_worker is normally only ever run inside a short-lived forked
     # child (see _set_worker_memory_limit's docstring: "soft==hard means this
@@ -1405,7 +1534,7 @@ def test_run_group_worker_trims_allocator_before_returning(tmp_path, monkeypatch
     and the setup-failure path."""
     calls = []
     monkeypatch.setattr(dp, "_malloc_trim", lambda: calls.append(True))
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
     monkeypatch.setattr(dp, "_set_worker_memory_limit", lambda *a, **k: None)
     old_mixture = dp._ACTIVE_MIXTURE_BY_KEY
@@ -1427,7 +1556,7 @@ def test_run_group_worker_trims_allocator_after_setup_failure(tmp_path, monkeypa
     calls = []
     monkeypatch.setattr(dp, "_malloc_trim", lambda: calls.append(True))
 
-    def boom_tokenizer():
+    def boom_tokenizer(name=None):
         raise RuntimeError("simulated tokenizer load failure")
 
     monkeypatch.setattr(dp, "get_tokenizer", boom_tokenizer)
@@ -1453,7 +1582,7 @@ def test_run_group_worker_propagates_incomplete_result_on_soft_rss_stop(tmp_path
     soft-stopped source does NOT poison the rest of this group's sources: the
     soft limit leaves real headroom below the hard cap by design, so it's
     safe to keep going in the same process."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_set_worker_memory_limit", lambda *a, **k: None)
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(6000))
     monkeypatch.setattr(dp.psutil, "Process", lambda: _FakeProc(3.5))  # over soft(3.0), under hard(4.0)
@@ -1483,7 +1612,7 @@ def test_run_group_worker_passes_rss_check_every_through_to_run_source(tmp_path,
     be accepted and silently dropped. Verified by setting it far tighter than
     the default and confirming the soft-stop trips at that exact, much
     earlier checkpoint instead of the default 5,000-doc one."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_set_worker_memory_limit", lambda *a, **k: None)
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(500))
     monkeypatch.setattr(dp.psutil, "Process", lambda: _FakeProc(3.5))  # over soft(3.0), under hard(4.0)
@@ -1714,7 +1843,7 @@ def test_run_dataprep_recovers_flushed_shards_when_worker_crash_escapes_internal
     with open(os.path.join(src0_dir, "src0_00000.bin"), "wb") as f:
         f.write(b"\x00\x00" * 100)  # 100 uint16 tokens, matching TOKEN_DTYPE
 
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(200))
     monkeypatch.setattr(dp, "_run_group_worker", _crashing_group_worker)
 
@@ -1760,7 +1889,7 @@ def test_run_dataprep_never_initialises_wandb_in_the_forking_process(tmp_path, m
 
     monkeypatch.setattr(wandb_logger, "WandbLogger", ExplodingLogger)
     monkeypatch.setattr(wandb_sidecar, "WandbSidecar", _NoopWandb)
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(200))
 
     manifest = run_dataprep(target_tokens=2000, out_root=str(tmp_path / "shards"),
@@ -1774,7 +1903,7 @@ def test_run_dataprep_never_initialises_wandb_in_the_forking_process(tmp_path, m
 
 @_NEEDS_FORK
 def test_run_dataprep_skip_decontam_avoids_eval_import(tmp_path, monkeypatch):
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
 
     def explode(**kwargs):
@@ -1823,7 +1952,7 @@ def _frozen_index(tmp_path, texts=("alpha " * 20,), complete=True):
 def test_a_frozen_index_is_used_and_recorded_in_the_manifest(tmp_path, monkeypatch):
     """The point of the whole exercise: after the run, the manifest says which
     eval items the corpus was filtered against. The released corpus cannot."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
     monkeypatch.setattr(dp, "_build_eval_index", lambda **kw: (_ for _ in ()).throw(
         AssertionError("must not build an index when a frozen one was given")))
@@ -1845,7 +1974,7 @@ def test_a_frozen_index_is_used_and_recorded_in_the_manifest(tmp_path, monkeypat
 
 @_NEEDS_FORK
 def test_an_index_that_is_not_the_one_named_stops_the_run(tmp_path, monkeypatch):
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
     path, _ = _frozen_index(tmp_path)
     from daedalus.eval_index import IndexDigestMismatch
@@ -1863,7 +1992,7 @@ def test_a_partial_frozen_index_stops_the_run(tmp_path, monkeypatch):
     """Freezing an index does not make it complete. An index that covers a
     fifth of HellaSwag is exactly what this phase is removing, so handing one
     to the rebuild has to fail rather than be recorded and used."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
     path, _ = _frozen_index(tmp_path, complete=False)
 
@@ -1878,7 +2007,7 @@ def test_a_partial_frozen_index_stops_the_run(tmp_path, monkeypatch):
 def test_the_in_process_index_is_recorded_as_partial(tmp_path, monkeypatch):
     """The unchanged default still runs, and still writes a manifest -- but one
     that cannot later be mistaken for a complete-index build."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
     monkeypatch.setattr(dp, "_build_eval_index", lambda **kw: {"a b c"})
 
@@ -1896,7 +2025,7 @@ def test_resuming_records_the_index_this_run_used_not_the_previous_one(tmp_path,
     """A resume that switches to the frozen index is how the phase-7 rebuild
     continues a corpus started under the old default. The manifest has to
     describe the filter in force, or one file claims two different ones."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
     monkeypatch.setattr(dp, "_build_eval_index", lambda **kw: {"a b c"})
     manifest_path = str(tmp_path / "manifest.json")
@@ -1951,7 +2080,7 @@ def test_run_dataprep_aborts_cleanly_on_low_memory(tmp_path, monkeypatch):
     """ADDENDUM 2 rule 4: if available memory drops below the floor, abort
     in-flight groups cleanly and record why, instead of continuing toward a
     hang the operator would have to reboot."""
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(200))
 
     class FakeVM:
@@ -2063,7 +2192,7 @@ def test_run_source_manifests_partial_shards_on_worker_memory_exceeded(tmp_path,
 
 @_NEEDS_FORK
 def test_run_dataprep_does_not_abort_when_memory_is_healthy(tmp_path, monkeypatch):
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(200))
 
     class FakeVM:
@@ -2112,7 +2241,7 @@ def test_run_dataprep_logs_progress_to_wandb(tmp_path, monkeypatch):
 
     _RecordingWandb.instances = []
     monkeypatch.setattr(wandb_sidecar, "WandbSidecar", _RecordingWandb)
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(200))
 
     run_dataprep(target_tokens=2000, out_root=str(tmp_path / "shards"),
@@ -2137,7 +2266,7 @@ def test_run_dataprep_wandb_disabled_still_completes(tmp_path, monkeypatch):
 
     _RecordingWandb.instances = []
     monkeypatch.setattr(wandb_sidecar, "WandbSidecar", _RecordingWandb)
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: FakeTokenizer())
     monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(200))
 
     manifest = run_dataprep(target_tokens=2000, out_root=str(tmp_path / "shards"),
@@ -2314,8 +2443,8 @@ def test_group_worker_sets_a_vmem_cap_matched_to_its_rss_cap(monkeypatch):
     seen = {}
     monkeypatch.setattr(dp, "_set_worker_memory_limit",
                         lambda limit_gb=None: seen.setdefault("limit", limit_gb))
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: (_ for _ in ()).throw(
-        RuntimeError("stop after the limit is set")))
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: (
+        _ for _ in ()).throw(RuntimeError("stop after the limit is set")))
     monkeypatch.setattr(dp, "_ACTIVE_MIXTURE_BY_KEY",
                         {s.key: s for s in dp.MIXTURE})
     dp._run_group_worker("g", [], 1, "/tmp/nonexistent-out", 1, None, None,
@@ -2444,7 +2573,7 @@ def test_shard_writer_flush_partial_makes_the_buffer_durable(tmp_path):
 def test_group_worker_passes_checkpoint_every_through_to_run_source(monkeypatch):
     seen = {}
     monkeypatch.setattr(dp, "_set_worker_memory_limit", lambda *a, **k: None)
-    monkeypatch.setattr(dp, "get_tokenizer", lambda: object())
+    monkeypatch.setattr(dp, "get_tokenizer", lambda name=None: object())
     monkeypatch.setattr(dp, "_ACTIVE_MIXTURE_BY_KEY",
                         {s.key: s for s in dp.MIXTURE})
     monkeypatch.setattr(dp, "run_source",

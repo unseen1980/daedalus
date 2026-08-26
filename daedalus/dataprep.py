@@ -97,6 +97,7 @@ from daedalus.data import (
     get_tokenizer,
     is_contaminated,
     tokenize_document,
+    tokenizer_fingerprint,
     upload_shards,
 )
 
@@ -738,7 +739,8 @@ def resolve_source_release(spec: SourceSpec, *, api=None,
 
 def source_provenance(spec: SourceSpec, *, min_chars: int,
                       dedup: DedupState,
-                      release: Optional[dict] = None) -> dict:
+                      release: Optional[dict] = None,
+                      tokenizer: Optional[dict] = None) -> dict:
     """What it took to build this source, recorded beside the shards it built.
 
     The corpus manifest already carries the dedup parameters and the frozen
@@ -760,12 +762,22 @@ def source_provenance(spec: SourceSpec, *, min_chars: int,
     It is omitted rather than stubbed when absent, because a caller that never
     looked and a lookup that failed are different facts and only the second one
     has an error worth recording.
+
+    `tokenizer` is the same fingerprint `daedalus.data.tokenize_and_pack` writes,
+    and it belongs here for the reason the rest of this block does: the ids in a
+    shard file mean nothing without the vocabulary that produced them, and
+    `vocab_size` alone does not identify one -- two 32,768-token vocabularies
+    trained on different samples share it and agree on nothing else. Nothing
+    raises when a tree is read under the wrong tokenizer; it trains, logs a loss
+    and exports. `daedalus.data.assert_manifest_tokenizer` is the guard, and
+    until now the corpus manifests gave it nothing to check.
     """
     return {
         "source_split": spec.split,
         "source_revision": spec.revision,
         "source_load_kwargs": dict(spec.load_kwargs),
         **({"source_release": release} if release is not None else {}),
+        **({"tokenizer": tokenizer} if tokenizer is not None else {}),
         "filters": {
             "min_chars": min_chars,
             # A lambda has no name worth recording, so what is recorded is
@@ -819,6 +831,7 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
                 resume_skip: int = 0, resume_seed: Optional[dict] = None,
                 resume_stream_state: Optional[dict] = None,
                 release: Optional[dict] = None,
+                tokenizer_name: Optional[str] = None,
                 log=print) -> dict:
     """`rss_soft_limit_gb` (issue #3's within-source respawn fix) is a second,
     *lower* threshold checked alongside the existing hard `rss_limit_gb` cap.
@@ -887,7 +900,9 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
             for name in _DEDUP_DROPS}
 
     provenance = source_provenance(spec, min_chars=min_chars, dedup=dedup,
-                                   release=release)
+                                   release=release,
+                                   tokenizer=tokenizer_fingerprint(
+                                       tokenizer, tokenizer_name))
     prior_elapsed_s = resume_seed.get("elapsed_s", 0.0)
     t0 = time.time()
     incomplete = False
@@ -990,6 +1005,19 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
 # via copy-on-write. See the module docstring's "Parallelism" section for why
 # this exists instead of passing `SourceSpec` objects through the pool's queue.
 _ACTIVE_MIXTURE_BY_KEY: Dict[str, SourceSpec] = {}
+
+#: Which vocabulary this run packs its ids under, set beside the mixture above
+#: and inherited by forked workers the same way. `None` is SmolLM2, so every
+#: build that has ever run keeps producing byte-identical shards.
+#:
+#: A module global rather than a `_run_group_worker` argument for the reason the
+#: mixture is one: the worker's parameters are the run's *shape*, and threading
+#: a second config value through the pool's queue, the respawn path and the
+#: crash-recovery path is three more places for a rebuild to silently fall back
+#: to the default vocabulary. Phase 7 step 9 wants shards under the selected V2
+#: tokenizer, and a rebuild that quietly used the old one would look exactly
+#: like a rebuild that worked.
+_ACTIVE_TOKENIZER_NAME: Optional[str] = None
 
 
 # RLIMIT_AS backstop for worker processes -- deliberately coarse, see
@@ -1108,7 +1136,7 @@ def _run_group_worker(group_key: str, spec_keys: List[str], target_tokens: int, 
         # Scaled to this worker's resident budget -- a fixed cap here crashed
         # every group of attempt 8 uncatchably. See `worker_vmem_cap_gb`.
         _set_worker_memory_limit(worker_vmem_cap_gb(rss_limit_gb))
-        tokenizer = get_tokenizer()
+        tokenizer = get_tokenizer(_ACTIVE_TOKENIZER_NAME)
         dedup = DedupState()
     except Exception as e:
         print(f"FAILED group {group_key} setup: {e!r}; recording every source as failed")
@@ -1173,7 +1201,8 @@ def _run_group_worker(group_key: str, spec_keys: List[str], target_tokens: int, 
                                 # stream this dataset anyway, and cached per
                                 # (repo, revision) so a respawned source does
                                 # not ask twice.
-                                release=resolve_source_release(spec))
+                                release=resolve_source_release(spec),
+                                tokenizer_name=_ACTIVE_TOKENIZER_NAME)
         except Exception as e:  # a broken source must not sink the whole run
             print(f"FAILED source {spec.key}: {e!r}; recording and continuing")
             stats = _recover_source_stats(spec.key, out_root)
@@ -1330,7 +1359,8 @@ def run_dataprep(target_tokens: int = 45_000_000_000, out_root: str = "data/shar
                   checkpoint_every: int = 50_000,
                   min_available_gb: float = 6.0, mem_poll_interval_s: float = 15.0,
                   wandb_enabled: bool = True, wandb_project: Optional[str] = None,
-                  wandb_entity: Optional[str] = None, run_name: Optional[str] = None) -> dict:
+                  wandb_entity: Optional[str] = None, run_name: Optional[str] = None,
+                  tokenizer_name: Optional[str] = None) -> dict:
     """Runs every `near_dup_group` in `mixture` (default `MIXTURE`) as its own
     process, up to `max_workers` concurrently -- see the module docstring's
     "Parallelism" section for why (a purely sequential run was measured at
@@ -1403,9 +1433,10 @@ def run_dataprep(target_tokens: int = 45_000_000_000, out_root: str = "data/shar
     see that module's docstring for why importing torch into this parent
     process before it forks workers is actively unsafe here) and degrades to
     offline the same way; never blocks or crashes the run."""
-    global _ACTIVE_MIXTURE_BY_KEY
+    global _ACTIVE_MIXTURE_BY_KEY, _ACTIVE_TOKENIZER_NAME
     mixture = mixture if mixture is not None else MIXTURE
     _ACTIVE_MIXTURE_BY_KEY = {s.key: s for s in mixture}
+    _ACTIVE_TOKENIZER_NAME = tokenizer_name
 
     eval_ngram_index = None
     decontam_index_record = None
@@ -1913,6 +1944,13 @@ def _cli():
                         "instead). This is how the corpus gets finished to specific "
                         "absolute per-source numbers rather than to global proportions -- "
                         "see build_budget_mixture and issue #4 section 4.2.")
+    p.add_argument("--tokenizer", default=None, metavar="NAME_OR_PATH",
+                   help="pack ids under this tokenizer (Hub id or local "
+                        "directory) instead of SmolLM2. Phase 7 step 9 builds "
+                        "shards under the selected V2 vocabulary this way; the "
+                        "fingerprint lands in every source manifest, so a tree "
+                        "read under the wrong vocabulary is refused rather "
+                        "than silently trained on.")
     p.add_argument("--run-name", default=None, help="W&B run name; defaults to 'dataprep'")
     p.add_argument("--wandb-project", default=None)
     p.add_argument("--wandb-entity", default=None)
@@ -1951,6 +1989,7 @@ def _cli():
         min_available_gb=args.min_available_gb, mem_poll_interval_s=args.mem_poll_interval_s,
         wandb_enabled=not args.no_wandb, wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity, run_name=args.run_name,
+        tokenizer_name=args.tokenizer,
     )
     print(json.dumps({k: v for k, v in manifest.items() if k != "sources"}, indent=2))
 
