@@ -29,6 +29,32 @@ PROGRESS_FILES = ("STATUS.md", "status.json", "recent-metrics.json", "timeline.j
 #: Statuses that mean the program stopped advancing on its own.
 ATTENTION_STATUSES = frozenset({"blocked", "halted", "failed"})
 
+#: What `ops/vast/install_supervisor.sh` copies onto the box, and where. A
+#: session calls the *installed* wrapper and supervisor runs the *installed*
+#: service scripts, so a committed change to any of these is inert until an
+#: operator reinstalls -- and nothing said so. `ops/vast/run-approved` gained
+#: the `branch` command phase 8 step 1 needs, and the only symptom available to
+#: a session was `unapproved command branch`: the box's last deliverable sat
+#: blocked on a one-line operator step while the heartbeat read `passed`. The
+#: quieter half is worse. A command that exists in both copies but whose
+#: *behaviour* changed -- a new guard in `commit-push` -- fails nothing and
+#: enforces nothing, and the repository's tests pass either way, because they
+#: exercise the committed copy and sessions run the installed one.
+INSTALLED_CONTROL_PLANE = (
+    ("ops/vast/run-approved", "/usr/local/bin/daedalus-approved"),
+    ("ops/vast/daedalus_progress.sh",
+     "/opt/supervisor-scripts/daedalus_progress.sh"),
+    ("ops/vast/daedalus_resume.sh",
+     "/opt/supervisor-scripts/daedalus_resume.sh"),
+    ("ops/vast/daedalus_session_keeper.sh",
+     "/opt/supervisor-scripts/daedalus_session_keeper.sh"),
+    ("ops/vast/supervisord.conf", "/etc/supervisor/conf.d/daedalus.conf"),
+)
+
+#: The one step that reconciles them, quoted verbatim in the banner so the
+#: reader never has to find it.
+INSTALL_COMMAND = "bash ops/vast/install_supervisor.sh"
+
 #: A blocker summary is operator-written prose, so it is bounded and scrubbed
 #: before reaching a branch anyone can read.
 BLOCKER_SUMMARY_LIMIT = 400
@@ -51,6 +77,56 @@ def sanitize_blocker(value) -> str:
     if len(text) > BLOCKER_SUMMARY_LIMIT:
         text = text[:BLOCKER_SUMMARY_LIMIT].rstrip() + "..."
     return text
+
+
+def _committed_bytes(repository, path: str, runner=subprocess.run):
+    """`path` as HEAD holds it, or None when HEAD does not carry it.
+
+    Never raises. This is a maintenance check riding along inside the
+    heartbeat, and a heartbeat that stops publishing because `git` was briefly
+    unavailable would trade the thing that matters for the thing that does not.
+    """
+
+    try:
+        result = runner(["git", "-C", str(repository), "show", f"HEAD:{path}"],
+                        capture_output=True, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if getattr(result, "returncode", 1) != 0:
+        return None
+    return result.stdout
+
+
+def stale_installed_files(source_repo, *, pairs=INSTALLED_CONTROL_PLANE,
+                          committed=_committed_bytes) -> list:
+    """Which control-plane files on the box are not what HEAD says they are.
+
+    Compared against **HEAD, not the working tree**, and that is the whole
+    design. An uncommitted edit to the wrapper is a session's work in progress;
+    reporting it would ask an operator to install code nobody has reviewed or
+    pushed, which is precisely what an operator-only install step exists to
+    prevent. A session that could make the heartbeat demand its own uncommitted
+    wrapper would be one edit away from widening its own permissions. A
+    committed change is pushed, and readable in the pull request, before anyone
+    is asked to install it.
+
+    A file HEAD does not carry is skipped: a checkout predating one of these is
+    not a box that needs reinstalling. A file HEAD carries and the box does not
+    *is* reported -- it has never been installed at all.
+    """
+
+    stale = []
+    for repo_path, installed_path in pairs:
+        want = committed(source_repo, repo_path)
+        if want is None:
+            continue
+        try:
+            have = Path(installed_path).read_bytes()
+        except OSError:
+            have = None
+        if have != want:
+            stale.append(repo_path)
+    return sorted(stale)
 
 
 def build_deadline_view(state: dict, now: datetime) -> dict:
@@ -84,13 +160,20 @@ def build_deadline_view(state: dict, now: datetime) -> dict:
     }
 
 
-def build_attention_view(state: dict) -> dict:
+def build_attention_view(state: dict, *, stale_install=()) -> dict:
     """Whether a human has to act, and the scrubbed reason when one does.
 
     Side lanes count. A pass running beside the main phase fails the same ways
     the main phase does, and a heartbeat that reads `running` because the GPU
     run is fine, while the CPU lane beside it died hours ago, is exactly the
     silence this file exists to prevent.
+
+    A stale installed control plane counts for the same reason, and it is the
+    one blocker no session can clear for itself: the program keeps running,
+    every phase reports `passed`, and the capability a phase needs is simply
+    absent from the box. It is appended to a real blocker rather than
+    replacing it -- a halted run outranks a reinstall -- but it is never
+    dropped, because the two are usually the same stall seen from both ends.
     """
 
     status = str(state.get("status", ""))
@@ -110,7 +193,17 @@ def build_attention_view(state: dict) -> dict:
             blocker = sanitize_blocker(lane_details.get("blocker")) or (
                 f"lane {name}: {lane.get('phase', 'unknown')} "
                 f"{lane.get('status', 'unknown')}")
-    return {"user_action_required": bool(required), "blocker": blocker}
+    if stale_install:
+        required = True
+        notice = (f"the box runs control-plane code HEAD has moved past "
+                  f"({', '.join(stale_install)}); run {INSTALL_COMMAND} on the "
+                  f"instance")
+        lead = blocker.rstrip()
+        if lead and not lead.endswith((".", "!", "?")):
+            lead += "."
+        blocker = f"{lead} Also: {notice}" if lead else notice
+    return {"user_action_required": bool(required),
+            "blocker": sanitize_blocker(blocker)}
 
 
 def _timestamp(value: datetime) -> str:
@@ -130,8 +223,10 @@ def build_public_snapshot(
     now: datetime,
     metrics: Optional[dict] = None,
     gpu: Optional[dict] = None,
+    stale_install=(),
 ) -> dict:
     """Return only fields explicitly approved for the public progress branch."""
+    stale_install = sorted(stale_install)
     snapshot = _select(state, STATE_FIELDS)
     snapshot.update({
         "heartbeat_at": _timestamp(now),
@@ -140,7 +235,10 @@ def build_public_snapshot(
         "metrics": _select(metrics, METRIC_FIELDS),
         "gpu": _select(gpu, GPU_FIELDS),
         "deadline": build_deadline_view(state, now),
-        "attention": build_attention_view(state),
+        "attention": build_attention_view(state, stale_install=stale_install),
+        # Repository-relative paths of committed files, so this names what to
+        # reinstall without publishing anything about the box's layout.
+        "stale_control_plane": stale_install,
     })
     return snapshot
 
@@ -311,6 +409,7 @@ def publish_once(
     now: Optional[datetime] = None,
     git_reader=_git_reader,
     gpu_reader=_gpu_reader,
+    install_reader=stale_installed_files,
     committer=commit_and_push,
 ) -> dict:
     """Publish one sanitized heartbeat and return the public snapshot."""
@@ -324,6 +423,7 @@ def publish_once(
         now=heartbeat_at,
         metrics=read_latest_jsonl(metrics_path) if metrics_path else {},
         gpu=gpu_reader(),
+        stale_install=install_reader(source_repo),
     )
     write_snapshot(progress_worktree, snapshot)
     committer(

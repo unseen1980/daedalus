@@ -137,6 +137,7 @@ def test_publish_once_writes_and_commits_one_heartbeat(tmp_path):
             "sha": "abc123",
         }[field],
         gpu_reader=lambda: {"utilization_pct": 75},
+        install_reader=lambda _: [],
         committer=lambda *args, **kwargs: commits.append((args, kwargs)) or True,
     )
 
@@ -294,6 +295,44 @@ class TestDeadlineAndAttention:
 
         assert "## Lanes" not in _render_status(snapshot)
 
+    def test_a_stale_install_asks_for_a_human_and_names_the_one_step(self):
+        """The blocker no session can clear for itself: every phase reports
+        `passed` while the capability the next phase needs is absent from the
+        box."""
+        from scripts.github_progress import INSTALL_COMMAND, build_attention_view
+
+        view = build_attention_view(
+            self._state(), stale_install=["ops/vast/run-approved"])
+
+        assert view["user_action_required"] is True
+        assert "ops/vast/run-approved" in view["blocker"]
+        assert INSTALL_COMMAND in view["blocker"]
+
+    def test_a_real_blocker_outranks_the_reinstall_notice_without_losing_it(self):
+        from scripts.github_progress import INSTALL_COMMAND, build_attention_view
+
+        view = build_attention_view(
+            self._state(status="halted", details={"blocker": "loss diverged"}),
+            stale_install=["ops/vast/run-approved"])
+
+        assert view["blocker"].startswith("loss diverged")
+        assert INSTALL_COMMAND in view["blocker"]
+
+    def test_the_status_page_banners_a_stale_install(self):
+        from scripts.github_progress import (INSTALL_COMMAND, _render_status,
+                                             build_public_snapshot)
+
+        snapshot = build_public_snapshot(
+            self._state(),
+            source_branch="vast/daedalus-improvements-20260824",
+            source_sha="abc1234",
+            now=self._at(10),
+            stale_install=["ops/vast/run-approved"],
+        )
+
+        assert snapshot["stale_control_plane"] == ["ops/vast/run-approved"]
+        assert INSTALL_COMMAND in _render_status(snapshot)
+
     def test_the_status_page_leads_with_the_action_banner(self):
         from scripts.github_progress import _render_status, build_public_snapshot
 
@@ -307,3 +346,92 @@ class TestDeadlineAndAttention:
 
         assert "> **Action required.** wrapper is stale" in rendered
         assert "Deadline stage: `active`" in rendered
+
+
+class TestInstalledControlPlane:
+    """A session calls the *installed* wrapper, so a committed change to it is
+    inert until an operator reinstalls -- and nothing on the progress branch
+    said so while phase 8 sat blocked on exactly that."""
+
+    def _pair(self, tmp_path, name="ops/vast/run-approved"):
+        installed = tmp_path / "installed"
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        return name, installed
+
+    def test_an_installed_copy_matching_head_is_not_stale(self, tmp_path):
+        from scripts.github_progress import stale_installed_files
+
+        name, installed = self._pair(tmp_path)
+        installed.write_bytes(b"#!/bin/bash\ncase branch\n")
+
+        assert stale_installed_files(
+            tmp_path, pairs=((name, str(installed)),),
+            committed=lambda _repo, _path: b"#!/bin/bash\ncase branch\n") == []
+
+    def test_an_installed_copy_head_has_moved_past_is_stale(self, tmp_path):
+        from scripts.github_progress import stale_installed_files
+
+        name, installed = self._pair(tmp_path)
+        installed.write_bytes(b"#!/bin/bash\nold\n")
+
+        assert stale_installed_files(
+            tmp_path, pairs=((name, str(installed)),),
+            committed=lambda _repo, _path: b"#!/bin/bash\nnew\n") == [name]
+
+    def test_a_file_that_was_never_installed_is_stale(self, tmp_path):
+        from scripts.github_progress import stale_installed_files
+
+        name, installed = self._pair(tmp_path)
+
+        assert stale_installed_files(
+            tmp_path, pairs=((name, str(installed)),),
+            committed=lambda _repo, _path: b"anything") == [name]
+
+    def test_a_path_head_does_not_carry_is_skipped(self, tmp_path):
+        """A checkout predating one of these is not a box needing a reinstall."""
+        from scripts.github_progress import stale_installed_files
+
+        name, installed = self._pair(tmp_path)
+
+        assert stale_installed_files(
+            tmp_path, pairs=((name, str(installed)),),
+            committed=lambda _repo, _path: None) == []
+
+    def test_the_comparison_reads_head_and_not_the_working_tree(self, tmp_path):
+        """An uncommitted edit must not make the heartbeat demand its own
+        install: a session that could do that would be one edit away from
+        widening the permissions the operator step exists to bound."""
+        import subprocess
+
+        from scripts.github_progress import stale_installed_files
+
+        repository = tmp_path / "repo"
+        (repository / "ops" / "vast").mkdir(parents=True)
+        committed_text = "#!/bin/bash\ncommitted\n"
+        wrapper = repository / "ops" / "vast" / "run-approved"
+        wrapper.write_text(committed_text)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repository,
+                       check=True)
+        subprocess.run(["git", "add", "ops/vast/run-approved"], cwd=repository,
+                       check=True)
+        subprocess.run(["git", "-c", "user.email=t@e.st", "-c", "user.name=t",
+                        "commit", "-qm", "initial"], cwd=repository, check=True)
+        installed = tmp_path / "installed"
+        installed.write_text(committed_text)
+
+        wrapper.write_text("#!/bin/bash\nuncommitted work in progress\n")
+
+        assert stale_installed_files(
+            repository,
+            pairs=(("ops/vast/run-approved", str(installed)),)) == []
+
+    def test_an_unavailable_git_never_takes_the_heartbeat_down(self, tmp_path):
+        """The check rides along inside the heartbeat; the heartbeat is the
+        thing that matters."""
+        from scripts.github_progress import _committed_bytes
+
+        def explode(*_args, **_kwargs):
+            raise OSError("git: not found")
+
+        assert _committed_bytes(tmp_path, "ops/vast/run-approved",
+                                runner=explode) is None
