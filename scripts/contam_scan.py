@@ -558,7 +558,11 @@ def _cli(argv=None) -> int:
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     with open(a.out, "w") as f:
-        f.write(report)
+        # One trailing newline, not two. `format_report` builds its sections by
+        # joining on blank lines, so the last one arrives at EOF -- which
+        # `git diff --check` refuses, meaning this report could be written but
+        # not committed beside the verdict it explains.
+        f.write(report.rstrip("\n") + "\n")
     with open(a.json_out, "w") as f:
         json.dump({"per_source": per_source, "totals": totals,
                    "coverage": coverage, "index_sizes": sizes,

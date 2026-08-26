@@ -24,7 +24,7 @@
     "total_tokens_on_disk": 69438
   },
   "budget_tokens": 200000,
-  "created_at": "2026-08-26T13:23:58.544573Z",
+  "created_at": "2026-08-26T13:26:52.717012Z",
   "criteria": [
     {
       "criterion": "decontam-index-complete",
@@ -72,34 +72,25 @@
     },
     {
       "criterion": "corpus-contamination",
-      "detail": "1 document(s) hit the 'split_gap' index; 1 document(s) hit the 'limit_gap' index; the scan saw 'everyday-conversations' at 403,573 tokens and the corpus holds 69,438, so 334,135 were never scanned; the scan covered ['cosmopedia-v2', 'dclm-baseline', 'finemath-3plus', 'finepdfs-edu', 'finephrase', 'fineweb-edu', 'finewiki-en', 'infiwebmath-3plus', 'stack-edu-python'], which this corpus does not hold",
+      "detail": "zero hits over 93.3423% of the corpus by tokens; the 95% upper bound on the document rate is 1.01e-02, so this bounds the contamination rate rather than proving it zero",
       "evidence": [
-        "runs/preflight/contam-exposure.json"
+        "runs/corpus/rebuild-smoke-contam.json"
       ],
       "observed": {
-        "corpus_tokens": 16988128870,
-        "doc_rate_filtered_upper95": 2.1960050981342178e-05,
-        "doc_rate_limit_gap_upper95": 3.238373527547139e-05,
-        "doc_rate_split_gap_upper95": 3.238373527547139e-05,
+        "corpus_tokens": 69438,
+        "doc_rate_filtered_upper95": 0.01014038584991722,
+        "doc_rate_limit_gap_upper95": 0.01014038584991722,
+        "doc_rate_split_gap_upper95": 0.01014038584991722,
         "docs_filtered": 0,
-        "docs_limit_gap": 1,
-        "docs_scanned": 174932,
-        "docs_split_gap": 1,
-        "sampled_frac": 0.013226496438745228,
+        "docs_limit_gap": 0,
+        "docs_scanned": 375,
+        "docs_split_gap": 0,
+        "sampled_frac": 0.9334226216192862,
         "scan_source_tokens": {
-          "cosmopedia-v2": 950000576,
-          "dclm-baseline": 3375002145,
-          "everyday-conversations": 403573,
-          "finemath-3plus": 1350008857,
-          "finepdfs-edu": 1200001535,
-          "finephrase": 2066170024,
-          "fineweb-edu": 5035572292,
-          "finewiki-en": 450005019,
-          "infiwebmath-3plus": 1350000198,
-          "stack-edu-python": 1210964651
+          "everyday-conversations": 69438
         }
       },
-      "passed": false
+      "passed": true
     },
     {
       "criterion": "epoch-cap",
@@ -160,7 +151,7 @@
   ],
   "dropped_sources": [],
   "gate": "phase7-corpus",
-  "passed": false,
+  "passed": true,
   "schema": 1,
   "shards_root": "data/shards-rebuild-smoke",
   "sources": [
