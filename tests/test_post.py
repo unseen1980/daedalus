@@ -486,12 +486,12 @@ def test_dpo_logs_continue_the_sft_step_axis(tok):
 # starts out as a copy of the policy, so it begins at 0.0 and rises on any
 # movement at all.
 
-def _stream(n):
+def _stream(n, start=0):
     """Preference pairs whose first token is their index, so a test can say
     exactly which ones DPO was handed."""
     return ({"chosen": ([i, 2, 3, 4], [IGNORE_INDEX, 2, 3, 4]),
              "rejected": ([i, 5, 6, 7], [IGNORE_INDEX, 5, 6, 7])}
-            for i in range(n))
+            for i in range(start, start + n))
 
 
 def test_held_out_pairs_are_disjoint_from_the_pairs_dpo_trains_on():
@@ -644,3 +644,43 @@ def test_dpo_stage_scores_the_gate_on_pairs_it_did_not_train_on(tmp_path, tok,
     gate = json.load(open(os.path.join(t.run_dir, "dpo-eval.json")))
     assert gate["n"] == 4
     assert out["heldout"] == gate
+
+
+def test_dpo_stage_takes_the_holdout_from_the_eval_split_when_asked(tmp_path, tok,
+                                                                    monkeypatch):
+    """With --dpo-eval-split the holdout comes from that split and the training
+    stream is left whole. Swapping the two branches would silently go on
+    carving the holdout out of training while the operator asked for a real
+    split, and nothing downstream would say so."""
+    import json
+
+    t = _post_trainer(tmp_path, tok)
+    trained_on = []
+
+    real_run_dpo = post.run_dpo
+
+    def spy(policy, reference, pairs, *a, **kw):
+        pairs = list(pairs)
+        trained_on.extend(p["chosen"][0][0] for p in pairs)
+        return real_run_dpo(policy, reference, iter(pairs), *a, **kw)
+
+    monkeypatch.setattr(post, "run_dpo", spy)
+    import datasets
+    monkeypatch.setattr(datasets, "load_dataset",
+                        lambda name, split=None, **k: ("ds", split))
+    monkeypatch.setattr(
+        post, "iter_preference_pairs",
+        lambda dataset, *a, **k: (_stream(8) if dataset == ("ds", "train")
+                                  else _stream(3, start=100)))
+
+    class _A:
+        dpo_dataset, dpo_split, dpo_eval_split = "d", "train", "test_prefs"
+        dpo_eval_pairs, dpo_max_len, max_assistant_chars = 3, 32, 1200
+        dpo_beta, dpo_steps, dpo_micro_batch = 0.1, 2, 2
+        muon_lr, adam_lr = 1e-3, 1e-4
+
+    post._run_dpo_stage(_A(), tok, t, "cpu")
+
+    assert sorted(trained_on) == list(range(8)), (
+        "the training split must arrive whole when the holdout has its own split")
+    assert json.load(open(os.path.join(t.run_dir, "dpo-eval.json")))["n"] == 3
