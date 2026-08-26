@@ -5,6 +5,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 ## Live progress
 
 - Heartbeat: [`vast/progress-20260824`](https://github.com/unseen1980/daedalus/tree/vast/progress-20260824) — refreshed every five minutes with elapsed hours, hours to the finalization window, and an action banner when a human is needed.
+- Stacked on this branch: **#15**, Daedalus-Code V1, holding every code-specific commit. Review this one first; #15's diff is only meaningful on top of it.
 - Durable controller state: `runs/vast-program/state.json` with an append-only `events.jsonl` timeline.
 - Operator procedures: `ops/vast/RUNBOOK.md`.
 
@@ -20,7 +21,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 | 5 — ShortConv channel death prevention | **complete**, **no schedule selected**, verdict in `runs/conv-health/verdict-paired.json`, reading in `runs/conv-health/phase5-conv-decay.md` |
 | 6 — Architecture Pareto proxies | **complete**, **no shape recommended and stage C is a no-go**, verdicts in `runs/architecture/stageb-recommendation.json` and `runs/architecture/stageb-stage-c.json` |
 | 7 — Improved general corpus and mixture | **in progress**, steps 1–8 and 10 complete — mixture verdict **keep-baseline** in `runs/corpus/mixture-verdict-probe.json`, acceptance gate in `runs/corpus/phase7-gate.md`, headroom in `runs/corpus/headroom-curve.md`; step 9 demonstrated on a rebuilt source, open at full scale |
-| 8 — Daedalus-Code | not started — step 1 is a branch switch, which the wrapper can now do (`branch`) but which needs the operator install below. Its one branch-independent input, the untouched base on HumanEval+ and MBPP+, is measured; those scorecards are Daedalus-Code results and land on the code branch |
+| 8 — Daedalus-Code | **step 1 complete** — `vast/daedalus-code-20260824` created from this branch's tested SHA `8aa5cb4`, stacked draft **#15** open, base scorecards and both harness oracles committed there. No training has started; `daedalus/codeprep.py` and the code corpus are next |
 | 9 — Finalization and reporting | begins no later than T+136h |
 
 ## Released-model baselines
@@ -318,7 +319,7 @@ Three refusals, each for a failure that is silent rather than loud. A supervised
 
 Both failure drills pass and are recorded in the timeline: a session killed mid-turn is counted as a failure and relaunched, and a keeper killed with SIGKILL is restarted by supervisord without a duplicate session.
 
-**One operator step is outstanding and blocks the start of phase 8**: `bash ops/vast/install_supervisor.sh`. Sessions call `/usr/local/bin/daedalus-approved`, not the repository copy — deliberately, because a wrapper that changed whenever a branch edited a file would let a session widen its own permissions — so `pr-find` (how a session learns the PR number to apply this body), `reload-service`, and `branch` (the only way a session can reach `vast/daedalus-code-20260824`, since it cannot run `git checkout` itself) all wait on it.
+**One operator step blocked the start of phase 8 for three hours and has now been run**: `bash ops/vast/install_supervisor.sh`, at ~16:47Z on 2026-08-26. `branch` answered `unapproved command branch` at 16:20Z and 16:29Z and printed a SHA at 16:47Z; phase 8 step 1 went through minutes later. The mechanism is worth keeping in view because it will recur. Sessions call `/usr/local/bin/daedalus-approved`, not the repository copy — deliberately, because a wrapper that changed whenever a branch edited a file would let a session widen its own permissions — so `pr-find` (how a session learns the PR number to apply this body), `reload-service`, and `branch` (the only way a session can reach `vast/daedalus-code-20260824`, since it cannot run `git checkout` itself) all wait on it.
 
 **The heartbeat now says so by itself** — from the next publisher restart. A committed change to any installed file is inert until an operator reinstalls, and the only symptom a session got was `unapproved command branch`, so the program's last deliverable sat unable to start while `STATUS.md` read `passed`. The quieter half is worse: a command present in both copies whose *behaviour* changed enforces nothing and fails nothing, and this repository's tests pass either way, because they exercise the committed copy while sessions run the installed one. `scripts/github_progress.py` compares each installed file against **HEAD** — not the working tree, so a session cannot make the heartbeat demand its own uncommitted wrapper — and raises the action banner naming the files and the one command. Run against this box it finds exactly one, `ops/vast/run-approved`; the publisher, resume, keeper and supervisor config installed here do match HEAD.
 
