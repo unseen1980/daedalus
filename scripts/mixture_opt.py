@@ -1,0 +1,580 @@
+"""Phase 7 steps 7 and 8: train the mixture arms that the selection rule reads.
+
+`daedalus/mixture_opt.py` holds the arms, the derivation rule, the floors and the
+selection; it costs nothing to run and is committed before any of it is measured.
+This module is the half that spends GPU hours: it turns an arm into a `train.py`
+invocation, runs it under the supervisor so an interruption continues it, and
+records what the sampler actually drew.
+
+Four decisions about how the arms are run, because each is a way a proxy like
+this quietly stops measuring the thing it names.
+
+**The probe is phase 4's, re-used rather than re-derived.** 200M tokens at
+sequence 1024 in 131,072-token steps, `tok-probe-49152`, Muon 0.02 / Adam 3e-4,
+100 warmup steps, 0.8 decay. That is exactly `scripts/tokenizer_lab.py`'s LM
+probe, at the shipped vocabulary, and re-using it means the throughput, the
+memory headroom and the schedule shape are all measured facts on this box rather
+than estimates. It also keeps phase 4 and phase 7 separable: the tokenizer is
+held at the shipped one here, and the data is held at one corpus there.
+
+**Every arm shares one data root and one holdout.** A specialist is a weight of
+1.0 on its source, not a different `--data-dir`. Arms pointed at different roots
+differ in shard files, packing and holdout as well as in mixture, and "identical
+apart from the mixture" stops being checkable and becomes a claim about two paths
+looking similar.
+
+**An arm whose epoch cap binds is refused, not trained.** `cap_weights_by_epochs`
+silently reweights a source that cannot supply its share -- correct for a
+production run, and fatal here, because the arm would train on a mixture that is
+not the one it is named after and nothing downstream would know. `arm_preflight`
+asks the same resolver the loader uses, before the GPU is touched.
+
+**In-run `val_bpb` is not the comparison.** `train.py` weights the holdout by the
+mixture each run samples, so the six arms' `val_bpb` columns are six models
+scored on six different corpora. The comparison is `scripts/bpb_eval.py` under
+`mixture_opt.evaluation_weights`, which is the same weighting for every arm.
+`val_bpb` stays on as the divergence signal it is.
+
+Subcommands: `arms`, `shape`, `run`, `sweep`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import List, Optional, Sequence
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from daedalus.mixture_opt import (MixtureArm, candidate_arms,  # noqa: E402
+                                  evaluation_weights, reference_arms,
+                                  unrepresented_floored_domains)
+
+#: Where `train.py` puts a run, and so the only place a supervisor may look for
+#: its checkpoint. Asked of the trainer in `arm_checkpoint_path` rather than
+#: composed here -- see phase 6 for what composing it cost.
+RUN_ROOT = "runs"
+
+#: Phase 7's artifacts, beside the headroom curve and the decontamination index.
+REPORT_ROOT = "runs/corpus"
+
+
+@dataclass(frozen=True)
+class ProbeShape:
+    """The run shape every arm shares. Shared *is* the experiment.
+
+    Every field is identical across arms by construction, so two arms cannot
+    differ in batch shape, schedule, learning rate or budget. Only the mixture
+    weights change.
+    """
+
+    name: str
+    config: str
+    seq_len: int
+    micro_batch: int
+    batch_tokens: int
+    total_tokens: int
+    warmup_steps: int
+    decay_frac: float
+    muon_lr: float
+    adam_lr: float
+    max_source_epochs: float
+    note: str = ""
+
+    @property
+    def steps(self) -> int:
+        return -(-int(self.total_tokens) // int(self.batch_tokens))
+
+    @property
+    def grad_accum(self) -> int:
+        return max(1, round(self.batch_tokens / (self.micro_batch * self.seq_len)))
+
+
+#: Preregistered. The numbers are `scripts/tokenizer_lab.py`'s LM probe
+#: constants, deliberately identical: same shape, same budget, same schedule, at
+#: the shipped 49,152 vocabulary. 200,015,872 rather than a round 200M is 1,526
+#: whole steps of 131,072 -- a partial final step trains on a truncated batch and
+#: makes the step count a rounding artefact rather than a property of the plan.
+PROBE = ProbeShape(
+    name="probe",
+    config="tok-probe-49152",
+    seq_len=1024,
+    micro_batch=16,
+    batch_tokens=131_072,
+    total_tokens=200_015_872,
+    warmup_steps=100,
+    decay_frac=0.8,
+    muon_lr=0.02,
+    adam_lr=3e-4,
+    #: The shipped cap. Left at the production value rather than lowered,
+    #: because `arm_preflight` refuses an arm the cap would bind on instead of
+    #: quietly training a reweighted one -- so this bounds nothing here, and
+    #: changing it would only change which arms are refused.
+    max_source_epochs=4.0,
+    note="phase 4's LM probe recipe at the shipped vocabulary, varying only the "
+         "data mixture",
+)
+
+SHAPES = {PROBE.name: PROBE}
+
+STAGES = ("reference", "candidates")
+
+
+def stage_arms(stage: str, sources: Sequence[str],
+               derived: Optional[dict] = None) -> List[MixtureArm]:
+    if stage == "reference":
+        if derived:
+            raise SystemExit(
+                "--derived-weights belongs to the candidates stage; the "
+                "reference stage is what measures the excess loss it is "
+                "derived from")
+        return reference_arms(sources)
+    if stage == "candidates":
+        return candidate_arms(sources, derived)
+    raise SystemExit(f"unknown stage {stage!r}; known: {list(STAGES)}")
+
+
+def discover_sources(data_root) -> List[str]:
+    """Every manifest-backed subdirectory of a mixture root, sorted.
+
+    The same detection `train.resolve_mixture` performs, so the arms are built
+    over exactly the sources the loader will find. Reading the blueprint instead
+    would build arms naming seven sources that are not on this box, and a
+    specialist for a source with no shards is an arm that cannot run.
+    """
+    root = Path(data_root)
+    found = sorted(entry.name for entry in root.iterdir()
+                   if entry.is_dir() and (entry / "manifest.json").exists())
+    if not found:
+        raise SystemExit(
+            f"no source under {root} has a manifest.json; --data-dir must be a "
+            f"mixture root, one subdirectory per source")
+    return found
+
+
+def arm_run_name(arm: MixtureArm, tag: str) -> str:
+    return f"mix-{tag}-{arm.name}"
+
+
+def arm_checkpoint_path(arm: MixtureArm, tag: str,
+                        run_root: str = RUN_ROOT) -> Path:
+    """The checkpoint this arm writes, asked of `train.py` rather than guessed."""
+    from train import TrainArgs, checkpoint_path_for
+
+    args = TrainArgs(run_name=arm_run_name(arm, tag), config=PROBE.config,
+                     data_dir="", run_dir=None)
+    resolved = Path(checkpoint_path_for(args))
+    if run_root != RUN_ROOT:                      # tests may relocate the tree
+        resolved = Path(run_root) / arm_run_name(arm, tag) / "checkpoint.pt"
+    return resolved
+
+
+def weight_args(arm: MixtureArm) -> List[str]:
+    """`--mixture-weight` pairs, in a fixed source order.
+
+    Sorted, and formatted to a fixed precision, so the same arm produces the
+    same argv on every launch. `finished_run` compares commands exactly: a
+    dict-ordering difference or a float repr that varied between Python builds
+    would make a completed arm look like a different experiment and retrain it
+    over its own checkpoint.
+    """
+    return [item for name in sorted(arm.weights)
+            for item in ("--mixture-weight", f"{name}={arm.weights[name]:.6f}")]
+
+
+def train_command(arm: MixtureArm, *, data_dir: str, run_name: str,
+                  shape: ProbeShape = PROBE, device: str = "cuda",
+                  val_dir: Optional[str] = None,
+                  total_tokens: Optional[int] = None) -> List[str]:
+    """The exact `train.py` invocation for one arm.
+
+    Everything except the weights comes from the shape, so two arms cannot
+    differ in seed, data order, batch shape, schedule or learning rate.
+    Sequence length and tokens per step are flat rather than ramped for the
+    reason phases 5 and 6 held theirs flat: a ramp makes the schedule mean
+    something different early and late, and the schedule is held precisely so
+    the mixture is the variable.
+    """
+    budget = int(shape.total_tokens if total_tokens is None else total_tokens)
+    command = [
+        sys.executable, "train.py",
+        "--run-name", run_name,
+        "--config", shape.config,
+        "--data-dir", data_dir,
+        "--total-tokens", str(budget),
+        "--micro-batch", str(shape.micro_batch),
+        "--seq-start", str(shape.seq_len), "--seq-end", str(shape.seq_len),
+        "--tok-start", str(shape.batch_tokens),
+        "--tok-end", str(shape.batch_tokens),
+        "--muon-lr", f"{shape.muon_lr:g}",
+        "--adam-lr", f"{shape.adam_lr:g}",
+        "--warmup-steps", str(shape.warmup_steps),
+        "--decay-frac", f"{shape.decay_frac:g}",
+        "--device", device,
+        "--hub-repo", "",
+        "--no-wandb",
+    ]
+    command += weight_args(arm)
+    if val_dir:
+        command += ["--val-dir", val_dir]
+    return command
+
+
+#: Percentage points of L1 skew between an arm's asked-for shares and the shares
+#: its sampler will draw. Anything above this and the arm is not the arm.
+#: `summarize_mixture` rounds the figure to four decimals, so this is the
+#: smallest bound that is not asking about representation error.
+MAX_ARM_SKEW_PTS = 1e-3
+
+
+def arm_preflight(arm: MixtureArm, *, data_dir: str,
+                  shape: ProbeShape = PROBE,
+                  total_tokens: Optional[int] = None) -> dict:
+    """What this arm's sampler will actually draw, before any GPU is touched.
+
+    Three refusals, separate because they are separate failures --
+    `capped_sources` cannot tell any of them apart, since it flags a source at
+    or past the cap whether or not anything was reweighted.
+
+    **A source the arm names is not under the root.** `resolve_mixture` drops it
+    and renormalizes the rest, and it sets `target_probs` *after* that
+    renormalization -- so this is the one rewrite `l1_skew_pts` reports as zero.
+    A baseline arm run against a root that had lost `stack-edu-python` would
+    train on web alone and record a perfectly clean mixture summary. Zero-weight
+    sources are checked too: they are exactly what makes a specialist arm the
+    same experiment as the others, and a root missing one is not that root.
+
+    **The sampled mixture is not the arm's mixture.** `cap_weights_by_epochs`
+    clamps a source that cannot supply its share and water-fills the difference
+    onto the others. Right for a production run; here it rewrites the one
+    variable under test and leaves the arm named after a mixture it did not
+    train on. `l1_skew_pts` is the exact measure of that, and it catches a
+    source missing from the root -- which renormalizes the rest -- as well as
+    the cap.
+
+    **A source would be re-read past the cap.** In the all-capped regime the
+    target mixture is *kept* and repetition is accepted instead, so there is no
+    skew to see; the arm trains on its own mixture, many times over. That is not
+    a rewrite, but it is not a usable proxy arm either: an arm whose advantage
+    could be a fourth pass over its favourite source is not evidence about
+    mixtures.
+
+    Both are refusals rather than warnings, because the choice they force --
+    shorten the budget, add data, or drop the arm -- is not one a launcher
+    should make on its own at 200M tokens a time.
+    """
+    from train import mixture_preflight
+
+    budget = int(shape.total_tokens if total_tokens is None else total_tokens)
+    summary = mixture_preflight(data_dir, budget,
+                                max_epochs=shape.max_source_epochs,
+                                weights=arm.weights, verbose=False)
+    missing = sorted(set(arm.weights) - set(summary["per_source"]))
+    if missing:
+        raise SystemExit(
+            f"arm {arm.name!r} names {missing}, which {data_dir} has no shards "
+            f"for. The mixture would be renormalized over what is left and the "
+            f"summary would report no skew at all, because the target is taken "
+            f"after that renormalization.")
+    skew = float(summary["l1_skew_pts"])
+    if skew > MAX_ARM_SKEW_PTS:
+        raise SystemExit(
+            f"arm {arm.name!r} would sample a mixture {skew:.4f} points of L1 "
+            f"away from the one it names, at a {budget:,}-token budget: "
+            f"{summary['per_source']}. Shorten the budget, add data for "
+            f"{summary['capped_sources'] or 'the short sources'}, or drop the "
+            f"arm -- but do not train it under this name.")
+    seen = summary["max_epochs_seen"]
+    if seen is not None and seen >= shape.max_source_epochs - 1e-6:
+        raise SystemExit(
+            f"arm {arm.name!r} would read {summary['most_repeated_source']} "
+            f"{seen:.1f} times at a {budget:,}-token budget, at or past the "
+            f"{shape.max_source_epochs:g}-epoch cap. The mixture is preserved "
+            f"-- the corpus is simply too small for it -- but an arm whose "
+            f"advantage could be a fourth pass over its own data is not "
+            f"evidence about mixtures.")
+    return summary
+
+
+# =================================================================== running ===
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def _weights_in(command: Sequence[str]) -> dict:
+    """The `--mixture-weight` pairs a recorded command names."""
+    parts, out = list(command), {}
+    for index, part in enumerate(parts[:-1]):
+        if part == "--mixture-weight":
+            name, _, value = parts[index + 1].partition("=")
+            out[name] = value
+    return out
+
+
+def finished_run(command: Sequence[str], ckpt) -> Optional[dict]:
+    """The closed marker of an identical run that already finished, if any.
+
+    Same four conditions as phase 6's: the marker must be this schema, its
+    outcome must be `completed` rather than merely closed (a watchdog halt
+    closes one too), the command must match exactly, and the checkpoint must
+    actually exist -- the marker records what was intended.
+    """
+    from daedalus.supervise import INFLIGHT_SCHEMA, read_inflight
+
+    ckpt = Path(ckpt)
+    marker = read_inflight(str(ckpt.parent))
+    if marker is None or marker.get("schema") != INFLIGHT_SCHEMA:
+        return None
+    if marker.get("outcome") != "completed":
+        return None
+    if marker.get("cmd") != list(command):
+        return None
+    return marker if ckpt.exists() else None
+
+
+def foreign_run(command: Sequence[str], ckpt) -> Optional[dict]:
+    """The mixture a marker in this run directory names, if it is not ours.
+
+    The phase 6 hazard, in this phase's currency. There the discriminating
+    argument was `--config` and a mistyped `--tag` could train a 159M arm over a
+    finished 105M one; here it is the weights, and the way in is an arm
+    *definition* that changed -- a blueprint share edited, a floor constant
+    moved, a source added to the root -- while the run name stayed the same.
+
+    `finished_run` cannot catch it, because a differing command is exactly what
+    that guard lets through: a changed budget in the same directory is a rerun
+    and must retrain. What separates the two is which argument changed. A
+    different budget is a rerun; different weights under the same arm name are
+    two experiments claiming one directory, and guessing which owns it is not a
+    decision a launcher should make.
+    """
+    from daedalus.supervise import INFLIGHT_SCHEMA, read_inflight
+
+    ckpt = Path(ckpt)
+    marker = read_inflight(str(ckpt.parent))
+    if marker is None or marker.get("schema") != INFLIGHT_SCHEMA:
+        return None
+    recorded, ours = _weights_in(marker.get("cmd") or ()), _weights_in(command)
+    if not recorded or not ours or recorded == ours:
+        return None
+    return recorded
+
+
+def run_arm(arm: MixtureArm, *, data_dir: str, tag: str,
+            run_root: str = RUN_ROOT, device: str = "cuda",
+            shape: ProbeShape = PROBE, val_dir: Optional[str] = None,
+            total_tokens: Optional[int] = None, max_attempts: int = 3,
+            stall_min: float = 20.0, refresh: bool = False) -> dict:
+    """Train one arm under the supervisor, so an interruption continues it.
+
+    `run_with_resume` reads the open in-flight marker beside the checkpoint, so
+    a relaunch after the launching session died continues from where the arm got
+    to rather than restarting it -- which is how phase 4 lost 60.3M tokens next
+    to a checkpoint it never opened.
+
+    A run that already *finished* needs the opposite guard and does not get it
+    from the supervisor: its marker is closed, so `interrupted_marker` correctly
+    declines to resume it, and `train.py` then starts at step 0 and overwrites
+    the checkpoint on its first save. A completed identical run is therefore
+    returned rather than re-entered, unless `refresh` asks for it deliberately.
+    """
+    from daedalus.supervise import run_with_resume, start_watchdog, stop_watchdog
+
+    name = arm_run_name(arm, tag)
+    budget = int(shape.total_tokens if total_tokens is None else total_tokens)
+    command = train_command(arm, data_dir=data_dir, run_name=name, shape=shape,
+                            device=device, val_dir=val_dir,
+                            total_tokens=total_tokens)
+    ckpt = arm_checkpoint_path(arm, tag, run_root)
+    run_dir = ckpt.parent
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    common = {**arm.describe(), "run": name, "run_dir": str(run_dir),
+              "shape": shape.name, "total_tokens": budget,
+              "steps": budget // shape.batch_tokens, "command": list(command)}
+
+    occupant = foreign_run(command, ckpt)
+    if occupant is not None:
+        raise SystemExit(
+            f"{run_dir} already holds a run of mixture {occupant}, but arm "
+            f"{arm.name} is {_weights_in(command)}. Training here would "
+            f"overwrite another experiment's checkpoint; use a --tag that "
+            f"stage owns, or --refresh if the arm really was redefined.")
+    if not refresh and finished_run(command, ckpt) is not None:
+        # Recorded, not omitted: an artifact that drops a skipped arm and one
+        # that never ran it look identical to a reader.
+        return {**common, "skipped": "already-completed", "attempts": 0,
+                "resumed": False, "returncodes": []}
+
+    # Before the GPU, not after: a capped arm is a refusal, and finding that out
+    # forty minutes in costs the forty minutes.
+    common["preflight"] = arm_preflight(arm, data_dir=data_dir, shape=shape,
+                                        total_tokens=total_tokens)
+
+    watchdog = start_watchdog(name, str(run_dir), budget, stall_min=stall_min,
+                              supervised=True)
+    try:
+        report = run_with_resume(
+            list(command), str(ckpt),
+            max_attempts=max_attempts, halt_marker=str(run_dir / "HALTED"),
+            inflight_extra={"phase": "phase7-mixture", "arm": arm.name,
+                            "weights": dict(arm.weights),
+                            "shape": shape.name, "total_tokens": budget})
+    finally:
+        stop_watchdog(watchdog)
+    return {**common, **report}
+
+
+def sweep(*, data_dir: str, stage: str, tag: str, run_root: str = RUN_ROOT,
+          report_root: str = REPORT_ROOT, device: str = "cuda",
+          shape: ProbeShape = PROBE, val_dir: Optional[str] = None,
+          total_tokens: Optional[int] = None,
+          derived: Optional[dict] = None,
+          refresh: bool = False) -> dict:
+    """Every arm of one stage, baseline first.
+
+    Re-entrant by design: arms that already finished are returned from their
+    closed markers, so relaunching a sweep the deadline or a dead session cut
+    short costs only the arms that have not run. The baseline is shared between
+    the two stages under one tag, so the candidates sweep skips it rather than
+    training it twice under two names.
+    """
+    sources = discover_sources(data_dir)
+    arms = stage_arms(stage, sources, derived)
+    header = {
+        "phase": "phase7-mixture",
+        "stage": stage,
+        "tag": tag,
+        "shape": asdict(shape),
+        "steps": shape.steps,
+        "data_dir": str(data_dir),
+        "val_dir": str(val_dir) if val_dir else None,
+        "sources": sources,
+        # The yardstick, written beside the arms rather than left to be
+        # re-derived at scoring time: every arm's aggregate BPB is computed
+        # under these weights, and an artifact that does not carry them cannot
+        # be checked for having used the same ones twice.
+        "evaluation_weights": {name: round(value, 6) for name, value
+                               in evaluation_weights(sources).items()},
+        "unrepresented_floored_domains": unrepresented_floored_domains(sources),
+        "total_tokens": int(shape.total_tokens if total_tokens is None
+                            else total_tokens),
+    }
+    results: List[dict] = []
+    for arm in arms:
+        results.append(run_arm(arm, data_dir=data_dir, tag=tag,
+                               run_root=run_root, device=device, shape=shape,
+                               val_dir=val_dir, total_tokens=total_tokens,
+                               refresh=refresh))
+        # Rewritten after every arm, so a sweep cut short still leaves the arms
+        # that finished, in the order they ran.
+        _write_json(Path(report_root) / f"mixture-sweep-{stage}.json",
+                    {**header, "arms": results})
+    return {**header, "arms": results}
+
+
+# ====================================================================== cli ====
+
+def _read_derived(path: Optional[str]) -> Optional[dict]:
+    """Derived weights from a JSON file, accepting the artifact or bare shares.
+
+    The derivation step writes a record with provenance around the weights;
+    accepting `{"weights": {...}}` as well as `{...}` means the candidates sweep
+    reads that artifact directly instead of someone retyping three numbers out
+    of it, which is the step where a mixture stops being the derived one.
+    """
+    if not path:
+        return None
+    payload = json.loads(Path(path).read_text())
+    weights = payload.get("weights", payload) if isinstance(payload, dict) else None
+    if not isinstance(weights, dict) or not weights:
+        raise SystemExit(f"{path} has no mixture weights")
+    return {str(name): float(value) for name, value in weights.items()}
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run-root", default=RUN_ROOT)
+    parser.add_argument("--report-root", default=REPORT_ROOT)
+    parser.add_argument("--tag", default="probe",
+                        help="run-directory prefix shared by every arm, so the "
+                             "baseline is trained once and both stages read it")
+    parser.add_argument("--shape", default=PROBE.name, choices=list(SHAPES))
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    for name in ("arms", "run", "sweep"):
+        cmd = sub.add_parser(name)
+        cmd.add_argument("--data-dir", required=True)
+        cmd.add_argument("--stage", default="reference", choices=list(STAGES))
+        cmd.add_argument("--derived-weights", default=None,
+                         help="JSON file of derived shares, for the candidates "
+                              "stage. Without it the derived arm is omitted "
+                              "rather than stubbed with the blueprint")
+        if name == "arms":
+            continue
+        if name == "run":
+            cmd.add_argument("--arm", required=True)
+        cmd.add_argument("--val-dir", default=None)
+        cmd.add_argument("--device", default="cuda")
+        cmd.add_argument("--total-tokens", type=int, default=None,
+                         help="override the shape's budget (smokes only)")
+        cmd.add_argument("--refresh", action="store_true",
+                         help="re-train arms that already completed, "
+                              "overwriting their checkpoints")
+
+    sub.add_parser("shape")
+
+    args = parser.parse_args(argv)
+    shape = SHAPES[args.shape]
+
+    if args.command == "shape":
+        print(json.dumps({**asdict(shape), "steps": shape.steps,
+                          "grad_accum": shape.grad_accum}, indent=2,
+                         sort_keys=True))
+        return 0
+
+    derived = _read_derived(args.derived_weights)
+    sources = discover_sources(args.data_dir)
+
+    if args.command == "arms":
+        for arm in stage_arms(args.stage, sources, derived):
+            print(json.dumps(arm.describe(), sort_keys=True))
+        return 0
+
+    if args.command == "run":
+        arms = {arm.name: arm for arm in stage_arms(args.stage, sources, derived)}
+        if args.arm not in arms:
+            raise SystemExit(f"unknown arm {args.arm!r}; known: {sorted(arms)}")
+        report = run_arm(arms[args.arm], data_dir=args.data_dir, tag=args.tag,
+                         run_root=args.run_root, device=args.device,
+                         shape=shape, val_dir=args.val_dir,
+                         total_tokens=args.total_tokens, refresh=args.refresh)
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "sweep":
+        report = sweep(data_dir=args.data_dir, stage=args.stage, tag=args.tag,
+                       run_root=args.run_root, report_root=args.report_root,
+                       device=args.device, shape=shape, val_dir=args.val_dir,
+                       total_tokens=args.total_tokens, derived=derived,
+                       refresh=args.refresh)
+        print(json.dumps({"stage": report["stage"],
+                          "arms": [row["arm"] for row in report["arms"]],
+                          "skipped": [row["arm"] for row in report["arms"]
+                                      if row.get("skipped")]},
+                         indent=2))
+        return 0
+
+    raise SystemExit(f"unhandled command {args.command}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

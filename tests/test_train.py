@@ -38,6 +38,7 @@ from train import (
     grad_accum_steps,
     load_checkpoint,
     parse_args,
+    parse_mixture_weights,
     ramp_progress,
     resolve_wandb_run_id,
     save_checkpoint,
@@ -711,6 +712,96 @@ def test_mixture_batch_source_rebuilds_on_seq_len_change(tmp_path):
     x16 = src.get_batch(16)
     assert x8.shape == (2, 8)
     assert x16.shape == (2, 16)
+
+
+# ------------------------------------------------------- explicit mixtures ---
+# Added for phase 7. Comparing mixtures under equal compute needs the mixture to
+# be an argument of the run; every other way of varying it also varies something
+# that is supposed to be held. These pin the two ways that goes wrong: a set of
+# shares that is quietly renormalized into a mixture nobody asked for, and a set
+# handed to a batch source that cannot use it.
+
+def test_mixture_weights_are_parsed_into_shares():
+    assert parse_mixture_weights(
+        ["fineweb-edu=0.6", "dclm-baseline=0.3", "stack-edu-python=0.1"]
+    ) == pytest.approx({"fineweb-edu": 0.6, "dclm-baseline": 0.3,
+                        "stack-edu-python": 0.1})
+
+
+def test_no_mixture_weights_stays_none_so_the_blueprint_is_unchanged():
+    """None, not the blueprint's shares: every run before phase 7 resolves its
+    mixture exactly where it did, including the renormalization over whatever
+    sources are actually on disk."""
+    assert parse_mixture_weights([]) is None
+    assert parse_mixture_weights(None) is None
+
+
+def test_shares_that_do_not_sum_to_one_are_refused():
+    """The one error renormalization hides. A dropped source leaves a set that
+    sums to 0.85 and is rescaled into a mixture nobody chose, while the arm's
+    artifact records the weights it asked for."""
+    with pytest.raises(ValueError, match="sum to 0.850000"):
+        parse_mixture_weights(["fineweb-edu=0.6", "dclm-baseline=0.25"])
+
+
+def test_a_zero_share_is_allowed_so_a_specialist_can_share_one_data_root():
+    """A single-source arm is a weight of 1.0 and the rest at 0, not a different
+    --data-dir; that keeps every arm on one root, one holdout and one set of
+    shards."""
+    weights = parse_mixture_weights(
+        ["fineweb-edu=1.0", "dclm-baseline=0", "stack-edu-python=0"])
+    assert weights == pytest.approx({"fineweb-edu": 1.0, "dclm-baseline": 0.0,
+                                     "stack-edu-python": 0.0})
+
+
+@pytest.mark.parametrize("pairs", [
+    ["fineweb-edu"],                                   # no '='
+    ["=0.5", "fineweb-edu=0.5"],                       # no name
+    ["fineweb-edu=x", "dclm-baseline=1"],              # not a number
+    ["fineweb-edu=-0.5", "dclm-baseline=1.5"],         # negative share
+    ["fineweb-edu=0.5", "fineweb-edu=0.5"],            # named twice
+])
+def test_malformed_mixture_weights_are_refused(pairs):
+    with pytest.raises(ValueError):
+        parse_mixture_weights(pairs)
+
+
+def test_parse_args_threads_mixture_weights_onto_train_args():
+    args = parse_args(["--data-dir", "d", "--mixture-weight", "fineweb-edu=0.75",
+                       "--mixture-weight", "stack-edu-python=0.25"])
+    assert args.mixture_weights == pytest.approx({"fineweb-edu": 0.75,
+                                                  "stack-edu-python": 0.25})
+
+
+def test_trainer_samples_the_explicit_mixture_rather_than_the_blueprint(tmp_path):
+    data_root = tmp_path / "data"
+    _write_source(data_root, "fineweb-edu", n_tokens=500, shard_tokens=200)
+    _write_source(data_root, "stack-edu-python", n_tokens=500, shard_tokens=200)
+    args = _tiny_args(tmp_path / "run", max_steps=2, data_dir=str(data_root),
+                      mixture_weights={"fineweb-edu": 0.25,
+                                       "stack-edu-python": 0.75})
+    trainer = Trainer(args)
+    probs = dict(zip(trainer.batch_source.names, trainer.batch_source.probs))
+    assert probs == pytest.approx({"fineweb-edu": 0.25, "stack-edu-python": 0.75})
+
+
+def test_mixture_weights_on_a_single_source_dir_are_refused_not_ignored(tmp_path):
+    """A no-op here is a phase-7 arm that reports itself as one mixture, trains
+    on whatever the single directory held, and produces a perfectly finite BPB
+    for a mixture it never sampled."""
+    single = tmp_path / "one-source"
+    _write_source(tmp_path, "one-source", n_tokens=500, shard_tokens=200)
+    args = _tiny_args(tmp_path / "run", max_steps=2, data_dir=str(single),
+                      mixture_weights={"fineweb-edu": 1.0})
+    with pytest.raises(ValueError, match="not a mixture root"):
+        Trainer(args)
+
+
+def test_mixture_weights_without_a_data_dir_are_refused(tmp_path):
+    args = _tiny_args(tmp_path / "run", max_steps=2, data_dir=None,
+                      mixture_weights={"fineweb-edu": 1.0})
+    with pytest.raises(ValueError, match="not a mixture root"):
+        Trainer(args)
 
 
 def test_trainer_auto_detects_mixture_root(tmp_path):

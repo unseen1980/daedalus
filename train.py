@@ -35,7 +35,7 @@ import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass, replace as dataclass_replace
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 # Must run before `import torch` -- torch._inductor.config reads this env var
 # at import time to size its parallel compile-worker pool (one process per
@@ -574,6 +574,45 @@ def mixture_preflight(data_root: str, total_run_tokens: int,
                              total_run_tokens, max_epochs)
 
 
+def parse_mixture_weights(pairs: Optional[Sequence[str]]
+                          ) -> Optional[Dict[str, float]]:
+    """`["fineweb-edu=0.7", ...]` as shares, or None when none were given.
+
+    The shares must sum to 1. `resolve_mixture` renormalizes anyway, so the
+    check buys nothing arithmetically -- it buys the one error renormalization
+    hides. A phase-7 arm is three or four shares typed on a command line, and a
+    dropped source or a mistyped digit produces a set that sums to 0.85 and is
+    then quietly rescaled into a mixture nobody chose, with the arm's own
+    artifact recording the weights it *asked* for. Requiring the sum makes that
+    a refusal at launch instead of a result at the end.
+    """
+    if not pairs:
+        return None
+    weights: Dict[str, float] = {}
+    for pair in pairs:
+        name, sep, raw = str(pair).partition("=")
+        name = name.strip()
+        if not sep or not name:
+            raise ValueError(f"expected NAME=FRACTION, got {pair!r}")
+        if name in weights:
+            raise ValueError(f"--mixture-weight {name!r} given twice")
+        try:
+            value = float(raw)
+        except ValueError:
+            raise ValueError(f"share for {name!r} is not a number: {raw!r}") from None
+        if value < 0 or not math.isfinite(value):
+            raise ValueError(f"share for {name!r} must be finite and >= 0, got {value}")
+        weights[name] = value
+    total = sum(weights.values())
+    if abs(total - 1.0) > 1e-6:
+        raise ValueError(
+            f"--mixture-weight shares sum to {total:.6f}, not 1.0. They are "
+            f"renormalized over whatever is on disk, so a set that does not sum "
+            f"to 1 is usually a source left out rather than a mixture asked for: "
+            f"{dict(sorted(weights.items()))}")
+    return weights
+
+
 class MixtureBatchSource:
     """Samples whole micro-batches from multiple per-source shard directories
     by mixture proportion, so `abl-arch`/`hero` can train on the real data
@@ -853,6 +892,17 @@ class TrainArgs:
     init_from: Optional[str] = None
     tags: Optional[List[str]] = None
     max_source_epochs: float = 4.0   # see cap_weights_by_epochs
+    # Explicit per-source shares for a mixture root, or None for
+    # `dataprep.MIXTURE`'s blueprint. Phase 7 compares mixtures under equal
+    # compute, which needs the mixture to be an argument of the *run* rather
+    # than a constant of the corpus: every other way of varying it -- a second
+    # data root per arm, an edited MIXTURE, a patched loader -- also varies
+    # something that is supposed to be held.
+    #
+    # None, not the blueprint's shares, so every existing run resolves its
+    # mixture exactly where it did before and a mixture root that is missing a
+    # source keeps renormalizing over what is present.
+    mixture_weights: Optional[Dict[str, float]] = None
     # Held-out bits-per-byte during training (AGENT.md SS5.2 lists val_bpb as a
     # required metrics field). Without it a multi-day run has no generalization
     # signal at all -- watchdog.py can only see the training loss, which looks
@@ -1078,8 +1128,23 @@ class Trainer:
                                  args.micro_batch, args.seq_start, args.seq_end,
                                  args.tok_start, args.tok_end)
 
+        is_mixture_root = bool(args.data_dir) and not os.path.exists(
+            os.path.join(args.data_dir, "manifest.json"))
+        if args.mixture_weights and not is_mixture_root:
+            # Refused rather than ignored. Every other batch source samples one
+            # corpus, so weights handed to one are a no-op -- and a no-op here
+            # is a phase-7 arm that reports itself as `only-stack-edu-python`,
+            # trains on whatever the single directory held, and produces a
+            # perfectly finite BPB for a mixture it never sampled. Same silent
+            # no-op TrainArgs.__post_init__ already refuses for a conv-proj
+            # weight-decay ramp with no group to ramp.
+            raise ValueError(
+                f"--mixture-weight was given but --data-dir "
+                f"{args.data_dir or '<none>'} is not a mixture root "
+                f"(a directory of per-source subdirectories, each with its own "
+                f"manifest.json). The weights would be silently ignored.")
         if args.data_dir:
-            if os.path.exists(os.path.join(args.data_dir, "manifest.json")):
+            if not is_mixture_root:
                 self.batch_source = ShardBatchSource(args.data_dir, args.micro_batch,
                                                      args.device, seed=args.seed)
             else:
@@ -1089,6 +1154,7 @@ class Trainer:
                 # separate CLI flag for the single-source vs. mixture case.
                 self.batch_source = MixtureBatchSource(
                     args.data_dir, args.micro_batch, args.device, seed=args.seed,
+                    weights=args.mixture_weights,
                     total_run_tokens=args.total_tokens,
                     max_epochs=args.max_source_epochs)
         else:
@@ -1995,6 +2061,16 @@ def parse_args(argv=None) -> TrainArgs:
                         "config's 1024; 0 restores the single-shot path). "
                         "Lower it to cut loss-head memory, which is what a "
                         "QAT forward needs on top of the usual activations.")
+    p.add_argument("--mixture-weight", action="append", default=[],
+                   metavar="NAME=FRACTION",
+                   help="explicit share for one source under a mixture "
+                        "--data-dir; repeatable, and the shares must sum to 1. "
+                        "Without any, the blueprint mixture in "
+                        "daedalus.dataprep.MIXTURE is used, which is what every "
+                        "run before phase 7 did. A source given 0 stays on disk "
+                        "and is never drawn, which is how a single-source arm "
+                        "shares one data root with the mixture arms it is "
+                        "compared against.")
     p.add_argument("--tokenizer", default=None,
                    help="path or Hub name of the tokenizer that produced the "
                         "ids in --data-dir/--val-dir (default: the config's, "
@@ -2057,6 +2133,7 @@ def parse_args(argv=None) -> TrainArgs:
     kwargs["loss_chunk_size"] = a.loss_chunk_size
     kwargs["gradient_checkpointing"] = a.gradient_checkpointing
     kwargs["tokenizer"] = a.tokenizer
+    kwargs["mixture_weights"] = parse_mixture_weights(a.mixture_weight)
     return TrainArgs(**kwargs)
 
 
