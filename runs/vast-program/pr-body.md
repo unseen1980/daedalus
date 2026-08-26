@@ -19,7 +19,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 | 4 — Tokenizer lab for V2 | **complete**, 32,768 selected, reading in `runs/tokenizer-lab/v2-tokenizer-migration.md` |
 | 5 — ShortConv channel death prevention | **complete**, **no schedule selected**, verdict in `runs/conv-health/verdict-paired.json`, reading in `runs/conv-health/phase5-conv-decay.md` |
 | 6 — Architecture Pareto proxies | **complete**, **no shape recommended and stage C is a no-go**, verdicts in `runs/architecture/stageb-recommendation.json` and `runs/architecture/stageb-stage-c.json` |
-| 7 — Improved general corpus and mixture | not started |
+| 7 — Improved general corpus and mixture | **in progress**, headroom curve measured — reading in `runs/corpus/headroom-curve.md` |
 | 8 — Daedalus-Code | not started |
 | 9 — Finalization and reporting | begins no later than T+136h |
 
@@ -121,6 +121,27 @@ So at this scale cutting attention layers buys 25–62% of the KV cache and cost
 `stage-c` then answers **no-go** on two of three conditions: discrimination (0.26 BPB points across the arms, inside the 0.84 their 2.48% parameter mismatch alone could explain) and finalists (every non-control arm blocked). The deadline condition would have allowed it — 7.8 hours needed against 92.0 — so roughly 7 GPU-hours were deliberately not spent. The rule was committed before this table existed and no threshold moved after it.
 
 One defect worth reviewing: the evidence chain wrote every stage's decode numbers to one shared report, and `run_decode` refuses to overwrite a report measuring models it does not — so the guard that protects a full sweep from a narrow rerun was certain to fire on the *second* stage to reach decode. Stage B's decode column was unmeasured and its phase marked failed for that reason alone. The report is now scoped by tag, beside the per-tag export and retrieval manifests, and the recommendation records which decode file it read.
+
+## Phase 7 — Corpus headroom: the ceiling is 53.8B, and it is one exhausted source
+
+The phase's headline deliverable is a curve rather than a verdict on one budget, because the operator has not fixed a successor size and a month on one RTX 5090 reaches somewhere between 60B and 200B tokens. `scripts/source_headroom.py epochs` reports per-source epochs and the four-epoch shortfall across 30B/60B/100B/200B/500B/1T, plus the inverse every reader would otherwise compute by hand: the largest total budget each source can feed at the cap.
+
+The corpus as built holds **17.15B unique tokens** — which is exactly where the released run's 59.9B budget and its ~3.5 epochs came from. Counting the files the stream never opened, the same ten sources reach **6,582B**. But only three ever bind:
+
+| source | share | unique | supports a total budget of |
+| --- | ---: | ---: | ---: |
+| `everyday-conversations` | 0.020 | 0.0004B | **0.08B** — remove it, as the plan already directs |
+| `stack-edu-python` | 0.090 | 1.21B | **53.8B** — out of documents |
+| `finewiki-en` | 0.030 | 6.76B | 902B |
+| everything else | — | — | past 1T |
+
+So **the mixture supports ~53.8B tokens at four epochs**, and above that code is the only constraint needing a new source: a 9% share wants 4.5B unique code tokens at 200B and 22.5B at 1T against 1.21B today. Web, PDF and math need *re-streaming*, not new datasets. That makes phase 8's code corpus the growth path for a general successor and not only for Daedalus-Code.
+
+Two things the numbers do not say. The **aggregate lies**: at 1T the corpus-level ratio is 0.2 epochs while three sources are over the cap, because a mixture cannot spend `dclm-baseline`'s 3,746B of headroom on `stack-edu-python`'s shortfall — so `corpus_epochs` is only ever reported beside `binding_source`. And **this phase's own mandate lowers these figures**: supply is counted after the released build's memory-bounded dedup, and persistent exact hashes with shared near-duplicate groups keep fewer tokens, not more.
+
+Supply is measured, not assumed — realized tokens plus a lower bound on what is reachable in untouched files at the density the source itself achieved. Two silent traps are pinned by regression tests with the real numbers: a shard manifest's `total_tokens` describes the *fetched subset* while `subset_of` describes the whole build (479M against 5.19B for `fineweb-edu`), and a manifest with no stream position must never reach the density arithmetic, which would place it at file 0 and read `stack-edu-python`'s 1.2B as ~13B. Cross-checks: `fineweb-edu` measures 1,424B against a published ~1.3T, `dclm-baseline` 3,746B against a published multi-trillion corpus.
+
+The curve exits 0 even when short. "This corpus does not support 1T at four epochs" is a result; a non-zero exit would mark the phase failed and make moving the bar the cheapest way to pass it.
 
 ## Control plane
 
