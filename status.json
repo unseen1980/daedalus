@@ -4,10 +4,10 @@
     "user_action_required": true
   },
   "deadline": {
-    "elapsed_hours": 57.64,
-    "finalization_in_hours": 78.36,
+    "elapsed_hours": 57.72,
+    "finalization_in_hours": 78.28,
     "hard_hours": 144.0,
-    "remaining_hours": 86.36,
+    "remaining_hours": 86.28,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T20:22:45.309419Z",
+  "heartbeat_at": "2026-08-26T20:27:46.840975Z",
   "lanes": {
     "directive": {
       "details": {
@@ -62,15 +62,15 @@
         "command": [
           "python",
           "-c",
-          "\nimport json\ns=json.load(open('runs/vast-program/state.json'))\nprint('main:', s['phase'], s['status'], s['updated_at'])\nprint('details:', json.dumps(s.get('details'))[:300])\n"
+          "\nimport os, json, time\nfound = []\nfor pid in os.listdir('/proc'):\n    if not pid.isdigit():\n        continue\n    try:\n        cmd = open('/proc/%s/cmdline' % pid).read().replace(chr(0), ' ')\n    except OSError:\n        continue\n    if 'codeprep' in cmd or 'vast_program' in cmd:\n        found.append((pid, cmd[:100]))\nprint('matching processes:', found)\nlog = 'runs/codeprep/corpus-build.log'\nprint('log mtime:', time.strftime('%H:%M:%S', time.gmtime(os.path.getmtime(log))), 'size', os.path.getsize(log))\nprint('now       :', time.strftime('%H:%M:%S', time.gmtime()))\ns = json.load(open('runs/vast-program/state.json'))\nprint('state:', s['phase'], s['status'], s['updated_at'])\nprint('lease:', os.path.exists('runs/vast-program/controller.lock'))\n"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-state-read",
+      "phase": "phase8-build-liveness",
       "status": "passed",
-      "updated_at": "2026-08-26T20:19:29.406243Z"
+      "updated_at": "2026-08-26T20:24:17.737888Z"
     },
     "operator": {
       "details": {
@@ -129,9 +129,9 @@
   "phase": "phase8-code-corpus-build",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "40e8c25f8d60",
+  "source_sha": "67b154456338",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "failed",
-  "updated_at": "2026-08-26T20:21:35.921987Z"
+  "updated_at": "2026-08-26T20:24:17.737888Z"
 }
