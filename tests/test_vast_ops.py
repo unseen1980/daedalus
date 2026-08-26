@@ -201,6 +201,33 @@ def test_the_code_branch_is_created_from_the_optimization_branchs_tested_sha(
                           check=True).stdout.strip() == SOURCE_BRANCH
 
 
+def test_a_code_branch_already_on_the_remote_is_continued_not_forked(tmp_path):
+    """A checkout that has lost the local branch -- or never had it -- must
+    continue the pushed one. Branching from here instead forks the code branch
+    at whatever the optimization branch has reached, and nothing says so until
+    a push is rejected, by which time the work is committed onto it."""
+    repository = _repo_on(tmp_path, SOURCE_BRANCH)
+    subprocess.run(["git", "checkout", "-q", "-b", "pushed-earlier"],
+                   cwd=repository, check=True)
+    (repository / "codeprep.py").write_text("# earlier code-branch work\n")
+    subprocess.run(["git", "add", "codeprep.py"], cwd=repository, check=True)
+    subprocess.run(["git", "-c", "user.email=t@e.st", "-c", "user.name=t",
+                    "commit", "-qm", "earlier"], cwd=repository, check=True)
+    remote_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repository,
+                                capture_output=True, text=True,
+                                check=True).stdout.strip()
+    subprocess.run(["git", "update-ref", f"refs/remotes/origin/{CODE_BRANCH}",
+                    remote_sha], cwd=repository, check=True)
+    subprocess.run(["git", "checkout", "-q", SOURCE_BRANCH], cwd=repository, check=True)
+    subprocess.run(["git", "branch", "-qD", "pushed-earlier"], cwd=repository, check=True)
+
+    result = _branch_command(repository, tmp_path, CODE_BRANCH)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == remote_sha
+    assert (repository / "codeprep.py").exists()
+
+
 def test_only_the_two_source_branches_can_be_switched_to(tmp_path):
     repository = _repo_on(tmp_path, SOURCE_BRANCH)
 

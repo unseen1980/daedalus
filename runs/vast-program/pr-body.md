@@ -20,7 +20,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 | 5 — ShortConv channel death prevention | **complete**, **no schedule selected**, verdict in `runs/conv-health/verdict-paired.json`, reading in `runs/conv-health/phase5-conv-decay.md` |
 | 6 — Architecture Pareto proxies | **complete**, **no shape recommended and stage C is a no-go**, verdicts in `runs/architecture/stageb-recommendation.json` and `runs/architecture/stageb-stage-c.json` |
 | 7 — Improved general corpus and mixture | **in progress**, steps 1–8 and 10 complete — mixture verdict **keep-baseline** in `runs/corpus/mixture-verdict-probe.json`, acceptance gate in `runs/corpus/phase7-gate.md`, headroom in `runs/corpus/headroom-curve.md`; step 9 demonstrated on a rebuilt source, open at full scale |
-| 8 — Daedalus-Code | not started |
+| 8 — Daedalus-Code | not started — step 1 is a branch switch, which the wrapper can now do (`branch`) but which needs the operator install below |
 | 9 — Finalization and reporting | begins no later than T+136h |
 
 ## Released-model baselines
@@ -246,6 +246,8 @@ This is an independent measurement of the phenomenon `daedalus/data.py::select_h
 `daedalus/session_keeper.py` closes the gap that stopped the program before this branch: the controller owned phases, but nothing owned the Claude sessions implementing them. The keeper verifies both plan hashes before every launch, concatenates the verified plans into a mode-0600 system prompt, assigns and records the session id before launching so any death stays resumable, resumes the same session for bounded repair continuations, escalates to a fresh independent session, records a hard blocker instead of relaunching forever, yields the box while a supervised job holds it, opens the finalization phase at T+136h, and refuses to start beside an orphaned session.
 
 Both failure drills pass and are recorded in the timeline: a session killed mid-turn is counted as a failure and relaunched, and a keeper killed with SIGKILL is restarted by supervisord without a duplicate session.
+
+**One operator step is outstanding and now blocks three things**, including the start of phase 8: `bash ops/vast/install_supervisor.sh`. Sessions call `/usr/local/bin/daedalus-approved`, not the repository copy — deliberately, because a wrapper that changed whenever a branch edited a file would let a session widen its own permissions — so `pr-find` (how a session learns the PR number to apply this body), `reload-service` (why the heartbeat still omits the lanes field), and now `branch` (the only way a session can reach `vast/daedalus-code-20260824`, since it cannot run `git checkout` itself) all wait on it.
 
 ## Security fix worth reviewing
 

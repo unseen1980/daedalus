@@ -265,6 +265,18 @@ case "${command_name}" in
         fi
         if git show-ref --verify --quiet "refs/heads/${target}"; then
             git checkout -q "${target}"
+        elif git show-ref --verify --quiet "refs/remotes/origin/${target}"; then
+            # The branch is already on the remote and only this checkout has
+            # lost it. Continuing it is the only correct answer: branching from
+            # here instead would fork the code branch at whatever the
+            # optimization branch has reached, and nothing would say so until a
+            # push was rejected -- after the work was committed onto it.
+            # Start point, not `--track`: tracking additionally requires the
+            # remote's fetch refspec to be configured, which turns "continue the
+            # pushed branch" into a question about this checkout's config. The
+            # push refspec `commit-push` uses is explicit, so no upstream is
+            # needed for any of this to work.
+            git checkout -q -b "${target}" "origin/${target}"
         else
             [[ ${target} == vast/daedalus-code-20260824 ]] || {
                 echo "refusing to create ${target}" >&2
