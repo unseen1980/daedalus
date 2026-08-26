@@ -4,19 +4,19 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 58.47,
-    "finalization_in_hours": 77.53,
+    "elapsed_hours": 58.56,
+    "finalization_in_hours": 77.44,
     "hard_hours": 144.0,
-    "remaining_hours": 85.53,
+    "remaining_hours": 85.44,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
-    "memory_used_mb": 14499,
-    "utilization_pct": 91
+    "memory_used_mb": 14232,
+    "utilization_pct": 100
   },
-  "heartbeat_at": "2026-08-26T21:13:02.865407Z",
+  "heartbeat_at": "2026-08-26T21:18:04.312706Z",
   "lanes": {
     "directive": {
       "details": {
@@ -62,26 +62,16 @@
         "attempts": 1,
         "command": [
           "python",
-          "scripts/code_probes.py",
-          "sweep",
-          "--init-from",
-          "/root/daedalus/final/hero/checkpoint.pt",
-          "--init-from-sha256",
-          "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153",
-          "--tag",
-          "smoke",
-          "--steps",
-          "4",
-          "--json-out",
-          "runs/code-probes/smoke.json"
+          "-c",
+          "\nimport json\ns = json.load(open('runs/vast-program/state.json'))\nprint('main:', s['phase'], s['status'])\nfor lane, v in sorted(s['lanes'].items()):\n    print(f'  {lane}: {v[\"phase\"]} {v[\"status\"]}')\n"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-probe-smoke-relaunch",
+      "phase": "phase8-lane-state-check",
       "status": "passed",
-      "updated_at": "2026-08-26T21:11:04.489257Z"
+      "updated_at": "2026-08-26T21:16:46.299096Z"
     },
     "operator": {
       "details": {
@@ -144,5 +134,5 @@
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
-  "updated_at": "2026-08-26T21:11:25.900736Z"
+  "updated_at": "2026-08-26T21:16:46.299096Z"
 }
