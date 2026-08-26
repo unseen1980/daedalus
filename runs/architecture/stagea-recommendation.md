@@ -4,11 +4,11 @@ Control `a8-kv4`. Five preregistered columns, all required: BPB within 0.5%, ret
 
 | arm | BPB | retrieval | KV | export | decode | verdict |
 | --- | :---: | :---: | :---: | :---: | :---: | :--- |
-| `a8-kv4` (control) | pass | -- | **FAIL** | pass | pass | blocked |
-| `a6-kv4` | pass | -- | pass | pass | pass | unproven |
-| `a4-kv4` | pass | -- | pass | pass | pass | unproven |
+| `a8-kv4` (control) | pass | n/p | **FAIL** | pass | pass | blocked |
+| `a6-kv4` | pass | n/p | pass | pass | pass | unproven |
+| `a4-kv4` | pass | n/p | pass | pass | pass | unproven |
 | `a8-kv2` | pass | -- | pass | -- | -- | unproven |
-| `a3-kv4` | pass | -- | pass | pass | pass | unproven |
+| `a3-kv4` | pass | **FAIL** | pass | pass | pass | blocked |
 | `a6-kv2` | **FAIL** | -- | pass | -- | -- | blocked |
 | `a2-kv4` | **FAIL** | -- | pass | -- | -- | blocked |
 | `a4-kv2` | **FAIL** | -- | pass | -- | -- | blocked |
@@ -25,8 +25,8 @@ Control `a8-kv4`. Five preregistered columns, all required: BPB within 0.5%, ret
 ## Outcome
 
 - **Pareto set: none**
-- unproven: ['a6-kv4', 'a4-kv4', 'a8-kv2', 'a3-kv4']
-- blocked: ['a8-kv4', 'a6-kv2', 'a2-kv4', 'a4-kv2', 'a8-kv1', 'a3-kv2', 'a6-kv1', 'a2-kv2', 'a4-kv1', 'a3-kv1', 'a2-kv1']
+- unproven: ['a6-kv4', 'a4-kv4', 'a8-kv2']
+- blocked: ['a8-kv4', 'a3-kv4', 'a6-kv2', 'a2-kv4', 'a4-kv2', 'a8-kv1', 'a3-kv2', 'a6-kv1', 'a2-kv2', 'a4-kv1', 'a3-kv1', 'a2-kv1']
 - verdict: `no-recommendation`
 
 > no shape clears every preregistered column, so this phase recommends none. That is a statement about the evidence, not about the shapes: see `unproven` for the columns still to be measured.
@@ -35,19 +35,19 @@ Control `a8-kv4`. Five preregistered columns, all required: BPB within 0.5%, ret
 
 - `a8-kv4` -- blocked: failed ['kv'] against the preregistered gate; ['retrieval'] also unproven
   - bpb: pass -- BPB +0.00% against the control, within the 0.5% floor
-  - retrieval: unmeasured -- 4 of 4 retrieval cards were produced through llama.cpp without a recorded 'raw-completion' mode, so the prompts reached the model wrapped in its chat template and the scores measure the template rather than retention. Re-run the retrieval pass against a llama-cli built with -DLLAMA_BUILD_UI=OFF, or a llama-completion binary.
+  - retrieval: no-power -- 2 of 8 task/depth cells could not carry the 2-point gate; retention is not demonstrated at this scale
   - kv: fail -- 8,192 KV bytes per context token, over the 6,144 ceiling
   - export: pass -- stock llama.cpp loaded and generated from ['gguf-q4_0']
   - decode: pass -- artifact +0.0%, decode +0.0% at depth 0 and +0.0% at 2048; the ratio to the control moves +0.0% with depth
 - `a6-kv4` -- unproven: ['retrieval'] not demonstrated, so this shape cannot be recommended on the ['bpb', 'decode', 'export', 'kv'] it does clear
   - bpb: pass -- BPB +0.07% against the control, within the 0.5% floor
-  - retrieval: unmeasured -- 4 of 4 retrieval cards were produced through llama.cpp without a recorded 'raw-completion' mode, so the prompts reached the model wrapped in its chat template and the scores measure the template rather than retention. Re-run the retrieval pass against a llama-cli built with -DLLAMA_BUILD_UI=OFF, or a llama-completion binary.
+  - retrieval: no-power -- 2 of 8 task/depth cells could not carry the 2-point gate; retention is not demonstrated at this scale
   - kv: pass -- 6,144 KV bytes per context token, at or under the 6,144 ceiling
   - export: pass -- stock llama.cpp loaded and generated from ['gguf-q4_0']
   - decode: pass -- artifact +0.4%, decode -0.2% at depth 0 and +1.5% at 2048; the ratio to the control moves +1.6% with depth
 - `a4-kv4` -- unproven: ['retrieval'] not demonstrated, so this shape cannot be recommended on the ['bpb', 'decode', 'export', 'kv'] it does clear
   - bpb: pass -- BPB +0.15% against the control, within the 0.5% floor
-  - retrieval: unmeasured -- 4 of 4 retrieval cards were produced through llama.cpp without a recorded 'raw-completion' mode, so the prompts reached the model wrapped in its chat template and the scores measure the template rather than retention. Re-run the retrieval pass against a llama-cli built with -DLLAMA_BUILD_UI=OFF, or a llama-completion binary.
+  - retrieval: no-power -- 2 of 8 task/depth cells could not carry the 2-point gate; retention is not demonstrated at this scale
   - kv: pass -- 4,096 KV bytes per context token, at or under the 6,144 ceiling and at or under the preferred 4,096
   - export: pass -- stock llama.cpp loaded and generated from ['gguf-q4_0']
   - decode: pass -- artifact +0.9%, decode +1.0% at depth 0 and +11.6% at 2048; the ratio to the control moves +10.5% with depth
@@ -57,9 +57,9 @@ Control `a8-kv4`. Five preregistered columns, all required: BPB within 0.5%, ret
   - kv: pass -- 4,096 KV bytes per context token, at or under the 6,144 ceiling and at or under the preferred 4,096
   - export: unmeasured -- nothing has been scored through a GGUF artifact for this arm
   - decode: unmeasured -- no decode pass measures this arm and the control together at depth [0, 2048]; absolutes from separate invocations are not comparable, so a pass containing both is required
-- `a3-kv4` -- unproven: ['retrieval'] not demonstrated, so this shape cannot be recommended on the ['bpb', 'decode', 'export', 'kv'] it does clear
+- `a3-kv4` -- blocked: failed ['retrieval'] against the preregistered gate
   - bpb: pass -- BPB +0.46% against the control, within the 0.5% floor
-  - retrieval: unmeasured -- 4 of 4 retrieval cards were produced through llama.cpp without a recorded 'raw-completion' mode, so the prompts reached the model wrapped in its chat template and the scores measure the template rather than retention. Re-run the retrieval pass against a llama-cli built with -DLLAMA_BUILD_UI=OFF, or a llama-completion binary.
+  - retrieval: fail -- passkey at depth 256 is 8.0 points under the control, past the 2-point gate
   - kv: pass -- 3,072 KV bytes per context token, at or under the 6,144 ceiling and at or under the preferred 4,096
   - export: pass -- stock llama.cpp loaded and generated from ['gguf-q4_0']
   - decode: pass -- artifact +1.1%, decode +0.9% at depth 0 and +10.1% at 2048; the ratio to the control moves +9.1% with depth

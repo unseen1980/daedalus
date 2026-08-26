@@ -61,15 +61,91 @@
           "status": "fail"
         },
         "retrieval": {
-          "cells": [],
-          "note": "4 of 4 retrieval cards were produced through llama.cpp without a recorded 'raw-completion' mode, so the prompts reached the model wrapped in its chat template and the scores measure the template rather than retention. Re-run the retrieval pass against a llama-cli built with -DLLAMA_BUILD_UI=OFF, or a llama-completion binary.",
-          "status": "unmeasured",
-          "templated_scorecards": [
-            "runs/architecture/retrieval/arch-stagea-a8-kv4/retrieval-passkey.json",
-            "runs/architecture/retrieval/arch-stagea-a8-kv4/retrieval-mqar.json",
-            "runs/architecture/retrieval/arch-stagea-a8-kv4/retrieval-passkey.json",
-            "runs/architecture/retrieval/arch-stagea-a8-kv4/retrieval-mqar.json"
-          ]
+          "cells": [
+            {
+              "control_exact_match": 0.34,
+              "depth": 256,
+              "drop_points": 0.0,
+              "exact_match": 0.34,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.26,
+              "depth": 512,
+              "drop_points": 0.0,
+              "exact_match": 0.26,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.22,
+              "depth": 1024,
+              "drop_points": 0.0,
+              "exact_match": 0.22,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 2048,
+              "drop_points": 0.0,
+              "exact_match": 0.02,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 256,
+              "drop_points": 0.0,
+              "exact_match": 0.02,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 512,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 1024,
+              "drop_points": 0.0,
+              "exact_match": 0.02,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 2048,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            }
+          ],
+          "max_drop_points": 2.0,
+          "note": "2 of 8 task/depth cells could not carry the 2-point gate; retention is not demonstrated at this scale",
+          "status": "no-power"
         }
       },
       "failed": [
@@ -144,15 +220,91 @@
           "status": "pass"
         },
         "retrieval": {
-          "cells": [],
-          "note": "4 of 4 retrieval cards were produced through llama.cpp without a recorded 'raw-completion' mode, so the prompts reached the model wrapped in its chat template and the scores measure the template rather than retention. Re-run the retrieval pass against a llama-cli built with -DLLAMA_BUILD_UI=OFF, or a llama-completion binary.",
-          "status": "unmeasured",
-          "templated_scorecards": [
-            "runs/architecture/retrieval/arch-stagea-a6-kv4/retrieval-passkey.json",
-            "runs/architecture/retrieval/arch-stagea-a6-kv4/retrieval-mqar.json",
-            "runs/architecture/retrieval/arch-stagea-a8-kv4/retrieval-passkey.json",
-            "runs/architecture/retrieval/arch-stagea-a8-kv4/retrieval-mqar.json"
-          ]
+          "cells": [
+            {
+              "control_exact_match": 0.34,
+              "depth": 256,
+              "drop_points": -65.99999999999999,
+              "exact_match": 1.0,
+              "items": 50,
+              "note": "-66.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.26,
+              "depth": 512,
+              "drop_points": -74.0,
+              "exact_match": 1.0,
+              "items": 50,
+              "note": "-74.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.22,
+              "depth": 1024,
+              "drop_points": -58.00000000000001,
+              "exact_match": 0.8,
+              "items": 50,
+              "note": "-58.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 2048,
+              "drop_points": -27.999999999999996,
+              "exact_match": 0.3,
+              "items": 50,
+              "note": "-28.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 256,
+              "drop_points": 2.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "+2.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 512,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 1024,
+              "drop_points": 2.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "+2.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 2048,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            }
+          ],
+          "max_drop_points": 2.0,
+          "note": "2 of 8 task/depth cells could not carry the 2-point gate; retention is not demonstrated at this scale",
+          "status": "no-power"
         }
       },
       "failed": [],
@@ -225,15 +377,91 @@
           "status": "pass"
         },
         "retrieval": {
-          "cells": [],
-          "note": "4 of 4 retrieval cards were produced through llama.cpp without a recorded 'raw-completion' mode, so the prompts reached the model wrapped in its chat template and the scores measure the template rather than retention. Re-run the retrieval pass against a llama-cli built with -DLLAMA_BUILD_UI=OFF, or a llama-completion binary.",
-          "status": "unmeasured",
-          "templated_scorecards": [
-            "runs/architecture/retrieval/arch-stagea-a4-kv4/retrieval-passkey.json",
-            "runs/architecture/retrieval/arch-stagea-a4-kv4/retrieval-mqar.json",
-            "runs/architecture/retrieval/arch-stagea-a8-kv4/retrieval-passkey.json",
-            "runs/architecture/retrieval/arch-stagea-a8-kv4/retrieval-mqar.json"
-          ]
+          "cells": [
+            {
+              "control_exact_match": 0.34,
+              "depth": 256,
+              "drop_points": -65.99999999999999,
+              "exact_match": 1.0,
+              "items": 50,
+              "note": "-66.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.26,
+              "depth": 512,
+              "drop_points": -74.0,
+              "exact_match": 1.0,
+              "items": 50,
+              "note": "-74.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.22,
+              "depth": 1024,
+              "drop_points": -50.0,
+              "exact_match": 0.72,
+              "items": 50,
+              "note": "-50.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 2048,
+              "drop_points": -18.000000000000004,
+              "exact_match": 0.2,
+              "items": 50,
+              "note": "-18.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 256,
+              "drop_points": 2.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "+2.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 512,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 1024,
+              "drop_points": 2.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "+2.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 2048,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            }
+          ],
+          "max_drop_points": 2.0,
+          "note": "2 of 8 task/depth cells could not carry the 2-point gate; retention is not demonstrated at this scale",
+          "status": "no-power"
         }
       },
       "failed": [],
@@ -357,25 +585,101 @@
           "status": "pass"
         },
         "retrieval": {
-          "cells": [],
-          "note": "4 of 4 retrieval cards were produced through llama.cpp without a recorded 'raw-completion' mode, so the prompts reached the model wrapped in its chat template and the scores measure the template rather than retention. Re-run the retrieval pass against a llama-cli built with -DLLAMA_BUILD_UI=OFF, or a llama-completion binary.",
-          "status": "unmeasured",
-          "templated_scorecards": [
-            "runs/architecture/retrieval/arch-stagea-a3-kv4/retrieval-passkey.json",
-            "runs/architecture/retrieval/arch-stagea-a3-kv4/retrieval-mqar.json",
-            "runs/architecture/retrieval/arch-stagea-a8-kv4/retrieval-passkey.json",
-            "runs/architecture/retrieval/arch-stagea-a8-kv4/retrieval-mqar.json"
-          ]
+          "cells": [
+            {
+              "control_exact_match": 0.34,
+              "depth": 256,
+              "drop_points": 8.000000000000002,
+              "exact_match": 0.26,
+              "items": 50,
+              "note": "+8.0 points against the control over 50 items",
+              "status": "fail",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.26,
+              "depth": 512,
+              "drop_points": -54.0,
+              "exact_match": 0.8,
+              "items": 50,
+              "note": "-54.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.22,
+              "depth": 1024,
+              "drop_points": -56.00000000000001,
+              "exact_match": 0.78,
+              "items": 50,
+              "note": "-56.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 2048,
+              "drop_points": -20.0,
+              "exact_match": 0.22,
+              "items": 50,
+              "note": "-20.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "passkey"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 256,
+              "drop_points": 0.0,
+              "exact_match": 0.02,
+              "items": 50,
+              "note": "+0.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 512,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.02,
+              "depth": 1024,
+              "drop_points": 2.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "+2.0 points against the control over 50 items",
+              "status": "pass",
+              "task": "mqar"
+            },
+            {
+              "control_exact_match": 0.0,
+              "depth": 2048,
+              "drop_points": 0.0,
+              "exact_match": 0.0,
+              "items": 50,
+              "note": "the control scores 0.0 points here, so it cannot be fallen 2 points below",
+              "status": "no-power",
+              "task": "mqar"
+            }
+          ],
+          "max_drop_points": 2.0,
+          "note": "passkey at depth 256 is 8.0 points under the control, past the 2-point gate",
+          "status": "fail"
         }
       },
-      "failed": [],
-      "is_control": false,
-      "preset": "arch-a3-kv4",
-      "reason": "['retrieval'] not demonstrated, so this shape cannot be recommended on the ['bpb', 'decode', 'export', 'kv'] it does clear",
-      "unproven": [
+      "failed": [
         "retrieval"
       ],
-      "verdict": "unproven"
+      "is_control": false,
+      "preset": "arch-a3-kv4",
+      "reason": "failed ['retrieval'] against the preregistered gate",
+      "unproven": [],
+      "verdict": "blocked"
     },
     {
       "arm": "a6-kv2",
@@ -910,6 +1214,7 @@
   ],
   "blocked": [
     "a8-kv4",
+    "a3-kv4",
     "a6-kv2",
     "a2-kv4",
     "a4-kv2",
@@ -927,7 +1232,7 @@
     "Apple Silicon decode is pending the Mac run. The decode column here is this box's CPU, which fixes the shape of the curve and not the number a user would feel."
   ],
   "control": "a8-kv4",
-  "created_at": "2026-08-26T05:38:19.837134Z",
+  "created_at": "2026-08-26T06:09:19.467667Z",
   "gate": {
     "bpb_floor_pct": 0.5,
     "columns": [
@@ -958,8 +1263,7 @@
   "unproven": [
     "a6-kv4",
     "a4-kv4",
-    "a8-kv2",
-    "a3-kv4"
+    "a8-kv2"
   ],
   "verdict": "no-recommendation"
 }
