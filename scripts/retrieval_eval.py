@@ -24,6 +24,19 @@ optional flags that binary advertises, while the flags it cannot run without
 (`-m`, `-f`, `-n`, `-c`, `--temp`) are required and their absence is an error.
 Nothing about the model or the GGUF is modified: this is stock llama.cpp,
 invoked as a user would.
+
+**Probing a flag is not the same as probing a mode, which cost this phase a
+column.** `-st`/`--single-turn` and `-no-cnv`/`--no-conversation` both make
+llama-cli exit instead of waiting at its prompt, so a backend that only asks
+"can I drive this binary" accepts either. They are not interchangeable: `-st`
+still applies the model's chat template, so a base model asked to continue
+`The phrase is:` is handed a user/assistant transcript instead. Measured on the
+released base weights, that is exact_match 1.0 through torch against 0.0 here,
+with the template's own `assistant` marker in the output. Phase 6 stage A read
+0.0 for every arm at every depth on the strength of it. `supported_flags`
+therefore refuses a build that offers only the templated turn unless the caller
+opts in for a model that is chat-templated anyway, and `template_mode` records
+which mode produced a card.
 """
 
 from __future__ import annotations
@@ -79,16 +92,23 @@ _OPTIONAL_FLAGS = ("--top-k", "-s", "-t", "-ngl", "--no-warmup", "-no-cnv",
                    "--no-conversation", "-st", "--single-turn",
                    "--no-display-prompt")
 
-# Ways to stop `llama-cli` sitting at an interactive prompt, best first.
-# `-no-cnv`/`--no-conversation` disable chat outright and are what a base-model
-# completion harness wants. Builds after those were dropped offer `-st` /
-# `--single-turn`, which still runs one templated turn but does exit -- enough
-# to score with, and verified with `--show-prompt` rather than assumed.
-# Passing two aliases of one switch would be a duplicate argument, so the first
-# supported entry wins.
-_CONVERSATION_FLAGS = ("-no-cnv", "--no-conversation", "-st", "--single-turn")
+# Disabling chat outright: the prompt reaches the model as written, which is the
+# only mode a *base*-model completion harness may score through. Passing two
+# aliases of one switch would be a duplicate argument, so the first supported
+# entry wins.
+_NO_CHAT_FLAGS = ("-no-cnv", "--no-conversation")
 
-# Bare switches, in the order they are appended.
+# Exiting after one turn -- but a *templated* one. Not a substitute for the
+# above, and treating it as one is the defect this split exists to prevent: see
+# `supported_flags`.
+_SINGLE_TURN_FLAGS = ("-st", "--single-turn")
+
+# Every way out of an interactive prompt, for the probe and for provenance.
+_CONVERSATION_FLAGS = _NO_CHAT_FLAGS + _SINGLE_TURN_FLAGS
+
+# Bare switches, in the order they are appended. The conversation entry is
+# resolved by `_conversation_flag`, which is where the raw/templated choice is
+# made rather than by "first supported wins".
 _BARE_FLAGS = ("--no-warmup", _CONVERSATION_FLAGS, "--no-display-prompt")
 
 
@@ -154,6 +174,7 @@ class LlamaCppBackend:
                  max_new_tokens: int = 24, seed: int = 20260824,
                  timeout_s: float = GENERATION_TIMEOUT_S,
                  require_non_interactive: bool = True,
+                 allow_chat_template: bool = False,
                  show_prompt: bool = False,
                  runner: Callable[..., subprocess.CompletedProcess] = subprocess.run):
         self.gguf_path = Path(gguf_path)
@@ -164,6 +185,7 @@ class LlamaCppBackend:
         self.seed = seed
         self.timeout_s = timeout_s
         self.require_non_interactive = require_non_interactive
+        self.allow_chat_template = allow_chat_template
         self.show_prompt = show_prompt
         self.runner = runner
         self._supported: Optional[set] = None
@@ -203,8 +225,72 @@ class LlamaCppBackend:
                 f"{_conversation_help_lines(help_text)}\n"
                 "Pass require_non_interactive=False only for a binary old "
                 "enough to predate conversation mode.")
+
+        # Exiting is not the same as not templating, and this is where that
+        # distinction is enforced. `-st` runs one turn and exits, so a run
+        # driven by it *completes* -- it simply measures the wrong thing: the
+        # model is handed its chat template, and a base model asked to continue
+        # `The phrase is:` instead sees a user/assistant transcript.
+        #
+        # Measured on this box's pinned build, which advertises `-st` and no
+        # `-no-cnv`: the released base model scores exact_match 1.0 on the
+        # copy-control through the torch backend and 0.0 through this one, on
+        # the same weights, emitting `cannibalassistant` -- the template's own
+        # role marker. Phase 6 stage A then read 0.0 for every arm at every
+        # depth and every cell landed `no-power`, which is indistinguishable
+        # from "these proxies cannot retrieve" and is not what happened.
+        #
+        # So a templated turn is refused rather than silently substituted. The
+        # opt-in exists because the mode is correct for an *instruct* model,
+        # whose scoring is chat-templated anyway.
+        if self.require_non_interactive and not self.allow_chat_template and \
+                not any(flag in supported for flag in _NO_CHAT_FLAGS):
+            raise RuntimeError(
+                f"{self.binary} advertises only a templated single turn "
+                f"({[f for f in _SINGLE_TURN_FLAGS if f in supported]}) and "
+                f"none of {list(_NO_CHAT_FLAGS)}, so every prompt would reach "
+                "the model wrapped in its chat template. That is not a "
+                "base-model completion measurement: on the released base "
+                "weights it scores the copy-control 0.0 here against 1.0 "
+                "through the torch backend.\n"
+                "Remedy: build `llama-cli` with -DLLAMA_BUILD_UI=OFF (the UI "
+                "build is what turned conversation on by default and dropped "
+                "the switch), or point --llama-cli at a `llama-completion` "
+                "binary.\n"
+                "Pass --allow-chat-template only to score a model whose "
+                "prompts are chat-templated by design, such as an instruct "
+                "checkpoint.\n"
+                "Help lines mentioning conversation/chat/interactive:\n"
+                f"{_conversation_help_lines(help_text)}")
         self._supported = supported
         return self._supported
+
+    def _conversation_flag(self) -> Optional[str]:
+        """The switch that leaves conversation mode, raw completion preferred.
+
+        A single place to make the choice, so `_command` cannot drift from the
+        guard above by re-deriving it as "first supported wins" -- which is
+        exactly how a templated turn became the default.
+        """
+
+        supported = self.supported_flags()
+        candidates = _NO_CHAT_FLAGS + (
+            _SINGLE_TURN_FLAGS if self.allow_chat_template else ())
+        return next((flag for flag in candidates if flag in supported), None)
+
+    def template_mode(self) -> str:
+        """Whether this binary will be driven raw or through a chat template.
+
+        Recorded in provenance: two scorecards that differ in this differ in
+        what was measured, and no other field would say so.
+        """
+
+        flag = self._conversation_flag()
+        if flag in _NO_CHAT_FLAGS:
+            return "raw-completion"
+        if flag in _SINGLE_TURN_FLAGS:
+            return "chat-single-turn"
+        return "unknown"
 
     def _command(self, prompt_file: str) -> List[str]:
         supported = self.supported_flags()
@@ -220,13 +306,17 @@ class LlamaCppBackend:
             if flag in supported:
                 command += [flag, value]
         for entry in _BARE_FLAGS:
-            aliases = (entry,) if isinstance(entry, str) else entry
             # `--no-display-prompt` is what makes stdout the completion alone;
             # dropping it is how an operator sees the text the binary actually
             # fed the model, chat template and all.
             if entry == "--no-display-prompt" and self.show_prompt:
                 continue
-            match = next((flag for flag in aliases if flag in supported), None)
+            if entry is _CONVERSATION_FLAGS:
+                match = self._conversation_flag()
+            else:
+                aliases = (entry,) if isinstance(entry, str) else entry
+                match = next((flag for flag in aliases if flag in supported),
+                             None)
             if match is not None:
                 command.append(match)
         return command
@@ -464,6 +554,12 @@ def main(argv=None) -> int:
     parser.add_argument("--max-new-tokens", type=int, default=24)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--out-dir", default="runs/eval/retrieval")
+    parser.add_argument("--allow-chat-template", action="store_true",
+                        help="permit a binary that only offers a templated "
+                             "single turn (-st). Correct for an instruct "
+                             "checkpoint, whose prompts are chat-templated by "
+                             "design; invalid for base-model completion, where "
+                             "it scores the template rather than the model.")
     parser.add_argument("--show-prompt", action="store_true",
                         help="keep llama-cli's prompt echo, so the text the "
                              "binary actually fed the model -- chat template "
@@ -487,13 +583,17 @@ def main(argv=None) -> int:
         backend = LlamaCppBackend(args.gguf, args.llama_cli, threads=args.threads,
                                   n_ctx=args.n_ctx,
                                   max_new_tokens=args.max_new_tokens,
-                                  seed=args.seed, show_prompt=args.show_prompt)
+                                  seed=args.seed, show_prompt=args.show_prompt,
+                                  allow_chat_template=args.allow_chat_template)
         artifact = _artifact_ref(args.gguf,
                                  "gguf-q4_0" if "q4" in Path(args.gguf).name.lower()
                                  else "gguf-f16")
         runtime["llama_cli"] = str(args.llama_cli)
         runtime["threads"] = args.threads
         runtime["llama_cli_flags"] = backend.resolved_flags()
+        # Which of the two modes produced this card. A scorecard that does not
+        # say cannot be told from one measured the other way.
+        runtime["template_mode"] = backend.template_mode()
     elif args.backend == "torch":
         if not args.checkpoint:
             parser.error("--checkpoint is required for the torch backend")

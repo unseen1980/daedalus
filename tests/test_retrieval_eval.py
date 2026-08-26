@@ -225,20 +225,54 @@ def test_conversation_flag_may_be_waived_for_a_binary_that_never_had_one(
     assert "-no-cnv" not in command
 
 
-def test_llama_cpp_backend_falls_back_to_single_turn(tmp_path, tokenizer):
-    """`-st` counts when the build has dropped the `-no-cnv` family.
+SINGLE_TURN_ONLY_HELP = HELP_TEXT.replace("-no-cnv, --no-conversation",
+                                          "-st,   --single-turn")
 
-    The pinned build advertises only `-st, --single-turn`; without accepting it
-    the backend refuses a binary it can in fact drive.
+
+def test_llama_cpp_backend_refuses_a_templated_single_turn_by_default(
+        tmp_path, tokenizer):
+    """`-st` exits, but it still templates -- so it is not a substitute.
+
+    The pinned build advertises `-st` and no `-no-cnv`, and the backend used to
+    accept it on the grounds that it could drive the binary. It could; it was
+    measuring the chat template. On the released base weights the copy-control
+    scores 1.0 through torch and 0.0 through this path, emitting the template's
+    own `assistant` marker, and phase 6 stage A recorded 0.0 for every arm at
+    every depth as a result -- a number indistinguishable from "these proxies
+    cannot retrieve".
+
+    So the fallback is refused, and the message has to name the remedy: the
+    next question after "it stopped working" is always "then what do I run?".
+    """
+    from scripts.retrieval_eval import LlamaCppBackend
+
+    backend = LlamaCppBackend(gguf_path=tmp_path / "m.gguf",
+                              binary=tmp_path / "llama-cli",
+                              runner=_fake_runner([],
+                                                  stdout=SINGLE_TURN_ONLY_HELP))
+
+    with pytest.raises(RuntimeError, match="chat template") as raised:
+        backend.generate(make_passkey_items(tokenizer, depths=(256,),
+                                            per_depth=1, seed=1)[0])
+    assert "LLAMA_BUILD_UI=OFF" in str(raised.value)
+    assert "--allow-chat-template" in str(raised.value)
+
+
+def test_templated_single_turn_is_available_when_asked_for(tmp_path, tokenizer):
+    """The refusal is a default, not a wall.
+
+    An instruct checkpoint is scored through its chat template anyway, so on
+    that model the templated turn is the correct mode rather than a defect. The
+    caller says so explicitly, and `template_mode` records which one ran.
     """
     from scripts.retrieval_eval import LlamaCppBackend
 
     calls = []
-    modern = HELP_TEXT.replace("-no-cnv, --no-conversation",
-                               "-st,   --single-turn")
     backend = LlamaCppBackend(gguf_path=tmp_path / "m.gguf",
                               binary=tmp_path / "llama-cli",
-                              runner=_fake_runner(calls, stdout=modern))
+                              allow_chat_template=True,
+                              runner=_fake_runner(calls,
+                                                  stdout=SINGLE_TURN_ONLY_HELP))
 
     backend.generate(make_passkey_items(tokenizer, depths=(256,), per_depth=1,
                                         seed=1)[0])
@@ -246,6 +280,34 @@ def test_llama_cpp_backend_falls_back_to_single_turn(tmp_path, tokenizer):
     command = [call for call in calls if "--help" not in call["command"]][0]["command"]
     assert "-st" in command
     assert "-no-cnv" not in command
+    assert backend.template_mode() == "chat-single-turn"
+
+
+def test_raw_completion_is_preferred_over_a_templated_turn(tmp_path, tokenizer):
+    """A binary offering both must be driven raw, opt-in or not.
+
+    `_BARE_FLAGS` resolved the conversation switch as "first supported alias
+    wins", which made the choice depend on the order of a tuple rather than on
+    which mode the harness needs. A build advertising both would then be driven
+    templated the moment somebody reordered it.
+    """
+    from scripts.retrieval_eval import LlamaCppBackend
+
+    calls = []
+    both = HELP_TEXT.replace("-no-cnv, --no-conversation",
+                             "-no-cnv, --no-conversation\n  -st,   --single-turn")
+    backend = LlamaCppBackend(gguf_path=tmp_path / "m.gguf",
+                              binary=tmp_path / "llama-cli",
+                              allow_chat_template=True,
+                              runner=_fake_runner(calls, stdout=both))
+
+    backend.generate(make_passkey_items(tokenizer, depths=(256,), per_depth=1,
+                                        seed=1)[0])
+
+    command = [call for call in calls if "--help" not in call["command"]][0]["command"]
+    assert "-no-cnv" in command
+    assert "-st" not in command
+    assert backend.template_mode() == "raw-completion"
 
 
 def test_show_prompt_keeps_the_echo_so_the_real_prompt_is_readable(
