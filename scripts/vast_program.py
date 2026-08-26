@@ -30,6 +30,18 @@ TERMINAL_STATUSES = {"completed", "halted"}
 #: like it had until the session ended and killed the trainer with it.
 DETACH_REQUIRED_HOURS = 0.25
 
+#: Seconds between attempts of a *supervised* phase. `run-phase`'s own default
+#: is zero, which is right for a quick command and wrong for a trainer: three
+#: attempts in as many seconds spend the budget on a cause -- a filesystem
+#: hiccup, a driver blip -- that has had no time to clear. Every
+#: orchestrator-launched run in this program has used `daedalus.supervise`'s 60s.
+SUPERVISED_BACKOFF_SEC = 60.0
+
+#: Minutes without a metrics row before the watchdog calls a supervised run
+#: stalled. Matches `qat_recovery`, `conv_health`, `mixture_opt` and
+#: `architecture_sweep`, all of which pass 20.0.
+SUPERVISED_STALL_MIN = 20.0
+
 
 def default_lease_name(lane: str = MAIN_LANE) -> str:
     """The lease filename a lane owns.
@@ -388,6 +400,83 @@ class VastProgramController:
         raise PhaseFailed(phase, returncodes)
 
 
+def supervised_runner(
+    checkpoint,
+    *,
+    phase: str = "",
+    lane: str = MAIN_LANE,
+    max_attempts: int = 1,
+    backoff_sec: float = SUPERVISED_BACKOFF_SEC,
+    watchdog_tokens: int = 0,
+    stall_min: float = SUPERVISED_STALL_MIN,
+    report: Optional[dict] = None,
+) -> Callable[[Sequence[str]], int]:
+    """A phase runner that launches through the supervised trainer loop.
+
+    Detaching a phase makes it outlive the session that started it. It does not
+    make it *continue*. The plain runner is `subprocess.run` on the argv it was
+    given, so for a trainer:
+
+    - a retry re-runs the same argv, which starts at step zero and overwrites
+      the checkpoint the previous attempt wrote;
+    - a relaunch after the launching session, the controller or the box died is
+      attempt one of a fresh process, so it does the same thing beside a
+      checkpoint nobody opened -- how phase 4 lost 60.3M tokens;
+    - no in-flight marker is written, and that marker is what
+      `scripts/boot_resume.py` continues a run from after a reboot and what
+      `session_keeper.supervised_job_probe` reads to know the box is busy. A
+      bare-command trainer is invisible to both for its entire run.
+
+    Every phase up to here escaped that only by going through an orchestrator
+    (`qat_recovery`, `conv_health`, `architecture_sweep`, `mixture_opt`,
+    `tokenizer_lab`) that wrapped `run_with_resume` itself. Phase 8's runs are
+    the longest in the program and it has no orchestrator, so the launcher
+    grows the capability instead of a sixth caller reimplementing it -- and
+    getting it right by accident is not something to bet a 1B-token run on.
+
+    The retry budget is handed *inward*: `run_with_resume` is the only loop that
+    knows to add `--resume` and to stop rather than continue a run the watchdog
+    halted, so the controller runs it once. `report`, when given, is filled with
+    the supervisor's own attempt history for the timeline.
+    """
+
+    checkpoint = Path(checkpoint)
+
+    def run(command: Sequence[str]) -> int:
+        from daedalus.supervise import (TrainingFailed, run_with_resume,
+                                        start_watchdog, stop_watchdog)
+
+        run_dir = checkpoint.parent
+        run_dir.mkdir(parents=True, exist_ok=True)
+        watchdog = None
+        if watchdog_tokens > 0:
+            watchdog = start_watchdog(run_dir.name, str(run_dir), watchdog_tokens,
+                                      stall_min=stall_min, supervised=True)
+        try:
+            outcome = run_with_resume(
+                list(command), str(checkpoint),
+                max_attempts=max_attempts,
+                backoff_sec=backoff_sec,
+                # The marker `watchdog.py` writes for this run. Without it a
+                # divergence halt reads as an ordinary crash and the diverged
+                # checkpoint is resumed with no watchdog left running.
+                halt_marker=str(run_dir / "HALTED"),
+                inflight_extra={"phase": phase, "lane": lane})
+        except TrainingFailed as exc:
+            if report is not None:
+                report.update({"attempts": exc.attempts,
+                               "returncodes": list(exc.returncodes),
+                               "halt": exc.halt})
+            return (exc.returncodes[-1] if exc.returncodes else 1) or 1
+        finally:
+            stop_watchdog(watchdog)
+        if report is not None:
+            report.update(outcome)
+        return 0
+
+    return run
+
+
 def detached_phase_argv(
     *,
     state,
@@ -398,7 +487,10 @@ def detached_phase_argv(
     lane: str = MAIN_LANE,
     estimated_hours: float = 0.0,
     max_attempts: int = 1,
-    backoff_sec: float = 0.0,
+    backoff_sec: Optional[float] = None,
+    supervise_checkpoint=None,
+    watchdog_tokens: int = 0,
+    stall_min: float = SUPERVISED_STALL_MIN,
 ) -> list[str]:
     """Rebuild this invocation for the detached controller, without ``--detach``.
 
@@ -421,10 +513,20 @@ def detached_phase_argv(
         "--phase", str(phase),
         "--estimated-hours", str(float(estimated_hours)),
         "--max-attempts", str(int(max_attempts)),
-        "--backoff-sec", str(float(backoff_sec)),
-        "--",
-        *[str(part) for part in command],
     ]
+    if backoff_sec is not None:
+        argv += ["--backoff-sec", str(float(backoff_sec))]
+    # The child is the process that actually runs the command, so supervision
+    # dropped here leaves `--detach` working and `--supervise-checkpoint`
+    # silently inert -- which is the combination a long training phase is
+    # launched with, and the one whose absence is invisible until a relaunch
+    # starts at step zero.
+    if supervise_checkpoint:
+        argv += ["--supervise-checkpoint", str(supervise_checkpoint)]
+    if watchdog_tokens:
+        argv += ["--watchdog-tokens", str(int(watchdog_tokens)),
+                 "--stall-min", str(float(stall_min))]
+    argv += ["--", *[str(part) for part in command]]
     return argv
 
 
@@ -439,7 +541,10 @@ def detach_phase(
     lane: str = MAIN_LANE,
     estimated_hours: float = 0.0,
     max_attempts: int = 1,
-    backoff_sec: float = 0.0,
+    backoff_sec: Optional[float] = None,
+    supervise_checkpoint=None,
+    watchdog_tokens: int = 0,
+    stall_min: float = SUPERVISED_STALL_MIN,
     spawn: Callable[..., subprocess.Popen] = subprocess.Popen,
 ) -> dict:
     """Start the phase controller in its own session and return immediately.
@@ -466,6 +571,9 @@ def detach_phase(
         estimated_hours=estimated_hours,
         max_attempts=max_attempts,
         backoff_sec=backoff_sec,
+        supervise_checkpoint=supervise_checkpoint,
+        watchdog_tokens=watchdog_tokens,
+        stall_min=stall_min,
     )
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -561,7 +669,20 @@ def main(argv=None) -> int:
     run.add_argument("--phase", required=True)
     run.add_argument("--estimated-hours", type=float, default=0.0)
     run.add_argument("--max-attempts", type=int, default=1)
-    run.add_argument("--backoff-sec", type=float, default=0.0)
+    run.add_argument(
+        "--backoff-sec", type=float, default=None,
+        help=f"seconds between attempts (default 0 for a plain command, "
+             f"{SUPERVISED_BACKOFF_SEC:g} under --supervise-checkpoint)")
+    run.add_argument(
+        "--supervise-checkpoint", default=None,
+        help="run the phase through the supervised trainer loop, resuming this "
+             "checkpoint on a retry or a relaunch instead of starting over, and "
+             "leaving the in-flight marker boot resume and the keeper read")
+    run.add_argument(
+        "--watchdog-tokens", type=int, default=0,
+        help="target tokens for a watchdog beside a --supervise-checkpoint run; "
+             "omitted, the run has no divergence or stall detection")
+    run.add_argument("--stall-min", type=float, default=SUPERVISED_STALL_MIN)
     run.add_argument(
         "--detach",
         action="store_true",
@@ -618,6 +739,18 @@ def main(argv=None) -> int:
     if not command:
         raise SystemExit("run-phase requires a command after --")
 
+    if args.supervise_checkpoint and "--resume" in command:
+        # `--resume` on attempt one restores the *finished* run's step and token
+        # count, so the phase writes no metrics row and exits 0 -- a phase that
+        # trained nothing looks exactly like one that finished early. The
+        # supervisor adds `--resume` when continuing is the right answer;
+        # `--init-from` is how a phase starts from someone else's weights.
+        raise SystemExit(
+            f"phase {args.phase!r} passes --resume to a supervised command: "
+            f"--supervise-checkpoint adds --resume itself on a retry or a "
+            f"relaunch, and an explicit one makes attempt one train nothing "
+            f"and exit 0. Use --init-from to start from existing weights.")
+
     if (not args.detach and args.estimated_hours >= DETACH_REQUIRED_HOURS
             and not running_in_own_session()):
         raise SystemExit(
@@ -641,6 +774,9 @@ def main(argv=None) -> int:
             estimated_hours=args.estimated_hours,
             max_attempts=args.max_attempts,
             backoff_sec=args.backoff_sec,
+            supervise_checkpoint=args.supervise_checkpoint,
+            watchdog_tokens=args.watchdog_tokens,
+            stall_min=args.stall_min,
         )
         print(f"detached phase {args.phase} lane {lane} pid {started['pid']} "
               f"log {started['log']}")
@@ -648,16 +784,46 @@ def main(argv=None) -> int:
 
     if not Path(args.state).exists():
         controller.initialize(base_sha=args.base_sha)
+
+    attempts = args.max_attempts
+    supervised: Optional[dict] = None
+    if args.supervise_checkpoint:
+        supervised = {}
+        controller.runner = supervised_runner(
+            args.supervise_checkpoint,
+            phase=args.phase,
+            lane=lane,
+            max_attempts=args.max_attempts,
+            backoff_sec=(SUPERVISED_BACKOFF_SEC if args.backoff_sec is None
+                         else args.backoff_sec),
+            watchdog_tokens=args.watchdog_tokens,
+            stall_min=args.stall_min,
+            report=supervised,
+        )
+        # One attempt at this level: the supervisor owns the retries, because it
+        # is the only loop that adds `--resume` and that refuses to continue a
+        # run the watchdog halted. Retrying it from out here would restart a
+        # halted run and square the budget.
+        attempts = 1
+
     take_lease(controller)
     try:
         controller.run_phase(
             args.phase,
             command,
             estimated_hours=args.estimated_hours,
-            max_attempts=args.max_attempts,
-            backoff_sec=args.backoff_sec,
+            max_attempts=attempts,
+            backoff_sec=args.backoff_sec or 0.0,
         )
     finally:
+        # The phase details record the controller's attempts, which under
+        # supervision is always one; without this the timeline says a run that
+        # crashed twice and resumed twice went through first time. Empty when
+        # the phase never ran -- a deadline refusal has nothing to report.
+        if supervised:
+            controller.note(phase=args.phase, kind="supervised_run",
+                            details={"checkpoint": str(args.supervise_checkpoint),
+                                     **supervised})
         controller.release_lease()
     return 0
 

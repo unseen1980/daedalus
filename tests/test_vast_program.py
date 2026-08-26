@@ -662,3 +662,318 @@ def test_detached_phase_survives_a_group_kill_of_its_launching_session(tmp_path)
     finally:
         if launched.poll() is None:
             launched.kill()
+
+
+# ------------------------------------------------------- supervised phases ---
+#
+# Detaching a phase makes it outlive the session that started it. It does not
+# make it *continue*: the controller's plain runner re-runs the same argv, so a
+# retry of a trainer starts at step zero and overwrites the checkpoint the
+# previous attempt wrote, and no in-flight marker is left for `boot_resume` or
+# the keeper's busy probe to find. Every phase so far avoided that only because
+# it went through an orchestrator script that wrapped `run_with_resume` itself.
+
+
+def _fake_trainer(tmp_path, *, argv_log, checkpoint, exit_codes, extra=""):
+    """A stand-in trainer that records the argv of each attempt.
+
+    Real enough for what the launcher must get right: it writes its checkpoint
+    *before* it fails, which is the whole precondition for continuing one.
+    """
+
+    script = tmp_path / "fake_trainer.py"
+    script.write_text(
+        "import pathlib, sys\n"
+        f"log = pathlib.Path({str(argv_log)!r})\n"
+        "attempts = log.read_text().splitlines() if log.exists() else []\n"
+        "log.write_text('\\n'.join(attempts + [' '.join(sys.argv[1:])]) + '\\n')\n"
+        f"pathlib.Path({str(checkpoint)!r}).write_text('weights')\n"
+        + extra
+        + f"codes = {list(exit_codes)!r}\n"
+        "sys.exit(codes[min(len(attempts), len(codes) - 1)])\n"
+    )
+    return script
+
+
+def test_a_supervised_phase_resumes_its_own_checkpoint_on_retry(tmp_path):
+    """The retry that costs a run: same argv, from step zero, over the weights.
+
+    `--max-attempts 2` on a bare trainer relaunches it with no `--resume`, so
+    attempt two starts at step zero and overwrites the checkpoint attempt one
+    left. Under `--supervise-checkpoint` the retry continues it instead.
+    """
+
+    import sys
+
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+
+    checkpoint = tmp_path / "runs" / "phase8-code-probe" / "checkpoint.pt"
+    argv_log = tmp_path / "argv.log"
+    trainer = _fake_trainer(tmp_path, argv_log=argv_log, checkpoint=checkpoint,
+                            exit_codes=[1, 0])
+
+    assert main([
+        "--state", str(state),
+        "--lease", str(tmp_path / "controller.lock"),
+        "run-phase",
+        "--phase", "phase8-code-probe",
+        "--max-attempts", "2",
+        "--backoff-sec", "0",
+        "--supervise-checkpoint", str(checkpoint),
+        "--", sys.executable, str(trainer),
+    ]) == 0
+
+    attempts = argv_log.read_text().splitlines()
+    assert attempts == ["", f"--resume {checkpoint}"], (
+        "the retry restarted the trainer instead of resuming it")
+    assert json.loads(state.read_text())["status"] == "passed"
+
+
+def test_a_supervised_phase_is_visible_to_the_keeper_while_it_runs(tmp_path):
+    """No marker means the box reads as free while it is training.
+
+    `supervised_job_probe` is how the keeper knows not to launch a session onto
+    a busy GPU, and `boot_resume` is how a run survives a reboot. Both find work
+    by its in-flight marker, and the marker is written by the supervised
+    launcher -- not by `train.py` -- so a phase run as a bare command is
+    invisible to both of them for its entire life.
+    """
+
+    import sys
+
+    from scripts.vast_program import main
+
+    repo = Path(__file__).resolve().parents[1]
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+
+    runs_root = tmp_path / "runs"
+    checkpoint = runs_root / "phase8-code-1b" / "checkpoint.pt"
+    seen = tmp_path / "probe.txt"
+    trainer = _fake_trainer(
+        tmp_path, argv_log=tmp_path / "argv.log", checkpoint=checkpoint,
+        exit_codes=[0],
+        extra=(f"sys.path.insert(0, {str(repo)!r})\n"
+               "from daedalus.session_keeper import supervised_job_probe\n"
+               f"pathlib.Path({str(seen)!r}).write_text("
+               f"str(supervised_job_probe({str(runs_root)!r})()))\n"),
+    )
+
+    assert main([
+        "--state", str(state),
+        "--lease", str(tmp_path / "controller.lock"),
+        "run-phase",
+        "--phase", "phase8-code-1b",
+        "--supervise-checkpoint", str(checkpoint),
+        "--", sys.executable, str(trainer),
+    ]) == 0
+
+    assert seen.read_text() == "True", "the keeper read the box as free mid-run"
+    marker = json.loads((checkpoint.parent / "inflight.json").read_text())
+    assert marker["completed"] is True, "a finished run must not be resumed"
+    assert marker["cmd"] == [sys.executable, str(trainer)]
+
+
+def test_a_supervised_phase_continues_a_run_its_launcher_died_under(tmp_path):
+    """The failure that cost phase 4 an arm, reached through the launcher.
+
+    A session ending kills the trainer it started, leaving an open marker beside
+    a checkpoint and no process to continue it. The relaunch is attempt one of a
+    fresh supervisor, so `attempt > 1` is false and only the marker knows this
+    run has already started.
+    """
+
+    import sys
+
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+
+    run_dir = tmp_path / "runs" / "phase8-code-probe"
+    run_dir.mkdir(parents=True)
+    checkpoint = run_dir / "checkpoint.pt"
+    checkpoint.write_text("60.3M tokens of training")
+    argv_log = tmp_path / "argv.log"
+    trainer = _fake_trainer(tmp_path, argv_log=argv_log, checkpoint=checkpoint,
+                            exit_codes=[0])
+    (run_dir / "inflight.json").write_text(json.dumps({
+        "schema": 1,
+        "run_dir": str(run_dir),
+        "cmd": [sys.executable, str(trainer)],
+        "ckpt_path": str(checkpoint),
+        "completed": False,
+        "outcome": None,
+        # A pid that cannot be alive: the launcher is provably gone, which is
+        # the bar for taking over its checkpoint.
+        "supervisor_pid": 2 ** 30,
+        "supervisor_start_ticks": 1,
+    }))
+
+    assert main([
+        "--state", str(state),
+        "--lease", str(tmp_path / "controller.lock"),
+        "run-phase",
+        "--phase", "phase8-code-probe",
+        "--supervise-checkpoint", str(checkpoint),
+        "--", sys.executable, str(trainer),
+    ]) == 0
+
+    assert argv_log.read_text().splitlines() == [f"--resume {checkpoint}"], (
+        "attempt one of the relaunch ignored the checkpoint beside it")
+
+
+def test_a_watchdog_halt_stops_a_supervised_phase_rather_than_resuming_it(tmp_path):
+    """Retrying is the right answer to a crash and the wrong one to divergence.
+
+    Without the halt marker the launcher reads the watchdog's SIGTERM as an
+    ordinary crash and resumes the diverged checkpoint -- with no watchdog left
+    running -- for the rest of the budget.
+    """
+
+    import sys
+
+    from scripts.vast_program import PhaseFailed, main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+
+    run_dir = tmp_path / "runs" / "phase8-code-1b"
+    checkpoint = run_dir / "checkpoint.pt"
+    argv_log = tmp_path / "argv.log"
+    halt = json.dumps({"kind": "divergence", "reason": "loss went to nan"})
+    trainer = _fake_trainer(
+        tmp_path, argv_log=argv_log, checkpoint=checkpoint, exit_codes=[1],
+        extra=f"pathlib.Path({str(run_dir / 'HALTED')!r}).write_text({halt!r})\n",
+    )
+
+    with pytest.raises(PhaseFailed):
+        main([
+            "--state", str(state),
+            "--lease", str(tmp_path / "controller.lock"),
+            "run-phase",
+            "--phase", "phase8-code-1b",
+            "--max-attempts", "3",
+            "--backoff-sec", "0",
+            "--supervise-checkpoint", str(checkpoint),
+            "--", sys.executable, str(trainer),
+        ])
+
+    assert len(argv_log.read_text().splitlines()) == 1, "resumed a halted run"
+    assert json.loads(state.read_text())["status"] == "failed"
+
+
+def test_a_supervised_phase_records_what_the_supervisor_did(tmp_path):
+    """The controller's own `attempts` counts *its* attempts, which under
+    supervision is always one. Without the supervisor's report the timeline says
+    a run that crashed twice and resumed twice went through first time."""
+
+    import sys
+
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+
+    checkpoint = tmp_path / "runs" / "phase8-code-probe" / "checkpoint.pt"
+    trainer = _fake_trainer(tmp_path, argv_log=tmp_path / "argv.log",
+                            checkpoint=checkpoint, exit_codes=[1, 0])
+
+    assert main([
+        "--state", str(state),
+        "--lease", str(tmp_path / "controller.lock"),
+        "run-phase",
+        "--phase", "phase8-code-probe",
+        "--max-attempts", "2",
+        "--backoff-sec", "0",
+        "--supervise-checkpoint", str(checkpoint),
+        "--", sys.executable, str(trainer),
+    ]) == 0
+
+    events = [json.loads(line)
+              for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    supervised = [event for event in events if event["kind"] == "supervised_run"]
+    assert len(supervised) == 1
+    assert supervised[0]["details"]["attempts"] == 2
+    assert supervised[0]["details"]["resumed"] is True
+    assert supervised[0]["details"]["returncodes"] == [1, 0]
+    assert supervised[0]["details"]["checkpoint"] == str(checkpoint)
+
+
+def test_a_supervised_phase_command_may_not_carry_its_own_resume(tmp_path):
+    """`--resume` on attempt one restores the *finished* run's step and token
+    count, so the phase trains nothing, writes no metrics row and exits 0. The
+    supervisor adds `--resume` when it is the right answer; an explicit one is
+    a phase that silently does nothing."""
+
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+
+    with pytest.raises(SystemExit, match="--resume"):
+        main([
+            "--state", str(state),
+            "run-phase",
+            "--phase", "phase8-code-probe",
+            "--supervise-checkpoint", "runs/phase8-code-probe/checkpoint.pt",
+            "--", "python", "train.py",
+            "--resume", "runs/hero/checkpoint.pt",
+        ])
+
+
+def test_an_unsupervised_phase_leaves_no_marker_behind(tmp_path):
+    """Most phases are scoring passes and report generators, not resumable runs.
+    Marking one in flight would offer `boot_resume` a run to continue that has
+    no checkpoint and no meaning."""
+
+    from scripts.vast_program import main
+
+    state = tmp_path / "state.json"
+    assert main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    assert main([
+        "--state", str(state),
+        "--lease", str(tmp_path / "controller.lock"),
+        "run-phase",
+        "--phase", "phase8-scorecard",
+        "--", "python", "-c", "pass",
+    ]) == 0
+
+    assert not list(tmp_path.rglob("inflight.json"))
+    assert json.loads(state.read_text())["status"] == "passed"
+
+
+def test_detached_phase_argv_carries_supervision_to_the_child(tmp_path):
+    """The detached child is the process that actually runs the command.
+
+    Dropping the supervision options here would leave the parent's `--detach`
+    working and its `--supervise-checkpoint` silently inert -- the exact
+    combination a long training phase is launched with.
+    """
+
+    from scripts.vast_program import detached_phase_argv
+
+    argv = detached_phase_argv(
+        state=tmp_path / "state.json",
+        phase="phase8-code-1b",
+        command=["python", "train.py", "--run-name", "phase8-code-1b"],
+        supervise_checkpoint="runs/phase8-code-1b/checkpoint.pt",
+        watchdog_tokens=1_000_000_000,
+        stall_min=30.0,
+        max_attempts=3,
+        backoff_sec=60.0,
+    )
+
+    assert argv[argv.index("--supervise-checkpoint") + 1] == \
+        "runs/phase8-code-1b/checkpoint.pt"
+    assert argv[argv.index("--watchdog-tokens") + 1] == "1000000000"
+    assert argv[argv.index("--stall-min") + 1] == "30.0"
+    assert argv[argv.index("--backoff-sec") + 1] == "60.0"
+    assert argv.index("--supervise-checkpoint") > argv.index("run-phase"), (
+        "the supervision options belong to run-phase, not to the controller")
+    assert argv[argv.index("--") + 1:] == [
+        "python", "train.py", "--run-name", "phase8-code-1b",
+    ]
