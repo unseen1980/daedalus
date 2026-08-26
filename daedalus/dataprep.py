@@ -72,6 +72,7 @@ import json
 import multiprocessing
 import os
 import resource
+import subprocess
 import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field, replace
@@ -602,7 +603,12 @@ def _recover_source_stats(key: str, out_root: str) -> Optional[dict]:
                     # boundary instead of re-streaming from row 0.
                     "stream_state": m.get("stream_state"),
                     "n_seen": m.get("n_seen", 0), "n_kept": m.get("n_kept", 0),
-                    "n_too_short": m.get("n_too_short", 0)}
+                    "n_too_short": m.get("n_too_short", 0),
+                    # Only the three `DedupState` owns: `too_short` is recovered
+                    # one field up, and folding it back in here would seed the
+                    # next attempt with a count it goes on to make again.
+                    "drops": {name: m.get("drops", {}).get(name, 0)
+                              for name in _DEDUP_DROPS}}
         except (OSError, json.JSONDecodeError):
             pass  # truncated by the same crash -- fall through to scanning .bin files
     if not os.path.isdir(source_dir):
@@ -620,20 +626,107 @@ def _recover_source_stats(key: str, out_root: str) -> Optional[dict]:
     return {"key": key, "dataset": None, "tokens": total_tokens, "shards": shards}
 
 
-def _write_source_manifest(writer, spec: SourceSpec, stream_state, stats: dict) -> str:
+#: Why a document did not make it into the shards, in the order the checks run.
+#: `too_short` is counted by `run_source` and the other three by `DedupState`,
+#: which is the only reason they are separate numbers rather than one counter.
+DROP_REASONS = ("too_short", "exact_dup", "near_dup", "contaminated")
+
+#: Dedup's own names for the three it owns.
+_DEDUP_DROPS = ("exact_dup", "near_dup", "contaminated")
+
+_GIT_SHA: Optional[str] = None
+
+
+def builder_git_sha() -> str:
+    """The commit whose code built these shards, or `"unknown"`.
+
+    The filters are *code*: a `filter_fn` lambda, the length bound, the
+    normalization `exact_hash` applies, the near-dup signature. No field can
+    record a lambda, and a manifest that named its filters in prose would go
+    stale the first time one changed. What actually ties a manifest to the
+    filters that produced it is the revision of the tree that ran, so that is
+    what is recorded.
+
+    Never raises and never blocks a build: a corpus running from a tarball, or
+    from a worktree with no git at all, is a corpus with weaker provenance, not
+    a failed one. Cached because `checkpoint_every` writes this manifest every
+    50,000 documents and a fork per write is a real cost at corpus scale.
+    """
+    global _GIT_SHA
+    if _GIT_SHA is None:
+        try:
+            result = subprocess.run(["git", "rev-parse", "HEAD"],
+                                    capture_output=True, text=True, timeout=10)
+            _GIT_SHA = result.stdout.strip() or "unknown"
+        except Exception:                          # noqa: BLE001 - provenance
+            _GIT_SHA = "unknown"                   # must not bite the build
+    return _GIT_SHA
+
+
+def source_provenance(spec: SourceSpec, *, min_chars: int,
+                      dedup: DedupState) -> dict:
+    """What it took to build this source, recorded beside the shards it built.
+
+    The corpus manifest already carries the dedup parameters and the frozen
+    decontamination index once, for the whole run. A *source* manifest that
+    does not carry its own is only reproducible while it sits next to that
+    file -- and these shard directories do not stay next to it. They are
+    uploaded to a private dataset repo one source at a time, hardlinked into
+    holdout splits, restricted to a subset by `--data-dir`, and read by four
+    later phases through `resolve_mixture`, which never opens the corpus
+    manifest at all. Phase 7's own acceptance is that every source and
+    transformation is reproducible from revision-pinned manifests, and "that
+    manifest, plus the other file it came with" is not that.
+
+    `source_revision` is `None` for most sources and that is a real answer, not
+    a missing one: the build took whatever the dataset's default branch pointed
+    at on the day it ran, so the source is pinned by nothing. Recording the null
+    is what makes that visible; Phase 7 step 3's revision pinning is the fix.
+    """
+    return {
+        "source_split": spec.split,
+        "source_revision": spec.revision,
+        "source_load_kwargs": dict(spec.load_kwargs),
+        "filters": {
+            "min_chars": min_chars,
+            # A lambda has no name worth recording, so what is recorded is
+            # whether one ran; `builder_git_sha` is what identifies which.
+            "row_filter": spec.filter_fn is not None,
+            "near_dup_group": spec.near_dup_group or spec.key,
+            "near_dup_threshold": dedup.threshold,
+            "near_dup_num_perm": dedup.num_perm,
+            "near_dup_reset_every": dedup.near_dup_reset_every,
+        },
+        "builder_git_sha": builder_git_sha(),
+    }
+
+
+def _write_source_manifest(writer, spec: SourceSpec, stream_state, stats: dict,
+                           provenance: Optional[dict] = None) -> str:
     """Write the per-source manifest, including the resume position.
 
     Durability: this file is the only record that survives a worker dying hard
     (an OS kill, a C-level malloc failure, a clean low-memory abort), so the
     resume position and counters live here, not just in the stats dict
     returned through the executor. See `_recover_source_stats`.
+
+    `drops` is written as one block because the question it answers is one
+    question -- of `n_seen` documents, why did `n_seen - n_kept` not make it --
+    and it was previously unanswerable: three of the four reasons landed in a
+    `DedupState` counter shared by every source a worker handled, and none of
+    them was written down. `n_too_short` stays at the top level as well, where
+    `_recover_source_stats` and the resume path have always read it.
     """
+    drops = stats.get("drops") or {}
     return writer.write_manifest({
         "source_dataset": spec.dataset, "source_config": spec.config,
         "source_key": spec.key, "eos_id": DEFAULT_EOS_ID,
         "stream_state": stream_state,
         "n_seen": stats["n_seen"], "n_kept": stats["n_kept"],
         "n_too_short": stats["n_too_short"],
+        "drops": {"too_short": stats["n_too_short"],
+                  **{name: int(drops.get(name, 0)) for name in _DEDUP_DROPS}},
+        **(provenance or {}),
     })
 
 
@@ -691,7 +784,29 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
     group = spec.near_dup_group or spec.key
     stats = {"key": spec.key, "dataset": spec.dataset, "config": spec.config,
              "n_seen": resume_seed.get("n_seen", 0), "n_kept": resume_seed.get("n_kept", 0),
-             "n_too_short": resume_seed.get("n_too_short", 0), "tokens": resume_seed.get("tokens", 0)}
+             "n_too_short": resume_seed.get("n_too_short", 0), "tokens": resume_seed.get("tokens", 0),
+             "drops": dict(resume_seed.get("drops") or {})}
+    # `DedupState` is shared by every source a worker handles, so its counters
+    # are the *worker's*. The difference from this snapshot is what this source
+    # dropped -- without it, source two of a group inherits source one's
+    # duplicates, and the last source in a worker reports the whole group's.
+    drops_before = dict(dedup.counters)
+    seeded_drops = dict(stats["drops"])
+
+    def fold_drops() -> None:
+        """This attempt's dedup drops, folded onto the ones already recorded.
+
+        Seeded from the resume state for the reason `n_kept` is: a source that
+        stopped and continued dropped both attempts' documents, and a manifest
+        counting only the last attempt would put the drops and the keeps on
+        different denominators.
+        """
+        stats["drops"] = {
+            name: int(seeded_drops.get(name, 0))
+                  + int(dedup.counters.get(name, 0)) - int(drops_before.get(name, 0))
+            for name in _DEDUP_DROPS}
+
+    provenance = source_provenance(spec, min_chars=min_chars, dedup=dedup)
     prior_elapsed_s = resume_seed.get("elapsed_s", 0.0)
     t0 = time.time()
     incomplete = False
@@ -727,7 +842,9 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
                     # source started. Flush first so the manifest describes
                     # exactly what is on disk.
                     writer.flush_partial()
-                    _write_source_manifest(writer, spec, stream.state(), stats)
+                    fold_drops()
+                    _write_source_manifest(writer, spec, stream.state(), stats,
+                                           provenance)
                 if stats["n_seen"] % rss_check_every == 0:
                     _check_worker_rss(rss_limit_gb)
                     if rss_soft_limit_gb:
@@ -771,7 +888,9 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
     # this points at the first row not yet accounted for in `stats`.
     stream_state = stream.state()
     writer.close()
-    manifest_path = _write_source_manifest(writer, spec, stream_state, stats)
+    fold_drops()
+    manifest_path = _write_source_manifest(writer, spec, stream_state, stats,
+                                           provenance)
     stats.update(shards=writer.shards, manifest_path=manifest_path,
                  stream_state=stream_state,
                  elapsed_s=prior_elapsed_s + (time.time() - t0), token_budget=token_budget,

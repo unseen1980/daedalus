@@ -218,6 +218,131 @@ def test_run_source_drops_too_short_and_duplicate_docs(tmp_path, monkeypatch):
     assert stats["n_kept"] == 3  # 3 unique docs; the 4th is an exact dup of doc 0
 
 
+def test_a_source_manifest_records_what_it_took_to_build_it(tmp_path, monkeypatch):
+    """Phase 7 step 3. These shard directories do not stay beside the corpus
+    manifest -- they are uploaded per source, hardlinked into holdouts, and read
+    through `--data-dir` by four later phases -- so a source that is only
+    reproducible next to that other file is not reproducible."""
+    spec = SourceSpec("fake-src", "fake/dataset", share=1.0,
+                      text_fn=lambda r: r["text"], split="train[:1%]",
+                      revision="refs/convert/parquet",
+                      filter_fn=lambda r: True,
+                      near_dup_group="web-overlap",
+                      load_kwargs={"data_files": "Python-all/*.parquet"})
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(20))
+
+    stats = run_source(spec, FakeTokenizer(), token_budget=10**9,
+                       out_dir=str(tmp_path), dedup=DedupState(),
+                       eval_ngram_index=None, min_chars=20,
+                       log=lambda *a, **k: None)
+
+    with open(stats["manifest_path"]) as f:
+        manifest = json.load(f)
+    assert manifest["source_revision"] == "refs/convert/parquet"
+    assert manifest["source_split"] == "train[:1%]"
+    assert manifest["source_load_kwargs"] == {"data_files": "Python-all/*.parquet"}
+    filters = manifest["filters"]
+    assert filters["min_chars"] == 20
+    assert filters["row_filter"] is True
+    assert filters["near_dup_group"] == "web-overlap"
+    assert filters["near_dup_threshold"] == DedupState.threshold
+    assert filters["near_dup_reset_every"] == DedupState.near_dup_reset_every
+    # No field can record a lambda, so what identifies the filters is the tree
+    # that ran them.
+    assert manifest["builder_git_sha"]
+    assert set(manifest["drops"]) == set(dp.DROP_REASONS)
+
+
+def test_a_source_that_pins_nothing_records_the_null_rather_than_omitting_it(
+        tmp_path, monkeypatch):
+    """`source_revision: null` is a real answer: the build took whatever the
+    dataset's default branch pointed at that day. An absent key reads as an
+    older manifest; an explicit null reads as an unpinned source."""
+    spec = SourceSpec("fake-src", "fake/dataset", share=1.0,
+                      text_fn=lambda r: r["text"])
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(5))
+
+    stats = run_source(spec, FakeTokenizer(), token_budget=10**9,
+                       out_dir=str(tmp_path), dedup=DedupState(),
+                       eval_ngram_index=None, log=lambda *a, **k: None)
+
+    with open(stats["manifest_path"]) as f:
+        manifest = json.load(f)
+    assert "source_revision" in manifest and manifest["source_revision"] is None
+    assert manifest["filters"]["row_filter"] is False
+
+
+def test_the_drop_counts_are_this_sources_and_not_the_whole_workers(
+        tmp_path, monkeypatch):
+    """`DedupState` is shared by every source a worker handles, so its counters
+    are the worker's. Written straight through, source two would inherit source
+    one's duplicates and the last source would report the whole group's."""
+    dedup = DedupState()
+    first = SourceSpec("src-a", "fake/dataset", share=1.0,
+                       text_fn=lambda r: r["text"])
+    rows = list(fake_rows(3)) + [next(fake_rows(1))]   # the last is an exact dup
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: iter(rows))
+    a = run_source(first, FakeTokenizer(), token_budget=10**9,
+                   out_dir=str(tmp_path / "a"), dedup=dedup,
+                   eval_ngram_index=None, log=lambda *a, **k: None)
+
+    second = SourceSpec("src-b", "fake/dataset", share=1.0,
+                        text_fn=lambda r: r["text"])
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(3, prefix="other"))
+    b = run_source(second, FakeTokenizer(), token_budget=10**9,
+                   out_dir=str(tmp_path / "b"), dedup=dedup,
+                   eval_ngram_index=None, log=lambda *a, **k: None)
+
+    assert a["drops"]["exact_dup"] == 1
+    assert b["drops"]["exact_dup"] == 0
+    assert dedup.counters["exact_dup"] == 1     # the worker's total, unchanged
+    with open(b["manifest_path"]) as f:
+        assert json.load(f)["drops"]["exact_dup"] == 0
+
+
+def test_the_drop_counts_survive_a_resume(tmp_path, monkeypatch):
+    """Seeded from the resume state for the reason `n_kept` is: a source that
+    stopped and continued dropped both attempts' documents, and counting only
+    the last one puts the drops and the keeps on different denominators."""
+    spec = SourceSpec("fake-src", "fake/dataset", share=1.0,
+                      text_fn=lambda r: r["text"])
+    rows = list(fake_rows(2)) + [next(fake_rows(1))]
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: iter(rows))
+
+    stats = run_source(spec, FakeTokenizer(), token_budget=10**9,
+                       out_dir=str(tmp_path), dedup=DedupState(),
+                       eval_ngram_index=None, min_chars=20,
+                       resume_seed={"n_seen": 9, "n_kept": 6, "n_too_short": 2,
+                                    "tokens": 0,
+                                    "drops": {"exact_dup": 4, "near_dup": 1,
+                                              "contaminated": 3}},
+                       log=lambda *a, **k: None)
+
+    assert stats["drops"] == {"exact_dup": 5, "near_dup": 1, "contaminated": 3}
+    with open(stats["manifest_path"]) as f:
+        manifest = json.load(f)
+    assert manifest["drops"]["exact_dup"] == 5
+    assert manifest["drops"]["too_short"] == manifest["n_too_short"] == 2
+
+
+def test_a_recovered_manifest_seeds_the_dedup_drops_and_not_too_short(
+        tmp_path, monkeypatch):
+    """`too_short` is recovered one field up as `n_too_short`; folding it back
+    in here would seed the next attempt with a count it goes on to make again."""
+    spec = SourceSpec("fake-src", "fake/dataset", share=1.0,
+                      text_fn=lambda r: r["text"])
+    rows = [{"text": "short"}] + list(fake_rows(2)) + [next(fake_rows(1))]
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: iter(rows))
+    run_source(spec, FakeTokenizer(), token_budget=10**9,
+               out_dir=str(tmp_path / spec.key), dedup=DedupState(),
+               eval_ngram_index=None, min_chars=20, log=lambda *a, **k: None)
+
+    recovered = dp._recover_source_stats(spec.key, str(tmp_path))
+    assert recovered["n_too_short"] == 1
+    assert recovered["drops"] == {"exact_dup": 1, "near_dup": 0,
+                                  "contaminated": 0}
+
+
 def test_run_source_continues_after_dataset_row_error_is_isolated_by_caller(tmp_path, monkeypatch):
     # run_source itself doesn't need to swallow per-row errors -- confirms a
     # clean empty source (0 rows) just yields an empty, valid manifest.
@@ -2154,8 +2279,8 @@ def test_run_source_records_a_resume_position_before_the_source_ends(tmp_path, m
 
     real_write = dp._write_source_manifest
 
-    def spy(writer, spec_, state, stats):
-        path = real_write(writer, spec_, state, stats)
+    def spy(writer, spec_, state, stats, provenance=None):
+        path = real_write(writer, spec_, state, stats, provenance)
         with open(path) as f:
             seen_manifests.append(json.load(f))
         return path
@@ -2183,8 +2308,8 @@ def test_mid_source_checkpoint_describes_exactly_what_is_on_disk(tmp_path, monke
     snapshots = []
     real_write = dp._write_source_manifest
 
-    def spy(writer, spec_, state, stats):
-        path = real_write(writer, spec_, state, stats)
+    def spy(writer, spec_, state, stats, provenance=None):
+        path = real_write(writer, spec_, state, stats, provenance)
         with open(path) as f:
             m = json.load(f)
         on_disk = sum(os.path.getsize(os.path.join(str(tmp_path), s["file"])) // 2
