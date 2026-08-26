@@ -10,6 +10,7 @@ train on a mixture other than its own.
 Run: python -m pytest tests/test_mixture_opt.py -v
 """
 import json
+from pathlib import Path
 
 import pytest
 
@@ -26,9 +27,10 @@ from daedalus.mixture_opt import (DOMAIN_FLOOR_FRACTION, EXCESS_RATIO_CAP,
                                   restrict, select_mixture, specialist_name,
                                   unrepresented_floored_domains)
 from scripts.mixture_opt import (PROBE, arm_checkpoint_path, arm_preflight,
-                                 arm_run_name, discover_sources, finished_run,
-                                 foreign_run, run_arm, stage_arms, sweep,
-                                 train_command, weight_args)
+                                 arm_run_name, derive, discover_sources,
+                                 finished_run, foreign_run, run_arm,
+                                 score_arm, scorecard_name, scoring_sources,
+                                 stage_arms, sweep, train_command, weight_args)
 
 
 #: The three sources this box actually holds under `data/shards-train`.
@@ -677,3 +679,226 @@ def test_the_sweep_artifact_carries_the_yardstick_and_what_it_could_not_measure(
         (tmp_path / "report" / "mixture-sweep-reference.json").read_text())
     assert written["evaluation_weights"] == report["evaluation_weights"]
     assert len(written["arms"]) == len(report["arms"])
+
+
+# ============================================= scoring the arms that finished ==
+# The half that turns four finished checkpoints into the numbers the
+# preregistered rule reads. What these assert is that the pass measures what it
+# says it measures -- one weighting for every arm, a full pass, the checkpoint
+# that is actually there -- and that the derivation refuses every input it
+# cannot honestly subtract.
+
+def _holdout_root(tmp_path, sources=BOX_SOURCES, tokens=400):
+    """A holdout root shaped like `data/holdout`: one manifest per source."""
+    root = tmp_path / "holdout"
+    for name in sources:
+        _write_source(root, name, n_tokens=tokens, shard_tokens=tokens // 2)
+    return root
+
+
+def _trained(arm, tmp_path, payload=b"the phase 7 arm"):
+    """The checkpoint a finished arm leaves behind."""
+    ckpt = arm_checkpoint_path(arm, "probe", str(tmp_path / "runs"))
+    ckpt.parent.mkdir(parents=True, exist_ok=True)
+    ckpt.write_bytes(payload)
+    return ckpt
+
+
+def _bpb_factory(values):
+    """A `bpb_factory` that answers from a `{source: bpb}` table.
+
+    Stands in for loading 4 checkpoints and forward-passing 220M held-out
+    tokens, so the rules that decide the phase are testable without a GPU.
+    """
+    def factory(checkpoint, *, config, device, seq_len, batch_size):
+        def bpb_fn(source_dir):
+            return values[Path(str(source_dir)).name]
+        return bpb_fn
+    return factory
+
+
+def _score(arm, tmp_path, values, **kwargs):
+    kwargs.setdefault("holdout_root", str(_holdout_root(tmp_path)))
+    return score_arm(arm, sources=BOX_SOURCES, tag="probe",
+                     run_root=str(tmp_path / "runs"),
+                     out_dir=str(tmp_path / "scorecards"), device="cpu",
+                     bpb_factory=_bpb_factory(values), **kwargs)
+
+
+#: A baseline that trails each specialist on that specialist's own source, by
+#: very different margins: code has 0.30 bits/byte of headroom, raw web 0.02,
+#: and educational web none at all.
+BASELINE_BPB = {"dclm-baseline": 1.20, "fineweb-edu": 1.00,
+                "stack-edu-python": 0.90}
+SPECIALIST_BPB = {"dclm-baseline": 1.18, "fineweb-edu": 1.00,
+                  "stack-edu-python": 0.60}
+
+
+def _score_reference(tmp_path):
+    """Every reference arm scored, as `score --stage reference` leaves them."""
+    holdout = str(_holdout_root(tmp_path))
+    arms = {arm.name: arm for arm in reference_arms(BOX_SOURCES)}
+    _trained(arms["baseline"], tmp_path, b"baseline weights")
+    _score(arms["baseline"], tmp_path, BASELINE_BPB, holdout_root=holdout)
+    for source in BOX_SOURCES:
+        arm = arms[specialist_name(source)]
+        _trained(arm, tmp_path, f"{source} weights".encode())
+        _score(arm, tmp_path, {source: SPECIALIST_BPB[source]},
+               holdout_root=holdout)
+    return arms
+
+
+def test_a_specialist_is_read_only_on_the_source_it_specialised_in(tmp_path):
+    """Excess loss reads a specialist through exactly one number. Scoring it on
+    the other two sources answers a transfer question this phase never asks, at
+    three times the GPU hours per specialist."""
+    arms = {arm.name: arm for arm in reference_arms(BOX_SOURCES)}
+    specialist = arms["only-stack-edu-python"]
+    assert scoring_sources(specialist, BOX_SOURCES) == ["stack-edu-python"]
+    assert scoring_sources(arms["baseline"], BOX_SOURCES) == BOX_SOURCES
+
+    _trained(specialist, tmp_path)
+    report = _score(specialist, tmp_path, {"stack-edu-python": 0.60})
+
+    card = json.loads(Path(report["scorecard"]).read_text())
+    assert card["details"]["sources_requested"] == ["stack-edu-python"]
+    assert card["details"]["scored_role"] == "specialist"
+    # No aggregate weighting on a one-source card: there is nothing to weight,
+    # and `summarize_bpb` refuses weights naming sources it did not measure.
+    assert card["details"]["weights"] is None
+    assert card["metrics"]["n_sources"] == 1.0
+
+
+def test_every_mixture_arm_is_scored_under_the_same_fixed_weighting(tmp_path):
+    """The whole reason this pass exists rather than reading `val_bpb`: each
+    arm's own training mixture would score six models on six different corpora
+    and then subtract the numbers."""
+    baseline = baseline_arm(BOX_SOURCES)
+    _trained(baseline, tmp_path)
+    report = _score(baseline, tmp_path, BASELINE_BPB)
+
+    card = json.loads(Path(report["scorecard"]).read_text())
+    fixed = evaluation_weights(BOX_SOURCES)
+    assert card["details"]["weights"] == pytest.approx(fixed, abs=1e-9)
+    assert card["provenance"]["bpb_mode"] == "full"
+    expected = sum(BASELINE_BPB[name] * share for name, share in fixed.items())
+    assert card["metrics"]["bpb"] == pytest.approx(expected)
+    for name, value in BASELINE_BPB.items():
+        assert card["metrics"][f"bpb_{name}"] == pytest.approx(value)
+
+
+def test_scoring_an_arm_that_never_trained_is_refused(tmp_path):
+    """A missing checkpoint is an arm that did not run, not an arm worth a
+    partial score."""
+    with pytest.raises(SystemExit, match="has no checkpoint"):
+        _score(baseline_arm(BOX_SOURCES), tmp_path, BASELINE_BPB)
+
+
+def test_a_rescore_is_skipped_for_the_same_bytes_and_not_for_new_ones(tmp_path):
+    """Keyed on the checkpoint digest rather than on the scorecard existing: an
+    arm retrained under `--refresh` must not keep the old arm's number."""
+    baseline = baseline_arm(BOX_SOURCES)
+    _trained(baseline, tmp_path, b"first weights")
+    first = _score(baseline, tmp_path, BASELINE_BPB)
+    again = _score(baseline, tmp_path, BASELINE_BPB)
+    assert again["skipped"] == "already-scored"
+    assert again["checkpoint_sha256"] == first["checkpoint_sha256"]
+
+    _trained(baseline, tmp_path, b"retrained weights")
+    after = _score(baseline, tmp_path, {**BASELINE_BPB, "fineweb-edu": 0.95})
+    assert "skipped" not in after
+    assert after["checkpoint_sha256"] != first["checkpoint_sha256"]
+    card = json.loads(Path(after["scorecard"]).read_text())
+    assert card["metrics"]["bpb_fineweb-edu"] == pytest.approx(0.95)
+
+
+def test_the_derivation_tilts_toward_the_source_with_measured_headroom(tmp_path):
+    """`exp(excess/T)` on the measured gap to each specialist, then the floors.
+    Code has 0.30 bits/byte of headroom here and educational web none, so the
+    derived mixture has to move mass the first way and not the second."""
+    _score_reference(tmp_path)
+    record = derive(sources=BOX_SOURCES, tag="probe",
+                    out_dir=str(tmp_path / "scorecards"))
+
+    blueprint = baseline_arm(BOX_SOURCES).weights
+    weights = record["weights"]
+    assert sum(weights.values()) == pytest.approx(1.0, abs=1e-6)
+    assert weights["stack-edu-python"] > blueprint["stack-edu-python"]
+    assert weights["fineweb-edu"] < blueprint["fineweb-edu"]
+    assert record["excess_loss"]["stack-edu-python"] == pytest.approx(0.30)
+    assert record["excess_loss"]["fineweb-edu"] == pytest.approx(0.0)
+    # The cap is what stops one wild specialist writing the mixture.
+    assert record["excess_scores"]["stack-edu-python"] == pytest.approx(
+        EXCESS_RATIO_CAP)
+
+    # The floors are the plan's, and `math` has no source on this box -- a
+    # record claiming three floors held when one had nothing to hold would be
+    # describing a corpus nobody measured.
+    assert record["rule"]["unrepresented_floored_domains"] == ["math"]
+    assert set(record["rule"]["floors"]) == {"web-raw", "code"}
+    assert record["rule"]["temperature"] == EXCESS_TEMPERATURE
+
+    # Recomputable from the artifact rather than trusted: every BPB it used
+    # comes with the scorecard and the checkpoint bytes it was read from.
+    assert record["baseline"]["bpb"] == pytest.approx(BASELINE_BPB)
+    for source in BOX_SOURCES:
+        entry = record["specialists"][source]
+        assert entry["bpb"] == pytest.approx(SPECIALIST_BPB[source])
+        assert Path(entry["scorecard"]).exists()
+        assert len(entry["checkpoint_sha256"]) == 64
+    assert derive_weights(blueprint, record["excess_loss"]) == pytest.approx(
+        weights, abs=1e-6)
+
+
+def test_deriving_before_every_specialist_is_scored_is_refused(tmp_path):
+    """A source without a specialist has no measured excess, and scoring it at
+    1.0 would produce a mixture that is partly derived and partly inherited
+    while describing itself as derived."""
+    holdout = str(_holdout_root(tmp_path))
+    arms = {arm.name: arm for arm in reference_arms(BOX_SOURCES)}
+    _trained(arms["baseline"], tmp_path, b"baseline weights")
+    _score(arms["baseline"], tmp_path, BASELINE_BPB, holdout_root=holdout)
+
+    with pytest.raises(SystemExit, match="only-dclm-baseline"):
+        derive(sources=BOX_SOURCES, tag="probe",
+               out_dir=str(tmp_path / "scorecards"))
+
+
+def test_a_sampled_scorecard_cannot_feed_the_derivation(tmp_path):
+    """A bounded sample and a full pass are different measurements, and excess
+    loss subtracts one from the other."""
+    from daedalus.scorecard import ArtifactRef
+    from scripts.bpb_eval import run_bpb_eval
+
+    arms = _score_reference(tmp_path)
+    run_bpb_eval(
+        name=scorecard_name(arms["baseline"], "probe"),
+        holdout_root=str(_holdout_root(tmp_path)),
+        out_dir=str(tmp_path / "scorecards"),
+        artifact=ArtifactRef(path="c", sha256="a" * 64, kind="checkpoint",
+                             config=PROBE.config),
+        tokenizer_ref=ArtifactRef(path="<smollm2-default>", sha256="0" * 64,
+                                  kind="tokenizer"),
+        seed=1, git_sha="deadbee", bpb_fn=lambda d: BASELINE_BPB[Path(d).name],
+        max_batches=4, weights=evaluation_weights(BOX_SOURCES))
+
+    with pytest.raises(SystemExit, match="bpb_mode 'sample'"):
+        derive(sources=BOX_SOURCES, tag="probe",
+               out_dir=str(tmp_path / "scorecards"))
+
+
+def test_scorecards_measured_against_different_holdouts_are_not_subtracted(
+        tmp_path):
+    """Two BPBs over different corpora are not each other's units; subtracting
+    them derives a mixture from an arithmetic error, and every field in the
+    artifact would still look right."""
+    arms = _score_reference(tmp_path)
+    elsewhere = _holdout_root(tmp_path / "other", tokens=600)
+    specialist = arms["only-fineweb-edu"]
+    _trained(specialist, tmp_path, b"fineweb-edu weights, rescored")
+    _score(specialist, tmp_path, {"fineweb-edu": 0.98},
+           holdout_root=str(elsewhere))
+
+    with pytest.raises(SystemExit, match="not measured against one holdout"):
+        derive(sources=BOX_SOURCES, tag="probe",
+               out_dir=str(tmp_path / "scorecards"))

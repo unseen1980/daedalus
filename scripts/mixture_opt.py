@@ -31,11 +31,13 @@ asks the same resolver the loader uses, before the GPU is touched.
 
 **In-run `val_bpb` is not the comparison.** `train.py` weights the holdout by the
 mixture each run samples, so the six arms' `val_bpb` columns are six models
-scored on six different corpora. The comparison is `scripts/bpb_eval.py` under
-`mixture_opt.evaluation_weights`, which is the same weighting for every arm.
-`val_bpb` stays on as the divergence signal it is.
+scored on six different corpora. The comparison is `score` below, which drives
+`scripts/bpb_eval.py` under `mixture_opt.evaluation_weights` -- the same
+weighting for every arm, over every held-out window, from the final checkpoint
+rather than from a bounded sample taken mid-decay. `val_bpb` stays on as the
+divergence signal it is.
 
-Subcommands: `arms`, `shape`, `run`, `sweep`.
+Subcommands: `arms`, `shape`, `run`, `sweep`, `score`, `derive`.
 """
 
 from __future__ import annotations
@@ -45,8 +47,9 @@ import json
 import os
 import sys
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -481,6 +484,389 @@ def sweep(*, data_dir: str, stage: str, tag: str, run_root: str = RUN_ROOT,
     return {**header, "arms": results}
 
 
+# =================================================================== scoring ===
+# The arms are trained; this is the measurement the selection rule reads. Two
+# things make it a different pass from `train.py`'s own `val_bpb` rather than a
+# re-run of it, and both are stated in the module docstring: the in-run number
+# weights the holdout by each arm's *own* mixture, and it is a bounded sample
+# taken mid-decay. The comparison has to be one weighting for every arm, over
+# every held-out window, from the final checkpoint.
+
+#: Where the per-arm scorecards land: beside the sweep artifact, never inside a
+#: run directory. A scorecard next to a checkpoint is a scorecard that can be
+#: mistaken for one, and phase 6 put its own in the same place for the same
+#: reason.
+SCORECARD_ROOT = f"{REPORT_ROOT}/scorecards"
+
+#: Scored at the context the arms trained at. A held-out BPB measured at a
+#: longer context than the run ever saw is a measurement of extrapolation.
+SCORE_SEQ_LEN = PROBE.seq_len
+
+#: Windows per forward pass. Only affects wall-clock: BPB is an average over
+#: whole non-overlapping windows, so the number is batch-size invariant.
+SCORE_BATCH_SIZE = 8
+
+#: The program's seed, carried into every scorecard's provenance.
+SCORE_SEED = 20260824
+
+
+def scorecard_name(arm: MixtureArm, tag: str) -> str:
+    return f"mix-{tag}-{arm.name}-bpb"
+
+
+def scorecard_path(arm: MixtureArm, *, tag: str,
+                   out_dir: str = SCORECARD_ROOT) -> Path:
+    return Path(out_dir) / f"{scorecard_name(arm, tag)}.json"
+
+
+def sole_source(arm: MixtureArm) -> Optional[str]:
+    """The single source an arm puts all its mass on, if it is one-hot.
+
+    Asked of the weights rather than of the name. `specialist_name` builds
+    `only-<source>`, and reading the role back out of a string would make an arm
+    whose name matched that pattern -- or one whose weights were redefined while
+    its name stayed -- score as something it is not.
+    """
+    carrying = [name for name, value in arm.weights.items() if value > 0.0]
+    return carrying[0] if len(carrying) == 1 else None
+
+
+def scoring_sources(arm: MixtureArm, sources: Sequence[str]) -> List[str]:
+    """Which holdout sources this arm's *role* requires be measured.
+
+    A specialist is read by exactly one number: `bpb_specialist_s(s)`, the
+    achievable bound in `excess_loss`. Scoring it on the other two sources would
+    answer what a one-source model loses elsewhere -- a real question, and not
+    one this phase asks -- at three times the GPU hours per specialist.
+
+    Every other arm is scored on every source, because both halves of the
+    selection rule need that: the aggregate is a fixed-weight average over the
+    whole corpus, and the per-source regression check compares a candidate to
+    the baseline source by source.
+    """
+    only = sole_source(arm)
+    return [only] if only is not None else list(dict.fromkeys(sources))
+
+
+def already_scored(path, checkpoint_sha: str) -> bool:
+    """True when `path` already scores exactly these checkpoint bytes.
+
+    Keyed on the digest rather than on the file existing, so `--refresh` on a
+    retrained arm cannot leave the old arm's number in place: the scorecard is
+    reused only when the thing it scored is the thing that is there now.
+    """
+    from daedalus.scorecard import ScorecardError, load_scorecard
+
+    path = Path(path)
+    if not path.exists():
+        return False
+    try:
+        card = load_scorecard(path)
+    except (ScorecardError, KeyError, ValueError, OSError):
+        return False
+    return card.provenance.artifact.sha256 == checkpoint_sha
+
+
+def make_checkpoint_bpb_fn(checkpoint, *, config: str, device: str,
+                           seq_len: int, batch_size: int):
+    """Load one arm's final weights and return its per-source BPB callable.
+
+    Imported inside, like phase 6's equivalent, so the selection logic and its
+    tests never need torch to exercise the rules that decide the phase.
+    """
+    from daedalus.config import PRESETS
+    from daedalus.data import get_tokenizer
+    from daedalus.model import Daedalus
+    from eval import evaluate_bpb
+    from train import load_checkpoint
+
+    # The shipped tokenizer, which is what packed these shards. Phase 4 varies
+    # the vocabulary; phase 7 holds it and varies the data, so passing anything
+    # else here would decode the held-out ids into the wrong bytes and report a
+    # BPB for a corpus that does not exist.
+    tokenizer = get_tokenizer(None)
+    model = Daedalus(PRESETS[config]).to(device)
+    load_checkpoint(str(checkpoint), model, map_location=device)
+    model.eval()
+
+    def bpb_fn(source_dir: Path) -> float:
+        # max_batches=None: the full pass the selection rule requires.
+        return evaluate_bpb(model, str(source_dir), seq_len, tokenizer, device,
+                            batch_size=batch_size, max_batches=None)
+
+    return bpb_fn
+
+
+def _release(device: str) -> None:
+    """Drop the previous arm's weights before the next model lands.
+
+    Six arms scored in one process is six models plus six sets of activations
+    unless each is released.
+    """
+    import gc
+
+    gc.collect()
+    if not device.startswith("cuda"):
+        return
+    try:
+        import torch
+
+        torch.cuda.empty_cache()
+    except Exception:                                     # pragma: no cover
+        pass
+
+
+def score_arm(arm: MixtureArm, *, holdout_root: str, sources: Sequence[str],
+              tag: str, run_root: str = RUN_ROOT,
+              out_dir: str = SCORECARD_ROOT, shape: ProbeShape = PROBE,
+              device: str = "cuda", seq_len: int = SCORE_SEQ_LEN,
+              batch_size: int = SCORE_BATCH_SIZE, seed: int = SCORE_SEED,
+              refresh: bool = False,
+              bpb_factory=make_checkpoint_bpb_fn) -> dict:
+    """Full-pass held-out BPB for one finished arm, written as a scorecard.
+
+    The aggregate is computed under `evaluation_weights`, the same weighting for
+    every arm scored over the whole corpus -- that is the entire reason this pass
+    exists rather than reading `val_bpb` out of the training logs.
+    """
+    from daedalus.scorecard import ArtifactRef, sha256_file
+    from scripts.bpb_eval import _git_short_sha, run_bpb_eval
+
+    checkpoint = arm_checkpoint_path(arm, tag, run_root)
+    if not checkpoint.exists():
+        raise SystemExit(
+            f"arm {arm.name!r} has no checkpoint at {checkpoint}: it either "
+            f"never ran under --tag {tag!r} or its run directory moved. Run the "
+            f"sweep before scoring it; there is no partial score worth having.")
+    digest = sha256_file(checkpoint)
+    path = scorecard_path(arm, tag=tag, out_dir=out_dir)
+    wanted = scoring_sources(arm, sources)
+    if not refresh and already_scored(path, digest):
+        # Recorded rather than omitted: a pass that drops a skipped arm and one
+        # that never scored it look identical to a reader.
+        return {"arm": arm.name, "scorecard": str(path),
+                "skipped": "already-scored", "checkpoint_sha256": digest,
+                "sources": wanted}
+
+    # Only an arm measured over the whole corpus gets the fixed weighting; a
+    # specialist scored on its own source alone has no aggregate to weight, and
+    # `summarize_bpb` refuses weights naming sources its records do not carry.
+    whole_corpus = len(wanted) == len(list(dict.fromkeys(sources)))
+    weights = evaluation_weights(sources) if whole_corpus else None
+
+    bpb_fn = bpb_factory(checkpoint, config=shape.config, device=device,
+                         seq_len=seq_len, batch_size=batch_size)
+    try:
+        written = run_bpb_eval(
+            name=scorecard_name(arm, tag), holdout_root=holdout_root,
+            out_dir=out_dir,
+            artifact=ArtifactRef(path=str(checkpoint), sha256=digest,
+                                 kind="checkpoint", config=shape.config),
+            tokenizer_ref=ArtifactRef(path="<smollm2-default>", sha256="0" * 64,
+                                      kind="tokenizer"),
+            seed=seed, git_sha=_git_short_sha(), bpb_fn=bpb_fn,
+            max_batches=None, weights=weights, sources=wanted,
+            runtime={"device": device, "seq_len": seq_len,
+                     "batch_size": batch_size},
+            details_extra={"phase": "phase7-mixture", "arm": arm.name,
+                           "tag": tag, "shape": shape.name,
+                           "run": arm_run_name(arm, tag),
+                           "basis": arm.basis,
+                           "is_baseline": arm.is_baseline,
+                           "train_weights": {name: round(value, 6) for name, value
+                                             in sorted(arm.weights.items())},
+                           "scored_role": "specialist" if not whole_corpus
+                           else "mixture"})
+    finally:
+        del bpb_fn
+        _release(device)
+    return {"arm": arm.name, "scorecard": str(written["scorecard"]),
+            "checkpoint_sha256": digest, "sources": wanted}
+
+
+def score_arms(arms: Sequence[MixtureArm], **kwargs) -> dict:
+    """Score every arm, baseline first, leaving each scorecard as it lands.
+
+    Re-entrant for the reason the sweep is: this is a GPU pass over several
+    finished checkpoints, and a session that ends mid-pass must cost only the
+    arm it was on.
+    """
+    return {"scored": [score_arm(arm, **kwargs) for arm in arms]}
+
+
+# ================================================================ derivation ===
+
+def full_pass_bpb(card) -> Dict[str, float]:
+    """`{source: bpb}` from a scorecard, refusing anything that is not a full
+    pass.
+
+    A bounded sample and a full pass are different measurements, and this one
+    feeds a preregistered rule. Read from the items rather than from
+    `metrics["bpb"]`, which is an aggregate under whatever weighting the card
+    happened to carry.
+    """
+    from daedalus.scorecard import ScorecardError
+
+    if card.provenance.bpb_mode != "full":
+        raise SystemExit(
+            f"scorecard {card.name!r} was measured in bpb_mode "
+            f"{card.provenance.bpb_mode!r}; excess loss is a difference of two "
+            f"held-out BPBs and a sampled one cannot be subtracted from a full "
+            f"pass. Re-score it with --max-batches -1.")
+    values = {}
+    for item in card.items or ():
+        try:
+            values[str(item["id"])] = float(item["bpb"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ScorecardError(
+                f"scorecard {card.name!r} has an item without a readable "
+                f"bpb: {item!r}") from exc
+    if not values:
+        raise SystemExit(
+            f"scorecard {card.name!r} carries no per-source items; the "
+            f"derivation reads per-source BPB, not an aggregate")
+    return values
+
+
+def _scored_card(arm: MixtureArm, *, tag: str, out_dir: str) -> tuple:
+    """One arm's scorecard and its per-source BPB, or a refusal naming it."""
+    from daedalus.scorecard import load_scorecard
+
+    path = scorecard_path(arm, tag=tag, out_dir=out_dir)
+    if not path.exists():
+        raise SystemExit(
+            f"arm {arm.name!r} has no scorecard at {path}. Excess loss is "
+            f"defined against a specialist, so a source whose specialist has "
+            f"not been scored has no measured excess and the derived mixture "
+            f"cannot be built. Run `score --stage reference` first.")
+    return path, load_scorecard(path)
+
+
+def _holdout_key(card) -> Optional[str]:
+    """A card's holdout root, as a path two cards can be compared on.
+
+    Absolute and normalized, because `data/holdout` and
+    `/workspace/daedalus/data/holdout` are the same corpus and refusing to
+    subtract them would be a false alarm about a directory string.
+    """
+    root = (card.details or {}).get("holdout_root")
+    return os.path.normpath(os.path.abspath(str(root))) if root else None
+
+
+def _comparable(cards: Dict[str, object]) -> dict:
+    """The holdout and context every card shares, or a refusal.
+
+    Excess loss subtracts one arm's BPB from another's. Two numbers measured
+    over different holdout roots, or at different context lengths, are not each
+    other's units -- subtracting them produces a mixture derived from an
+    arithmetic error, and every field in the artifact would still look right.
+    """
+    seen = {name: (_holdout_key(card), (card.provenance.runtime or {}).get("seq_len"))
+            for name, card in cards.items()}
+    distinct = sorted(set(seen.values()), key=lambda pair: (str(pair[0]), str(pair[1])))
+    if len(distinct) > 1:
+        raise SystemExit(
+            f"the scorecards were not measured against one holdout: {seen}. "
+            f"Excess loss is a difference of two BPBs, so they must share a "
+            f"holdout root and a context length; re-score the odd ones out.")
+    holdout_root, seq_len = distinct[0]
+    return {"holdout_root": holdout_root, "seq_len": seq_len}
+
+
+def derived_path(tag: str, root: str = REPORT_ROOT) -> Path:
+    """Where `derive` writes, and where the candidates sweep reads its weights.
+
+    Scoped by tag, like phase 6's stage reports: two stages sharing one filename
+    is how a rerun quietly overwrites the evidence another stage was launched
+    from.
+    """
+    return Path(root) / f"mixture-derived-{tag}.json"
+
+
+def derive(*, sources: Sequence[str], tag: str,
+           out_dir: str = SCORECARD_ROOT) -> dict:
+    """The derived mixture, from the reference stage's scored arms.
+
+    Every number in the rule -- the temperature, the ratio cap, the floors --
+    is `daedalus/mixture_opt.py`'s, committed before the first arm was trained.
+    This reads the measurements, applies them, and records what it read, so the
+    derived weights can be recomputed from the artifact rather than trusted.
+    """
+    from daedalus.mixture_opt import (EXCESS_RATIO_CAP, EXCESS_TEMPERATURE,
+                                      baseline_arm, derive_weights,
+                                      domain_floors, domain_shares,
+                                      excess_loss, excess_scores)
+
+    sources = list(dict.fromkeys(sources))
+    baseline = baseline_arm(sources)
+    baseline_path, baseline_card = _scored_card(baseline, tag=tag, out_dir=out_dir)
+    baseline_bpb = full_pass_bpb(baseline_card)
+    missing = sorted(set(sources) - set(baseline_bpb))
+    if missing:
+        raise SystemExit(
+            f"the baseline scorecard {baseline_path} scored "
+            f"{sorted(baseline_bpb)} and not {missing}. Excess loss is measured "
+            f"per source against the baseline, so a source the baseline was not "
+            f"scored on cannot be tilted.")
+
+    cards = {baseline.name: baseline_card}
+    specialists: Dict[str, float] = {}
+    provenance: Dict[str, dict] = {}
+    for source in sources:
+        arm = next(candidate for candidate in reference_arms(sources)
+                   if sole_source(candidate) == source)
+        path, card = _scored_card(arm, tag=tag, out_dir=out_dir)
+        values = full_pass_bpb(card)
+        if source not in values:
+            raise SystemExit(
+                f"the specialist scorecard {path} scored {sorted(values)}, "
+                f"which does not include {source!r} -- the one source it is "
+                f"read for. Re-score arm {arm.name!r}.")
+        cards[arm.name] = card
+        specialists[source] = values[source]
+        provenance[source] = {
+            "arm": arm.name, "scorecard": str(path),
+            "checkpoint_sha256": card.provenance.artifact.sha256,
+            "bpb": values[source]}
+
+    measured_on = _comparable(cards)
+    excess = excess_loss({name: baseline_bpb[name] for name in sources},
+                         specialists)
+    floors = domain_floors(baseline.weights)
+    weights = derive_weights(baseline.weights, excess, floors=floors)
+    return {
+        "phase": "phase7-mixture",
+        "stage": "candidates",
+        "tag": tag,
+        "created_at": datetime.now(timezone.utc).isoformat()
+                              .replace("+00:00", "Z"),
+        "weights": {name: round(value, 6) for name, value in sorted(weights.items())},
+        "domain_shares": {domain: round(value, 6) for domain, value
+                          in sorted(domain_shares(weights).items())},
+        "rule": {
+            "excess": "bpb_baseline(s) - bpb_specialist_s(s), on the same "
+                      "full-pass holdout",
+            "temperature": EXCESS_TEMPERATURE,
+            "ratio_cap": EXCESS_RATIO_CAP,
+            "floors": {domain: round(value, 6)
+                       for domain, value in sorted(floors.items())},
+            "unrepresented_floored_domains":
+                unrepresented_floored_domains(sources),
+        },
+        "measured_on": measured_on,
+        "baseline": {
+            "arm": baseline.name, "scorecard": str(baseline_path),
+            "checkpoint_sha256": baseline_card.provenance.artifact.sha256,
+            "weights": {name: round(value, 6)
+                        for name, value in sorted(baseline.weights.items())},
+            "bpb": {name: baseline_bpb[name] for name in sources},
+        },
+        "specialists": provenance,
+        "excess_loss": excess,
+        "excess_scores": excess_scores(excess),
+    }
+
+
 # ====================================================================== cli ====
 
 def _read_derived(path: Optional[str]) -> Optional[dict]:
@@ -532,6 +918,33 @@ def main(argv=None) -> int:
 
     sub.add_parser("shape")
 
+    for name in ("score", "derive"):
+        cmd = sub.add_parser(name)
+        cmd.add_argument("--data-dir", required=True,
+                         help="the mixture root the arms trained over; the "
+                              "sources it holds are the sources the arms name")
+        cmd.add_argument("--scorecard-root", default=SCORECARD_ROOT)
+        if name == "derive":
+            cmd.add_argument("--out", default=None,
+                             help=f"default {derived_path('<tag>')}")
+            continue
+        cmd.add_argument("--val-dir", required=True,
+                         help="the holdout root, one manifest-backed "
+                              "subdirectory per source")
+        cmd.add_argument("--stage", default="reference", choices=list(STAGES))
+        cmd.add_argument("--derived-weights", default=None,
+                         help="JSON file of derived shares, for scoring the "
+                              "candidates stage")
+        cmd.add_argument("--arm", default=None,
+                         help="score this arm only; without it every arm of "
+                              "the stage that has a checkpoint is scored")
+        cmd.add_argument("--device", default="cuda")
+        cmd.add_argument("--seq-len", type=int, default=SCORE_SEQ_LEN)
+        cmd.add_argument("--batch-size", type=int, default=SCORE_BATCH_SIZE)
+        cmd.add_argument("--refresh", action="store_true",
+                         help="re-score arms whose scorecard already matches "
+                              "their checkpoint bytes")
+
     args = parser.parse_args(argv)
     shape = SHAPES[args.shape]
 
@@ -541,7 +954,9 @@ def main(argv=None) -> int:
                          sort_keys=True))
         return 0
 
-    derived = _read_derived(args.derived_weights)
+    # `derive` is the command that *produces* the derived weights, so it is the
+    # one subcommand with no `--derived-weights` to read.
+    derived = _read_derived(getattr(args, "derived_weights", None))
     sources = discover_sources(args.data_dir)
 
     if args.command == "arms":
@@ -558,6 +973,34 @@ def main(argv=None) -> int:
                          shape=shape, val_dir=args.val_dir,
                          total_tokens=args.total_tokens, refresh=args.refresh)
         print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "score":
+        arms = stage_arms(args.stage, sources, derived)
+        if args.arm is not None:
+            by_name = {arm.name: arm for arm in arms}
+            if args.arm not in by_name:
+                raise SystemExit(
+                    f"unknown arm {args.arm!r}; known: {sorted(by_name)}")
+            arms = [by_name[args.arm]]
+        report = score_arms(
+            arms, holdout_root=args.val_dir, sources=sources, tag=args.tag,
+            run_root=args.run_root, out_dir=args.scorecard_root, shape=shape,
+            device=args.device, seq_len=args.seq_len,
+            batch_size=args.batch_size, refresh=args.refresh)
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "derive":
+        record = derive(sources=sources, tag=args.tag,
+                        out_dir=args.scorecard_root)
+        out = Path(args.out) if args.out else derived_path(
+            args.tag, args.report_root)
+        _write_json(out, record)
+        print(json.dumps({"weights": record["weights"],
+                          "excess_loss": record["excess_loss"],
+                          "excess_scores": record["excess_scores"],
+                          "wrote": str(out)}, indent=2, sort_keys=True))
         return 0
 
     if args.command == "sweep":
