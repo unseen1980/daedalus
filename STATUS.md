@@ -2,19 +2,19 @@
 
 > **Action required.** lane directive: phase8-mixture-retarget-URGENT blocked
 
-- Heartbeat: `2026-08-26T20:27:46.840975Z`
+- Heartbeat: `2026-08-26T20:32:48.218921Z`
 - Phase: `phase8-code-corpus-build`
-- Status: `failed`
-- Source: `vast/daedalus-code-20260824` at `67b154456338`
-- Elapsed: `57.72h` of `144.0h`
-- Finalization window opens in: `78.28h`
+- Status: `running`
+- Source: `vast/daedalus-code-20260824` at `5d9b353d3f82`
+- Elapsed: `57.8h` of `144.0h`
+- Finalization window opens in: `78.2h`
 - Deadline stage: `active`
 
 ## Lanes
 
 - `directive`: `phase8-mixture-retarget-URGENT` (blocked)
 - `evidence`: `phase6-stageb-decode` (passed)
-- `inspect`: `phase8-build-liveness` (passed)
+- `inspect`: `phase8-retarget-dryrun` (passed)
 - `operator`: `phase8-branch-prerequisite` (passed)
 - `retrieval`: `phase6-stagea-retrieval-remeasure` (passed)
 - `selfcheck`: `phase6-lane-selfcheck` (passed)

@@ -4,10 +4,10 @@
     "user_action_required": true
   },
   "deadline": {
-    "elapsed_hours": 57.72,
-    "finalization_in_hours": 78.28,
+    "elapsed_hours": 57.8,
+    "finalization_in_hours": 78.2,
     "hard_hours": 144.0,
-    "remaining_hours": 86.28,
+    "remaining_hours": 86.2,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-26T20:27:46.840975Z",
+  "heartbeat_at": "2026-08-26T20:32:48.218921Z",
   "lanes": {
     "directive": {
       "details": {
@@ -61,16 +61,20 @@
         "attempts": 1,
         "command": [
           "python",
-          "-c",
-          "\nimport os, json, time\nfound = []\nfor pid in os.listdir('/proc'):\n    if not pid.isdigit():\n        continue\n    try:\n        cmd = open('/proc/%s/cmdline' % pid).read().replace(chr(0), ' ')\n    except OSError:\n        continue\n    if 'codeprep' in cmd or 'vast_program' in cmd:\n        found.append((pid, cmd[:100]))\nprint('matching processes:', found)\nlog = 'runs/codeprep/corpus-build.log'\nprint('log mtime:', time.strftime('%H:%M:%S', time.gmtime(os.path.getmtime(log))), 'size', os.path.getsize(log))\nprint('now       :', time.strftime('%H:%M:%S', time.gmtime()))\ns = json.load(open('runs/vast-program/state.json'))\nprint('state:', s['phase'], s['status'], s['updated_at'])\nprint('lease:', os.path.exists('runs/vast-program/controller.lock'))\n"
+          "scripts/codeprep.py",
+          "corpus",
+          "build",
+          "--total-tokens",
+          "1000000000",
+          "--dry-run"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-build-liveness",
+      "phase": "phase8-retarget-dryrun",
       "status": "passed",
-      "updated_at": "2026-08-26T20:24:17.737888Z"
+      "updated_at": "2026-08-26T20:29:10.389284Z"
     },
     "operator": {
       "details": {
@@ -129,9 +133,9 @@
   "phase": "phase8-code-corpus-build",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "67b154456338",
+  "source_sha": "5d9b353d3f82",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
-  "status": "failed",
-  "updated_at": "2026-08-26T20:24:17.737888Z"
+  "status": "running",
+  "updated_at": "2026-08-26T20:29:36.348434Z"
 }
