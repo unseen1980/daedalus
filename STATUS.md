@@ -1,11 +1,11 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-26T16:54:51.762438Z`
-- Phase: `phase8-prep-per-source-bpb-live`
+- Heartbeat: `2026-08-26T16:56:09.505526Z`
+- Phase: `phase8-branch-and-stacked-pr`
 - Status: `passed`
-- Source: `vast/daedalus-improvements-20260824` at `8aa5cb482cdd`
-- Elapsed: `54.17h` of `144.0h`
-- Finalization window opens in: `81.83h`
+- Source: `vast/daedalus-code-20260824` at `ceb9d6f6b916`
+- Elapsed: `54.19h` of `144.0h`
+- Finalization window opens in: `81.81h`
 - Deadline stage: `active`
 
 ## Lanes
