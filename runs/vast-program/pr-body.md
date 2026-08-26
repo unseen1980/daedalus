@@ -193,6 +193,28 @@ The four reference arms (baseline plus one specialist per source) trained at pha
 
 `report` is the last step of the chain and the one that states the answer: it reads the candidate stage's scorecards, hands them to the committed `select_mixture`, and writes the verdict beside a rendered page. Every aggregate is **recomputed here** under the fixed evaluation weighting rather than read off each card, so "one weighting for every arm" is true by construction and each card's own `bpb` becomes a free check on it. Four refusals guard the inputs, because each is a way the decision would be made from numbers that are not what they are labelled: a card that measured only part of the corpus (the aggregate is an average over the corpus and the regression check compares source by source — neither is defined on a subset); a card whose checkpoint trained on a *different mixture* than the arm now bearing its name, which `derive` being legitimately re-runnable makes reachable while the run directory, scorecard name and tag all still match; a card whose recorded aggregate disagrees with the recomputed one, which is what an equal-weighted card looks like; and a verdict built with no derived arm at all, which `candidate_arms` would otherwise render as a two-arm comparison describing itself as the comparison of three. Refused arms are rendered in the page rather than dropped — whether an arm was excluded by a floor, by a per-source cliff, or simply by losing is the most informative line in the artifact.
 
+## Phase 7 — The acceptance list, decided from the corpus rather than asserted
+
+`scripts/corpus_gate.py` reads phase 7's five acceptance claims off the files that decide them — the frozen n-gram index, the scan artifact, ten `manifest.json`s — and exits non-zero on a refusal, so a controller gates on it without parsing prose. Same discipline as the phase 2 gate, for the same reason: the phases downstream spend real budget on "the corpus is clean".
+
+**The trap it is built around.** `l1_skew_pts` sees one of `cap_weights_by_epochs`'s two failure modes. When the epoch cap binds it reweights and the skew rises — visible. When *no* allocation satisfies the cap, the target shares come back unchanged and the skew is **0.00 by construction**, its best possible value, at the one budget where repetition is bounded by nothing at all. So the skew criterion carries the fallback guard with it, using `train.py`'s own discriminator: after a successful cap no source exceeds the limit, so `max_epochs_seen > max_epochs` is true precisely in the unbounded case. It is tested against a corpus whose skew is a perfect 0.0, and `runs/corpus/phase7-gate-as-built.json` is the guard firing on real data at 2,968 epochs.
+
+**Supply is the built source, not the shards fetched here.** A shard directory on this box is a fetch and its manifest records what from in `subset_of`; counting the local files understates supply by 10×–30×, which made the first run of this gate report `fineweb-edu` at 46.9 epochs where the corpus gives 4.0. `--local-supply` asks the other question deliberately. The cap and the summary are `train.py`'s own, not a second implementation, so the gate cannot pass a corpus the trainer would refuse.
+
+| criterion | at 59.9B | what decided it |
+| --- | --- | --- |
+| `decontam-index-complete` | **PASS** | 1,371,773 n-grams, five scored tasks at their scored splits, no per-task limit |
+| `corpus-contamination` | **FAIL** | 1 `split_gap` doc, 1 `limit_gap` doc, and 157,921,561 `fineweb-edu` tokens the scan never read |
+| `epoch-cap` | **PASS** | worst source 4.000 epochs, 7 of 10 pinned |
+| `mixture-skew` | **FAIL** | 11.4593 pts against a 5-pt bound |
+| `manifest-provenance` | **FAIL** | 10 of 10 manifests pin nothing |
+
+`docs_filtered` is **0** — the negative control — so `dataprep` removed everything it indexed; the two hits are the split gap and the limit gap this phase's frozen index already closes, and they clear on the rebuild rather than through more indexing. The provenance failure is the hole `source_provenance` was added to close and cannot be fixed retroactively on manifests that predate it.
+
+Two findings are new. A scan artifact names no shard tree, so the contamination criterion now checks `per_source[].source_tokens` against what each source holds: nine of ten match exactly and `fineweb-edu` does not, leaving **3.0% of the largest source covered by a clean verdict that never read it**. And the skew is a measurement rather than a known gap — below ~55B the entire 3.99 pts is `everyday-conversations`, so dropping it at 30B gives a skew of **exactly 0.0000** with the worst source at 2.275 epochs, which is the plan's step 4 measured rather than argued; the same removal at 59.9B buys 0.84 of the 6.46 pts it needs, because the freed 2% renormalizes onto sources already at the cap. Past ~55B the constraint is supply, agreeing with the headroom curve's 53.8B ceiling.
+
+This is an independent measurement of the phenomenon `daedalus/data.py::select_holdout_shards` records at 10.21 pts post-carve at 60B. The 11.4593 here is pre-carve; they are not the same number and should not be quoted as one.
+
 ## Control plane
 
 `daedalus/program_state.py` holds an atomic snapshot beside an append-only timeline; `scripts/vast_program.py` owns phases, one-process leases, and deadline gates; `scripts/boot_resume.py` resumes only an approved incomplete marker; `scripts/github_progress.py` publishes a sanitized heartbeat from an isolated worktree; `ops/vast/run-approved` is the only shell, Git, PR, and evaluation surface an engineering session may use, and it refuses default-branch pushes, PR merges, secret paths, and arbitrary shell fragments.
