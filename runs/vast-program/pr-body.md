@@ -263,6 +263,29 @@ Extraction now goes through the parser whenever the completion parses; values ar
 
 **Measured.** `runs/eval/code-base-oracle/`: MBPP+ **pass@1 1.0000, pass@1_plus 1.0000, syntax_valid 1.0000 on 378 of 378**, from 0.9894 / 0.9841 / 0.9974 before the fixes and from *not running at all* before that; HumanEval+ 1.0000 on 164 of 164. The oracle is now the standing check on this harness: a value whose `repr` does not round-trip, or a dataset shape it cannot read, fails the references rather than a model.
 
+## Phase 8 groundwork: the trainer measured code and general BPB separately, then logged their sum
+
+`evaluate_bpb_mixture` does a full held-out pass **per source** and returns both the per-source figures and the blend of them. `Trainer._val_bpb` took `["val_bpb"]` and dropped the rest — at every eval interval, for the whole of every run on this branch. Nothing was saved by discarding it: the per-source passes are where the cost is, and they ran either way. The numbers were computed and thrown away.
+
+It starts mattering at phase 8. A continued-pretraining arm is gated on code BPB and general replay BPB read **independently** — improve one while holding the other — and the blend is precisely the number that cannot answer that: a code gain and a replay regression move it in opposite directions and it reports their sum. `metrics.jsonl` now carries `val_bpb_per_source` beside `val_bpb`, so an arm already past the 1.5% replay bound says so at its first interval rather than after 1B tokens and $4 of GPU.
+
+`scripts/bpb_eval.py` remains the gate's instrument — it scores an immutable checkpoint out of band, which is the right thing to decide a gate on. This is the during-run signal, and it is free.
+
+**Measured on the real corpus, not on a fixture.** One step at the released 49,152 vocabulary against the three-source holdout, in the same shape phase 7's mixture probes used:
+
+| source | val BPB |
+| --- | ---: |
+| `fineweb-edu` | 3.5403 |
+| `dclm-baseline` | 3.6914 |
+| `stack-edu-python` | **4.9279** |
+| blend (`val_bpb`) | 3.7916 |
+
+The blend reproduces from the parts under the sampler's own weights — 3.540292·0.688114 + 3.691384·0.146739 + 4.927904·0.165147 = 3.79162 — so the two numbers describe one measurement rather than two passes. The model is untrained here (loss 11.22 against ln(49152) = 10.80), so these are not quality figures; what they show is that code sits ~1.4 bits/byte above general web from step one, which is exactly the separation the blend hides.
+
+`_val_bpb` → `_validate`, returning the result rather than one key of it: a method named for the aggregate that also carries the parts goes stale the first time a third field is added. BPB only in the record — the per-source token counts and sampling weights are constant for a run and already on the W&B config as `data_mixture`, so writing them every interval would repeat a constant a few thousand times down `metrics.jsonl` and through every heartbeat that renders the latest record. Absent rather than empty for a single-directory `--val-dir`, because one source is not a mixture of one and an empty block reads as a mixture whose sources all failed to score. Both cases are tests.
+
+`train.py` is a shared file, so this is on the optimization branch by the plan's own rule for shared work, and it forward-merges into the code branch.
+
 ## Control plane
 
 `daedalus/program_state.py` holds an atomic snapshot beside an append-only timeline; `scripts/vast_program.py` owns phases, one-process leases, and deadline gates; `scripts/boot_resume.py` resumes only an approved incomplete marker; `scripts/github_progress.py` publishes a sanitized heartbeat from an isolated worktree; `ops/vast/run-approved` is the only shell, Git, PR, and evaluation surface an engineering session may use, and it refuses default-branch pushes, PR merges, secret paths, and arbitrary shell fragments.
