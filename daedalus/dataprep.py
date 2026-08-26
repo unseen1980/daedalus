@@ -1117,6 +1117,8 @@ def run_dataprep(target_tokens: int = 45_000_000_000, out_root: str = "data/shar
                   hf_token: Optional[str] = None, max_docs_per_source: Optional[int] = None,
                   shard_tokens: int = 100_000_000, resume: bool = True,
                   eval_task_limit: Optional[int] = 2000, skip_decontam: bool = False,
+                  eval_index_path: Optional[str] = None,
+                  eval_index_digest: Optional[str] = None,
                   mixture: Optional[List[SourceSpec]] = None, log=print,
                   max_workers: int = 4, per_worker_mem_limit_gb: Optional[float] = 4.0,
                   rss_soft_limit_gb: Optional[float] = None, rss_check_every: int = 5_000,
@@ -1201,10 +1203,43 @@ def run_dataprep(target_tokens: int = 45_000_000_000, out_root: str = "data/shar
     _ACTIVE_MIXTURE_BY_KEY = {s.key: s for s in mixture}
 
     eval_ngram_index = None
-    if not skip_decontam:
+    decontam_index_record = None
+    if not skip_decontam and eval_index_path:
+        # The frozen path. The index is an input the run is *given*, not one it
+        # derives, so what a source was filtered against survives the run in
+        # the manifest instead of depending on what `datasets` returned and
+        # what `TASK_SPLITS` said on the day -- which is the pair of facts the
+        # released corpus cannot recover. See daedalus/eval_index.py.
+        from daedalus.eval_index import (coverage_problems, load_index,
+                                         manifest_record)
+        log(f"loading frozen eval n-gram index from {eval_index_path} ...")
+        eval_ngram_index, provenance = load_index(eval_index_path,
+                                                  expect_digest=eval_index_digest)
+        problems = coverage_problems(provenance)
+        if problems:
+            raise ValueError(
+                f"{eval_index_path} does not cover what this model is scored "
+                f"on: {'; '.join(problems)}")
+        decontam_index_record = manifest_record(provenance, path=eval_index_path)
+        log(f"eval n-gram index: {len(eval_ngram_index):,} {provenance['n']}-grams "
+            f"over {sum(decontam_index_record['items'].values()):,} items "
+            f"({decontam_index_record['digest']})")
+    elif not skip_decontam:
         log("building eval n-gram decontamination index ...")
         eval_ngram_index = _build_eval_index(limit=eval_task_limit)
         log(f"eval n-gram index: {len(eval_ngram_index):,} 13-grams")
+        # Recorded as partial whenever a limit is in force, so a manifest
+        # written this way cannot be mistaken later for one built against the
+        # complete index. `--eval-task-limit 2000` is still the default, so
+        # this is what an unchanged caller gets.
+        decontam_index_record = {
+            "digest": None, "path": None, "n": 13,
+            "ngrams": len(eval_ngram_index),
+            "complete": eval_task_limit is None,
+            "limit": eval_task_limit,
+            "built": "in-process at run start; not frozen, not reproducible "
+                     "from this manifest",
+        }
 
     os.makedirs(out_root, exist_ok=True)
     os.makedirs(os.path.dirname(manifest_path) or ".", exist_ok=True)
@@ -1221,6 +1256,7 @@ def run_dataprep(target_tokens: int = 45_000_000_000, out_root: str = "data/shar
         },
         "decontam": ("8/13-gram overlap vs HellaSwag/ARC-Easy/PIQA/OpenBookQA/WinoGrande"
                      if not skip_decontam else "skipped (skip_decontam=True)"),
+        "decontam_index": decontam_index_record,
     }
     if resume and os.path.exists(manifest_path):
         with open(manifest_path) as f:
@@ -1245,6 +1281,13 @@ def run_dataprep(target_tokens: int = 45_000_000_000, out_root: str = "data/shar
         # on 2026-08-10 into thinking the corpus build had died.
         manifest.pop("aborted_low_memory", None)
         manifest.pop("aborted_reason", None)
+        # And the same argument one field further: the resumed file records the
+        # index the *previous* run filtered against. A resume that switches to
+        # a frozen index -- which is exactly how the phase-7 rebuild continues
+        # a corpus started under the old default -- would otherwise keep
+        # advertising the old one, reproducing the 334c86c ambiguity inside a
+        # single manifest.
+        manifest["decontam_index"] = decontam_index_record
 
     # A source that hit an error (e.g. an RSS-cap trip) only got a partial
     # share of its token budget -- see STATUS.md's malloc_trim incident,
@@ -1618,7 +1661,19 @@ def _cli():
     p.add_argument("--shard-tokens", type=int, default=100_000_000)
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--skip-decontam", action="store_true")
-    p.add_argument("--eval-task-limit", type=int, default=2000)
+    p.add_argument("--eval-task-limit", type=int, default=2000,
+                   help="per-task item cap for the in-process index. Ignored "
+                        "when --eval-index is given, which is the complete, "
+                        "frozen alternative.")
+    p.add_argument("--eval-index", default=None, metavar="PATH",
+                   help="filter against the frozen decontamination index at "
+                        "PATH (scripts/decontam_index.py build) instead of "
+                        "building a limited one at run start. The index's "
+                        "digest, item counts and splits are recorded in the "
+                        "manifest, so which eval items a source was filtered "
+                        "against stays answerable after the run.")
+    p.add_argument("--eval-index-digest", default=None, metavar="SHA256",
+                   help="refuse to start unless --eval-index hashes to this")
     p.add_argument("--max-workers", type=int, default=4,
                    help="concurrent source-group processes (see module docstring's Parallelism note "
                         "and run_dataprep's RAM discipline note -- ADDENDUM 2)")
@@ -1684,6 +1739,7 @@ def _cli():
         hf_repo=args.hf_repo, hf_token=hf_token, max_docs_per_source=args.max_docs_per_source,
         shard_tokens=args.shard_tokens, resume=not args.no_resume,
         eval_task_limit=args.eval_task_limit, skip_decontam=args.skip_decontam,
+        eval_index_path=args.eval_index, eval_index_digest=args.eval_index_digest,
         max_workers=args.max_workers, per_worker_mem_limit_gb=args.per_worker_mem_limit_gb or None,
         rss_soft_limit_gb=args.rss_soft_limit_gb, rss_check_every=args.rss_check_every,
         checkpoint_every=args.checkpoint_every,

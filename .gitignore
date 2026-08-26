@@ -22,6 +22,11 @@ data/shards-*/
 *.npy
 *.memmap
 
+# The frozen decontamination index itself is tens of MB of eval n-grams; its
+# `.json` sidecar is the part worth versioning, and the digest in there makes
+# the index reproducible from `scripts/decontam_index.py build`.
+data/decontam/*.txt.gz
+
 # Local tooling / OS
 .DS_Store
 .deepeval/

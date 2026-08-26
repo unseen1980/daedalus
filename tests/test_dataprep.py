@@ -1576,6 +1576,127 @@ def test_run_dataprep_skip_decontam_avoids_eval_import(tmp_path, monkeypatch):
                             mixture=_fake_mixture(1), skip_decontam=True,
                             log=lambda *a, **k: None)
     assert manifest["decontam"] == "skipped (skip_decontam=True)"
+    assert manifest["decontam_index"] is None
+
+
+# ------------------------------------------------- the frozen decontam index ---
+
+def _frozen_index(tmp_path, texts=("alpha " * 20,), complete=True):
+    """A real written index, so these tests exercise the loader rather than a
+    stub of it -- the digest check is the thing under test."""
+    from daedalus.data import build_eval_ngram_index
+    from daedalus.eval_index import index_digest, write_index
+
+    ngrams = build_eval_ngram_index(list(texts), n=13)
+    provenance = {
+        "schema": 1, "n": 13, "limit": None if complete else 2000,
+        "complete": complete, "ngrams": len(ngrams),
+        "digest": index_digest(ngrams), "built_at": "2026-08-26T00:00:00Z",
+        "tasks": {name: {"items": 10, "candidates": 40, "split": split,
+                         "repo": f"org/{name}", "config": None, "revision": None}
+                  for name, split in [("hellaswag", "validation"),
+                                      ("arc_easy", "test"),
+                                      ("piqa", "validation"),
+                                      ("openbookqa", "test"),
+                                      ("winogrande", "validation")]},
+    }
+    path = str(tmp_path / "eval-index.txt.gz")
+    write_index(path, ngrams, provenance, allow_partial=not complete)
+    return path, provenance
+
+
+@_NEEDS_FORK
+def test_a_frozen_index_is_used_and_recorded_in_the_manifest(tmp_path, monkeypatch):
+    """The point of the whole exercise: after the run, the manifest says which
+    eval items the corpus was filtered against. The released corpus cannot."""
+    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
+    monkeypatch.setattr(dp, "_build_eval_index", lambda **kw: (_ for _ in ()).throw(
+        AssertionError("must not build an index when a frozen one was given")))
+    path, provenance = _frozen_index(tmp_path)
+
+    manifest = run_dataprep(target_tokens=500, out_root=str(tmp_path / "shards"),
+                            manifest_path=str(tmp_path / "manifest.json"),
+                            mixture=_fake_mixture(1), eval_index_path=path,
+                            eval_index_digest=provenance["digest"],
+                            log=lambda *a, **k: None)
+
+    record = manifest["decontam_index"]
+    assert record["digest"] == provenance["digest"]
+    assert record["path"] == path
+    assert record["complete"] is True
+    assert record["splits"]["arc_easy"] == "test"
+    assert record["items"]["hellaswag"] == 10
+
+
+@_NEEDS_FORK
+def test_an_index_that_is_not_the_one_named_stops_the_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
+    path, _ = _frozen_index(tmp_path)
+    from daedalus.eval_index import IndexDigestMismatch
+
+    with pytest.raises(IndexDigestMismatch):
+        run_dataprep(target_tokens=500, out_root=str(tmp_path / "shards"),
+                     manifest_path=str(tmp_path / "manifest.json"),
+                     mixture=_fake_mixture(1), eval_index_path=path,
+                     eval_index_digest="sha256:" + "0" * 64,
+                     log=lambda *a, **k: None)
+
+
+@_NEEDS_FORK
+def test_a_partial_frozen_index_stops_the_run(tmp_path, monkeypatch):
+    """Freezing an index does not make it complete. An index that covers a
+    fifth of HellaSwag is exactly what this phase is removing, so handing one
+    to the rebuild has to fail rather than be recorded and used."""
+    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
+    path, _ = _frozen_index(tmp_path, complete=False)
+
+    with pytest.raises(ValueError, match="scored on"):
+        run_dataprep(target_tokens=500, out_root=str(tmp_path / "shards"),
+                     manifest_path=str(tmp_path / "manifest.json"),
+                     mixture=_fake_mixture(1), eval_index_path=path,
+                     log=lambda *a, **k: None)
+
+
+@_NEEDS_FORK
+def test_the_in_process_index_is_recorded_as_partial(tmp_path, monkeypatch):
+    """The unchanged default still runs, and still writes a manifest -- but one
+    that cannot later be mistaken for a complete-index build."""
+    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
+    monkeypatch.setattr(dp, "_build_eval_index", lambda **kw: {"a b c"})
+
+    manifest = run_dataprep(target_tokens=500, out_root=str(tmp_path / "shards"),
+                            manifest_path=str(tmp_path / "manifest.json"),
+                            mixture=_fake_mixture(1), log=lambda *a, **k: None)
+
+    record = manifest["decontam_index"]
+    assert record["complete"] is False and record["limit"] == 2000
+    assert record["digest"] is None
+
+
+@_NEEDS_FORK
+def test_resuming_records_the_index_this_run_used_not_the_previous_one(tmp_path, monkeypatch):
+    """A resume that switches to the frozen index is how the phase-7 rebuild
+    continues a corpus started under the old default. The manifest has to
+    describe the filter in force, or one file claims two different ones."""
+    monkeypatch.setattr(dp, "get_tokenizer", lambda: FakeTokenizer())
+    monkeypatch.setattr(dp, "_stream_rows", lambda s: fake_rows(50))
+    monkeypatch.setattr(dp, "_build_eval_index", lambda **kw: {"a b c"})
+    manifest_path = str(tmp_path / "manifest.json")
+
+    run_dataprep(target_tokens=500, out_root=str(tmp_path / "shards"),
+                 manifest_path=manifest_path, mixture=_fake_mixture(1),
+                 log=lambda *a, **k: None)
+    path, provenance = _frozen_index(tmp_path)
+    manifest = run_dataprep(target_tokens=500, out_root=str(tmp_path / "shards"),
+                            manifest_path=manifest_path, mixture=_fake_mixture(1),
+                            resume=True, eval_index_path=path,
+                            log=lambda *a, **k: None)
+
+    assert manifest["decontam_index"]["digest"] == provenance["digest"]
 
 
 # ------------------------------------------------------- RAM discipline (ADDENDUM 2) ---
