@@ -1,11 +1,11 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-27T09:41:47.126800Z`
+- Heartbeat: `2026-08-27T09:46:48.755704Z`
 - Phase: `phase8-branch-1b`
 - Status: `running`
 - Source: `vast/daedalus-code-20260824` at `25927359a628`
-- Elapsed: `70.95h` of `144.0h`
-- Finalization window opens in: `65.05h`
+- Elapsed: `71.04h` of `144.0h`
+- Finalization window opens in: `64.96h`
 - Deadline stage: `active`
 
 ## Lanes
