@@ -286,6 +286,42 @@ Step 6 trains on "syntax-checked and execution-tested conversations" and tracks 
 
 Language buckets are `codeprep.CODE_LANGUAGE_SHARES`' own, asserted at import, so the SFT set and the pretraining corpus are read from one table rather than two that could disagree. 48 focused tests; 328 across `code_sft`, `chatml`, `post`, `codeprep` and `code_gates`.
 
+### Where step 6's conversations come from
+
+The gate landed with nothing to point it at. `SFT_SOURCES` is the table, and `scripts/code_sft.py probe` resolves it against real rows before a dataset is built from it — the shape `corpus probe` used, for the reason it used it.
+
+**Both halves are views of one apache-2.0 dataset**, `HuggingFaceTB/smol-smoltalk` — the source the released instruct model was itself post-trained on, and `post.py`'s own `--dataset` default. Its `source` column names the sub-dataset a row came from, so the two halves are a *partition* of it rather than two datasets that could disagree about rendering, turn structure or tokenizer. `self-oss-instruct` is the code half and is dropped from the general one **by name**: left in both, the same rows are counted twice and the code/general split the model card will claim describes neither.
+
+That the halves come from one dataset is not a convenience. `HuggingFaceTB/smoltalk`'s `self-oss-instruct` config is the most direct route to the code half — the same conversations, already `messages`-shaped — and its card carries **no `license` field and no `license:` tag at all**. The plan's hard-blocker list says ambiguous licence, and an absent declaration is the most ambiguous case there is. Its apache-2.0 subset carries the same rows at 10.30% of the stream, so refusing the undeclared one costs nothing.
+
+`dataset_license_verdict` is a **second allow-list**, not a reuse of `codeprep.PERMISSIVE_LICENSES`. The two classify different objects with overlapping vocabularies: `odc-by` is the only licence bigcode publishes under and never appears on a `.py` file, while `mpl-2.0` appears on files constantly and is refused by both. One shared table would refuse the right sources for a reason that is not about them. The line is **attribution-only** — everything admitted asks for credit and nothing else, which is the same reading of "permissive" the corpus gate uses when it puts `lgpl-*` on the refused side. Four verdicts rather than two, and `undeclared` is kept apart from `unknown` because one is a gap in *this table*, fixable by widening it, and the other is a gap in the *dataset*, which cannot be fixed here at all.
+
+Measured at 20,000 offered rows per half, with both decontamination indexes and the real tokenizer:
+
+| | code (`self-oss-instruct`) | general (everything else) |
+| --- | --- | --- |
+| kept of offered | 2,068 (**10.3%**) | 17,932 (89.7%) |
+| admitted of kept | 1,956 (**94.6%**) | 5,189 (**28.9%**) |
+| refused | `prose_too_long` 104, `syntax_error` 3, `long_cot` 3, `contaminated` 2 | `prose_too_long` 12,188, `long_cot` 354, `over_token_budget` 154, `syntax_error` 29, `contaminated` 18 |
+| code language shares | python 100.0% | python 90.9%, javascript-typescript 9.1% |
+| syntax-checked | 100.0% of 627,134 assistant code bytes | **63.7%** of 416,251 |
+| ships a runnable test | 537 of 1,956 admitted (**27.5%**) | 0 |
+| supervised tokens | 383,407 | 747,810 |
+
+Four things in that table are worth stating rather than leaving to be read off it.
+
+**The general half's 28.9% is the borrowed cap doing what it already does.** `prose_too_long` is 68% of its kept stream, and that is not this gate being strict — `chatml.assistant_char_count` sums across every assistant turn exactly as this does, and this one additionally removes fenced blocks before counting, so the reuse is *strictly more permissive*. What the number actually says is that the released instruct model's own SFT filter discards most of `smol-smoltalk` too. One deviation is carried rather than hidden: `parse_messages` joins per-turn prose with a newline, so a `k`-assistant-turn conversation is measured `k-1` characters above the sum `keep_example` takes. It is left that way — the separator is what stops a chain-of-thought marker being fabricated across a turn boundary — and it can only ever refuse a conversation sitting within a few characters of the 1,200 bound, never admit one. A test pins it.
+
+**Row refusals are counted apart from admission refusals.** `other_source` is 17,932 of the code half's 20,000 offered rows *by design*. Folded into the gate's counts it would report the admission gate as refusing nine rows in ten, when what it refused was 112.
+
+**27.5% of the admitted code half ships a runnable test**, and that is the whole of this phase's "execution-tested". `self-oss-instruct` states its test in the *user* turn — "your code should pass the following assertion", then a fenced python block — and nothing on this box can manufacture one for a source that ships none. Two refusals keep the number honest: an assertion is required, because a user block that merely demonstrates usage runs to completion whatever the assistant wrote and would grow the count with tests that cannot fail; and exactly one block, because concatenating two runs setup code as though it were the assertion. Both counts are published with their own denominators — 556 of 2,068 kept, 537 of 1,956 admitted — because they differ by the 19 test-carrying conversations the gate refused, and one number under the other's denominator reads as an arithmetic slip.
+
+**Execution is opt-in and off by default.** A probe that ran every shipped test would spend a process per row at up to 30 seconds to answer a question about *fields*. So `shipped_test_share` (what could be run) is published beside `share_report`'s `execution_tested_share` (what was), and when nothing ran the second is zero with `executed: false` rather than a share that reads as a measurement.
+
+The alternatives are recorded with the measurement that decided each, so a later slice wanting more code conversations starts from evidence rather than a fresh guess: `bigcode/self-oss-instruct-sc2-exec-filter-50k` is `odc-by`, permissive and usable — not used because it ships `instruction`/`response` rather than messages, so reading it would be a second rendering of the same conversations that could drift from the one the released model saw, and its instruction field carries an assertion in 32.3% of rows against the chat rendering's 28.2%. `ise-uiuc/Magicoder-OSS-Instruct-75K` declares MIT but is generated by a proprietary model whose terms are not the dataset's licence. `HuggingFaceH4/CodeAlpaca_20K` declares the bare string `cc`, which names no version and no clauses, and `unknown` is the correct verdict for it.
+
+Record in `runs/code-sft/probe.json`, with the Hub metadata and row-shape checks that chose the table in `hub-check.json`, `hub-rows.json` and `hub-shape.json` beside it. 64 focused tests; 282 across `code_sft`, `code_gates`, `chatml`, `post` and `codeprep`.
+
 ## Status
 
 Branch created from #14's tested SHA; parent recorded in `runs/vast-program/code-run-manifest.json`. Base baselines and both harness oracles are in, the code decontamination index is frozen and verified, and the *repository* admission gate — the one above, which decides which source files enter the corpus — is written and measured against the real sources. Step 6's *SFT* admission gate is a separate rule over conversations, below.
@@ -318,4 +354,6 @@ One defect the probes exposed and did not depend on: `train.py`'s in-run validat
 
 **Step 5's launcher is written ahead of the branch it extends**, for the same reason its wording could be settled honestly: nothing it depends on has produced a number yet. `scripts/code_extension.py` is the 2B stage as one command — 39 focused tests, 262 across the phase 8 and controller suites — and it is waiting on two things that do not exist yet: gate 2's verdict, and a 1B run to read a rate and a throughput off. What it did establish now is supply: the corpus composed at a 250M budget can draw the 2B stage inside the four-epoch cap with the replay floor intact.
 
-**Step 6's SFT admission gate is written on the same terms**, and for once "before the thing it judges exists" is literal: no candidate SFT source has been read. `daedalus/code_sft.py` decides one conversation at a time, with eleven named refusals and the two numbers the manifest asks step 6 to track. What it does *not* yet have is a source list or a build — and `post.py` taking a locally built dataset is shared work, so it goes to #14 first and forward-merges, as `train.py`'s per-source BPB and the DPO preference gate both did.
+**Step 6's SFT admission gate is written on the same terms**, and for once "before the thing it judges exists" was literal: no candidate SFT source had been read when its eleven refusals were fixed. **It now has a source list**, resolved against real rows rather than assumed — two halves of one apache-2.0 dataset, 1,956 code and 5,189 general conversations admitted from 20,000 offered rows each, with 27.5% of the code half carrying a test that can actually be executed. The section above is what the probe measured and what it refused.
+
+What remains for step 6 is the build itself, and `post.py` taking a locally built dataset — that half is shared work, so it goes to #14 first and forward-merges, as `train.py`'s per-source BPB and the DPO preference gate both did.
