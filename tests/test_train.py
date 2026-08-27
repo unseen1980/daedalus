@@ -1259,6 +1259,51 @@ def test_val_bpb_is_logged_on_its_own_cadence(tmp_path, monkeypatch):
         assert by_step[step] > 0
 
 
+def test_val_bpb_fires_when_the_two_cadences_never_coincide(tmp_path, monkeypatch):
+    """A validation interval that is not a multiple of the metrics interval
+    used to disable validation outright, silently.
+
+    `_validate` is only reached from `log_step`, which runs on the metrics
+    cadence, and it used to gate on `step % val_every_steps`. Both moduli are
+    therefore satisfied only at the two intervals' common multiple, so a run
+    shorter than that validates *never* -- and reports `val_bpb: null` on every
+    row, which reads as validation being broken rather than as never having been
+    due. All three phase-8 probe arms ran 477 steps with `--val-every-steps 250`
+    beside the default 20-step metrics cadence: LCM(20, 250) = 500, so none of
+    them produced a single held-out number for its whole length.
+
+    Nine steps at metrics 3 / val 4 is the same arithmetic in miniature:
+    LCM(3, 4) = 12, past the end of the run, and no row is a multiple of 4.
+    """
+    val_dir = _val_shards(tmp_path)
+    args = _tiny_args(tmp_path / "run", max_steps=9, seq_len=16, micro_batch=2)
+    args.val_dir = val_dir
+    args.val_every_steps = 4
+    args.val_batches = 1
+    args.val_batch_size = 2
+    args.seq_end = 16
+    args.metrics_every_steps = 3
+
+    t = Trainer(args)
+    t._tokenizer = _ByteTokenizer()
+    monkeypatch.setattr("daedalus.data.get_tokenizer", lambda *a, **k: _ByteTokenizer())
+    t.batch_source = FixedBatchSource(
+        [torch.randint(0, t.cfg.vocab_size, (2, 16)) for _ in range(9)])
+    t.fit()
+
+    records = [json.loads(l) for l in
+              (tmp_path / "run" / "metrics.jsonl").read_text().strip().splitlines()]
+    by_step = {r["step"]: r["val_bpb"] for r in records}
+    assert set(by_step) == {3, 6, 9}                      # the metrics cadence
+    assert not any(step % args.val_every_steps == 0 for step in by_step)
+    validated = [step for step, value in by_step.items() if value is not None]
+    assert validated, "no row carried val_bpb; the cadences never coincided"
+    assert by_step[6] is not None and math.isfinite(by_step[6]) and by_step[6] > 0
+    # Elapsed steps, not a modulo: due once four steps have passed since the
+    # last pass, so the next is at 10 rather than at every later metrics row.
+    assert by_step[9] is None
+
+
 def _mixture_val_shards(tmp_path, names=("source-a", "source-b"), n_tokens=4096):
     """A `make_mixture_holdout_split`-shaped root: per-source subdirectories,
     each with its own manifest.json, and no manifest at the top level."""

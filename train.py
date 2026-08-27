@@ -1113,6 +1113,16 @@ class Trainer:
         # one the interval already wrote. None until the first of each.
         self._last_metrics_step: Optional[int] = None
         self._last_stats: Optional[dict] = None
+        # Which step last carried a validation. Held rather than derived from
+        # `step % val_every_steps`, because `_validate` is only ever reached on
+        # a metrics row: a modulo on both intervals is satisfied only at their
+        # *common* multiple, so `--val-every-steps 250` beside the default
+        # 20-step metrics cadence validates every 500 steps, and a run shorter
+        # than 500 validates never. All three phase-8 probe arms ran 477 steps
+        # and reported `val_bpb: null` for their whole length. Elapsed steps
+        # instead, so any interval reaches the first metrics row at or after it
+        # and no cadence is silently unreachable.
+        self._last_val_step = self.step
 
         self.net = torch.compile(self.model) if args.compile else self.model
 
@@ -1433,8 +1443,14 @@ class Trainer:
         the 1.5% bound says so at its first interval rather than after 1B tokens.
         """
         args = self.args
-        if not args.val_dir or self.step % args.val_every_steps != 0:
+        if not args.val_dir or args.val_every_steps <= 0:
             return None
+        if self.step - self._last_val_step < args.val_every_steps:
+            return None
+        # Stamped before the pass, not after it: a holdout that raises below
+        # would otherwise leave the run due forever and re-attempt the same
+        # broken directory on every metrics row for the rest of the budget.
+        self._last_val_step = self.step
         try:
             # lazy: eval imports train
             from eval import evaluate_bpb_mixture
