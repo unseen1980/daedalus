@@ -1,0 +1,14 @@
+{
+  "revision": "code-probe-lr0.002-stable-end-step95",
+  "step": 95,
+  "tokens_seen": 49807360,
+  "total_steps": 477,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.002,
+  "adam_lr": 3e-05,
+  "config": "daedalus-150m",
+  "repo": null,
+  "path_in_repo": "milestone/code-probe-lr0.002/checkpoint.pt",
+  "created_at": 1787789868.83966
+}
