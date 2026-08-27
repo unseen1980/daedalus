@@ -20,9 +20,14 @@ import pytest
 from daedalus.chatml import DEFAULT_MAX_ASSISTANT_CHARS
 from daedalus.code_sft import (ADMISSION_REASONS, DEFAULT_MAX_LEN,
                                LANGUAGE_BUCKETS, OTHER_LANGUAGE,
-                               SYNTAX_CHECKERS, UNKNOWN_LANGUAGE, CodeBlock,
-                               contamination_hit, language_of, normalize_tag,
-                               parse_markdown, parse_messages, share_report,
+                               RECORDED_ALTERNATIVES, SFT_HALVES, SFT_SOURCES,
+                               SYNTAX_CHECKERS, UNDECLARED_LICENSE,
+                               UNKNOWN_LANGUAGE, CodeBlock, CodeSFTError,
+                               SFTSource, contamination_hit,
+                               dataset_license_verdict, language_of,
+                               normalize_tag, parse_markdown, parse_messages,
+                               probe_problems, probe_source, probe_sources,
+                               row_messages, share_report, shipped_test,
                                vet_example)
 from daedalus.codeprep import CODE_LANGUAGE_SHARES
 from daedalus.data import ngram_set
@@ -379,7 +384,398 @@ def test_unknown_language_bytes_are_reported_separately_from_other():
     assert report["code_language_shares"] == {}
 
 
+def test_the_prose_cap_is_the_borrowed_one_plus_its_separators():
+    """The claim is that this cap is `keep_example`'s, applied to prose. Both
+    sum across every assistant turn, so removing blocks can only shrink the
+    count -- the direction that makes the reuse more permissive on code, which
+    is the whole point. The one deviation is the newline `parse_messages` joins
+    turns with, and it is pinned here rather than left to be discovered."""
+
+    from daedalus.chatml import assistant_char_count
+
+    with_code = [{"role": "user", "content": "q"},
+                 {"role": "assistant",
+                  "content": "short\n" + fenced("python", "x = 1\n" * 200)}]
+    prose, _ = parse_messages(with_code)
+    assert len(prose) < assistant_char_count(with_code)
+
+    turns = [{"role": "user", "content": "q"}]
+    for _ in range(4):
+        turns.append({"role": "assistant", "content": "answer"})
+    prose, _ = parse_messages(turns)
+    # Four assistant turns, three joining newlines, and no code to remove.
+    assert len(prose) == assistant_char_count(turns) + 3
+
+
+def test_a_deprecated_escape_is_admitted_and_prints_nothing(recwarn):
+    """`"\\d"` in a non-raw string parses -- it is a deprecation, not a syntax
+    error. Left unsuppressed, real code raises several per block and a build's
+    log fills with warnings about conversations it accepted."""
+
+    import ast
+    import warnings
+
+    verdict = vet_example(chat("q", fenced("python", 'p = "\\d+"')))
+    assert verdict.admitted
+    assert [w for w in recwarn if issubclass(w.category, SyntaxWarning)] == []
+
+    # The test's own premise: this interpreter does warn on that source, so an
+    # empty list above is the suppression working rather than the warning never
+    # having existed.
+    with warnings.catch_warnings(record=True) as raised:
+        warnings.simplefilter("always")
+        ast.parse('p = "\\d+"')
+    assert [w for w in raised if issubclass(w.category, SyntaxWarning)]
+
+
 def test_code_block_bytes_are_utf8_not_characters():
     block = CodeBlock(tag="python", language="python", source="s = 'é'",
                       closed=True)
     assert block.bytes == len("s = 'é'".encode("utf-8")) == 8
+
+
+# --------------------------------------------------------- dataset licences ---
+#
+# The gap this covers is that a *dataset* licence and a *source file* licence
+# are different objects with overlapping vocabularies. `odc-by` is the only
+# licence bigcode publishes under and never appears on a .py file; `mpl-2.0`
+# appears on files constantly and is refused by both. Sharing one table would
+# refuse the right sources for a reason that is not about them.
+
+def test_attribution_only_data_licences_are_permissive():
+    for value in ("apache-2.0", "mit", "odc-by", "cc-by-4.0", "cc0-1.0"):
+        assert dataset_license_verdict(value) == "permissive", value
+
+
+def test_share_alike_and_non_commercial_are_refused_by_name():
+    for value in ("cc-by-sa-4.0", "cc-by-nc-4.0", "gpl-3.0", "other"):
+        assert dataset_license_verdict(value) == "non-permissive", value
+
+
+def test_an_absent_declaration_is_undeclared_not_unknown():
+    """`HuggingFaceTB/smoltalk` carries no `license:` tag and no cardData
+    entry, and that is a different finding from a string this table has never
+    seen: one is fixed by widening the table, the other cannot be fixed here."""
+
+    assert dataset_license_verdict(None) == UNDECLARED_LICENSE
+    assert dataset_license_verdict("  ") == UNDECLARED_LICENSE
+    # `HuggingFaceH4/CodeAlpaca_20K` declares the bare string `cc`, which names
+    # no version and no clauses. Unknown, not non-permissive: nobody decided it
+    # was refused, we just cannot tell what it is.
+    assert dataset_license_verdict("cc") == "unknown"
+
+
+def test_the_verdict_is_case_and_whitespace_insensitive():
+    assert dataset_license_verdict(" Apache-2.0 ") == "permissive"
+
+
+# ------------------------------------------------------------- source table ---
+
+def test_the_live_table_is_permissive_and_covers_both_halves():
+    """The module asserts this at import; asserting it again here is what makes
+    a future edit to the table fail as a test rather than as an ImportError in
+    whatever imported it first."""
+
+    assert {s.half for s in SFT_SOURCES} == set(SFT_HALVES)
+    assert all(s.license_verdict == "permissive" for s in SFT_SOURCES)
+    assert len({s.key for s in SFT_SOURCES}) == len(SFT_SOURCES)
+
+
+def test_the_two_halves_partition_one_dataset_rather_than_overlapping():
+    """`self-oss-instruct` kept by the code half must be dropped by the general
+    one. Left in both, the same rows are counted twice and the 65/35 the model
+    card claims describes neither half."""
+
+    code = [s for s in SFT_SOURCES if s.half == "code"]
+    general = [s for s in SFT_SOURCES if s.half == "general"]
+    for kept in code:
+        for other in general:
+            if other.dataset != kept.dataset:
+                continue
+            assert set(kept.keep_sources) <= set(other.drop_sources), \
+                f"{other.key} does not drop what {kept.key} keeps"
+
+
+def test_the_recorded_alternatives_carry_the_verdict_that_refused_them():
+    by_name = {name: (declared, note) for name, declared, note
+               in RECORDED_ALTERNATIVES}
+    declared, note = by_name["HuggingFaceTB/smoltalk::self-oss-instruct"]
+    assert declared == UNDECLARED_LICENSE
+    assert "licence" in note
+    # The upstream is usable and was measured; it is recorded as a choice, not
+    # as a refusal, so nothing later reads it as unavailable.
+    declared, _ = by_name["bigcode/self-oss-instruct-sc2-exec-filter-50k"]
+    assert dataset_license_verdict(declared) == "permissive"
+
+
+def test_a_source_refuses_both_filters_at_once():
+    with pytest.raises(CodeSFTError):
+        SFTSource(key="k", half="code", dataset="d", declared_license="mit",
+                  note="", source_field="source", keep_sources=("a",),
+                  drop_sources=("b",))
+
+
+def test_a_source_filter_without_a_row_key_is_refused():
+    with pytest.raises(CodeSFTError):
+        SFTSource(key="k", half="code", dataset="d", declared_license="mit",
+                  note="", keep_sources=("a",))
+
+
+def test_a_source_half_must_be_one_the_plan_names():
+    with pytest.raises(CodeSFTError):
+        SFTSource(key="k", half="both", dataset="d", declared_license="mit",
+                  note="")
+
+
+# ------------------------------------------------------------- row adapters ---
+
+CODE_SOURCE = SFTSource(key="code", half="code", dataset="d",
+                        declared_license="mit", note="", source_field="source",
+                        keep_sources=("self-oss-instruct",))
+GENERAL_SOURCE = SFTSource(key="general", half="general", dataset="d",
+                           declared_license="mit", note="",
+                           source_field="source",
+                           drop_sources=("self-oss-instruct",))
+
+
+def test_the_source_filter_partitions_one_row_stream():
+    row = {"source": "self-oss-instruct", "messages": chat("q", "a")}
+    assert row_messages(CODE_SOURCE, row)[0] == chat("q", "a")
+    assert row_messages(GENERAL_SOURCE, row) == (None, "other_source")
+
+    other = {"source": "openhermes-50k", "messages": chat("q", "a")}
+    assert row_messages(CODE_SOURCE, other) == (None, "other_source")
+    assert row_messages(GENERAL_SOURCE, other)[0] == chat("q", "a")
+
+
+def test_a_missing_source_key_is_its_own_refusal():
+    """The silent-failure case: a row key the dataset does not have refuses
+    every row, and `other_source` would report that as an ordinary low yield."""
+
+    assert row_messages(CODE_SOURCE, {"messages": chat("q", "a")}) == \
+        (None, "no_source_field")
+
+
+def test_row_refusals_are_counted_apart_from_admission_refusals():
+    """`other_source` is ~90% of the code half's stream by design. Folded into
+    the admission counts it would report the gate as refusing nine rows in
+    ten."""
+
+    from daedalus.code_sft import ROW_REFUSALS
+
+    assert not set(ROW_REFUSALS) & set(ADMISSION_REASONS)
+
+
+def test_a_row_without_messages_is_refused_rather_than_raising():
+    assert row_messages(CODE_SOURCE, {"source": "self-oss-instruct"}) == \
+        (None, "no_messages")
+    assert row_messages(CODE_SOURCE, {"source": "self-oss-instruct",
+                                      "messages": [{"role": "user"}]}) == \
+        (None, "no_messages")
+    assert row_messages(CODE_SOURCE, "not a row") == (None, "not_a_mapping")
+
+
+# ------------------------------------------------------------ shipped tests ---
+
+ASSERTION = "assert f(2) == 4"
+
+
+def test_a_user_turn_assertion_is_the_shipped_test():
+    """`self-oss-instruct` states its test in the user turn -- "your code should
+    pass the following assertion" -- and that block is the only execution
+    evidence available: nothing here can manufacture a test."""
+
+    messages = chat("write f\n" + fenced("python", ASSERTION),
+                    fenced("python", "def f(x): return x * 2"))
+    assert shipped_test(messages) == (ASSERTION, None)
+
+
+def test_a_user_block_without_an_assertion_is_not_a_test():
+    """It runs to completion whatever the assistant wrote, so admitting it
+    would grow the execution-tested count with tests that cannot fail."""
+
+    messages = chat("like this\n" + fenced("python", "f(2)"), "sure")
+    assert shipped_test(messages) == (None, "no_assertion")
+
+
+def test_two_user_blocks_are_ambiguous_rather_than_concatenated():
+    messages = chat(fenced("python", "setup()") + "\n" + fenced("python", ASSERTION),
+                    "ok")
+    assert shipped_test(messages) == (None, "ambiguous_user_block")
+
+
+def test_an_assistant_assertion_is_not_a_shipped_test():
+    """The model writing its own assertion is not evidence about the model."""
+
+    messages = chat("write f", fenced("python", "def f(x): return x\n" + ASSERTION))
+    assert shipped_test(messages) == (None, "no_user_block")
+
+
+def test_an_unterminated_user_fence_ships_no_test():
+    messages = chat("```python\n" + ASSERTION, "ok")
+    assert shipped_test(messages) == (None, "no_user_block")
+
+
+# ------------------------------------------------------------------- probes ---
+
+def rows_for(values):
+    return [{"source": source, "messages": messages}
+            for source, messages in values]
+
+
+def stream_of(rows):
+    return lambda source: list(rows)
+
+
+def test_a_probe_reports_the_source_filter_separately_from_the_gate():
+    rows = rows_for([
+        ("self-oss-instruct", chat("q", fenced("python", "x = 1"))),
+        ("self-oss-instruct", chat("q", fenced("python", "def f(:"))),
+        ("openhermes-50k", chat("q", "prose")),
+    ])
+    record = probe_source(CODE_SOURCE, rows=10, stream=stream_of(rows))
+    assert record["resolved"] and record["rows_offered"] == 3
+    assert record["rows_kept"] == 2
+    assert record["row_refusals"]["other_source"] == 1
+    assert record["report"]["admitted"] == 1
+    assert record["report"]["refusals"]["syntax_error"] == 1
+    # The kept share is of *offered*, so the number that decides how much of a
+    # dataset must be streamed to build a corpus is the one reported.
+    assert record["kept_share"] == pytest.approx(2 / 3)
+
+
+def test_a_probe_stops_at_the_row_budget():
+    rows = rows_for([("self-oss-instruct", chat("q", "a"))] * 50)
+    record = probe_source(CODE_SOURCE, rows=7, stream=stream_of(rows))
+    assert record["rows_offered"] == 7
+
+
+def test_a_probe_records_the_shipped_test_share_without_executing():
+    """Execution costs a process per row at up to the timeout, so the probe
+    publishes what *could* be run beside what was, and never lets the second
+    read as a measurement when nothing ran."""
+
+    tested = chat("run this\n" + fenced("python", ASSERTION),
+                  fenced("python", "def f(x): return x * 2"))
+    untested = chat("q", fenced("python", "x = 1"))
+    rows = rows_for([("self-oss-instruct", tested),
+                     ("self-oss-instruct", untested)])
+    record = probe_source(CODE_SOURCE, rows=10, stream=stream_of(rows))
+    assert record["executed"] is False
+    assert record["shipped_tests"] == 1
+    assert record["shipped_test_share"] == pytest.approx(0.5)
+    assert record["report"]["execution_tested"] == 0
+    assert record["no_test_reasons"]["no_user_block"] == 1
+
+
+def test_the_shipped_test_count_and_its_share_carry_their_own_denominators():
+    """`shipped_tests` is over kept rows, the share is over admitted ones. They
+    differ by the test-carrying conversations the gate refused -- 18 of 556 on
+    the live probe -- and reported as one number with the other's denominator
+    that difference reads as an arithmetic slip."""
+
+    tested = chat("run this\n" + fenced("python", ASSERTION),
+                  fenced("python", "def f(x): return x * 2"))
+    broken = chat("run this\n" + fenced("python", ASSERTION),
+                  fenced("python", "def f(:"))
+    rows = rows_for([("self-oss-instruct", tested),
+                     ("self-oss-instruct", broken)])
+    record = probe_source(CODE_SOURCE, rows=10, stream=stream_of(rows))
+    assert record["shipped_tests"] == 2
+    assert record["shipped_tests_admitted"] == 1
+    assert record["report"]["admitted"] == 1
+    assert record["shipped_test_share"] == pytest.approx(1.0)
+
+
+def test_a_probe_executes_only_when_a_runner_is_supplied():
+    calls = []
+
+    def execute(solution, test_code, *, timeout_s, memory_mb):
+        calls.append((solution, test_code))
+        return {"status": "passed"}
+
+    tested = chat("run this\n" + fenced("python", ASSERTION),
+                  fenced("python", "def f(x): return x * 2"))
+    record = probe_source(CODE_SOURCE, rows=10, execute=execute,
+                          stream=stream_of(rows_for([("self-oss-instruct", tested)])))
+    assert record["executed"] is True
+    assert calls == [("def f(x): return x * 2", ASSERTION)]
+    assert record["report"]["execution_tested"] == 1
+    assert record["report"]["execution_tested_share"] == pytest.approx(1.0)
+
+
+def test_a_probe_records_an_unreachable_source_rather_than_raising():
+    def boom(source):
+        raise OSError("404")
+
+    record = probe_source(CODE_SOURCE, rows=3, stream=boom)
+    assert record["resolved"] is False
+    assert "OSError: 404" in record["error"]
+    assert probe_problems({"sources": [record]})[0].startswith(
+        "code did not resolve")
+
+
+def test_a_filter_on_a_key_the_rows_lack_is_a_fatal_problem():
+    """Every row refused, an empty build, a zero exit -- the failure the probe
+    exists to catch, so it must not be reported as a low yield."""
+
+    rows = [{"messages": chat("q", "a")} for _ in range(5)]
+    record = probe_source(CODE_SOURCE, rows=10, stream=stream_of(rows))
+    problems = probe_problems({"sources": [record]})
+    assert any("'source' that its rows do not have" in problem
+               for problem in problems)
+
+
+def test_a_non_permissive_declaration_is_a_problem_even_when_rows_flow():
+    source = SFTSource(key="k", half="code", dataset="d",
+                       declared_license="cc-by-sa-4.0", note="")
+    record = probe_source(source, rows=5, stream=stream_of(
+        [{"messages": chat("q", fenced("python", "x = 1"))}]))
+    problems = probe_problems({"sources": [record]})
+    assert any("non-permissive" in problem for problem in problems)
+
+
+def test_a_probe_of_one_half_reports_the_other_as_missing():
+    """The plan asks for code *and* general SFT; a probe that resolved only one
+    of them and said "every source resolved" would be the reassuring kind of
+    success line."""
+
+    rows = rows_for([("self-oss-instruct", chat("q", fenced("python", "x = 1")))])
+    report = probe_sources([CODE_SOURCE], rows=5, stream=stream_of(rows))
+    problems = probe_problems(report)
+    assert any("general half kept no rows" in problem for problem in problems)
+
+
+def test_a_clean_probe_of_both_halves_has_no_problems():
+    rows = rows_for([
+        ("self-oss-instruct", chat("q", fenced("python", "x = 1"))),
+        ("openhermes-50k", chat("q", "an ordinary answer")),
+    ])
+    report = probe_sources([CODE_SOURCE, GENERAL_SOURCE], rows=5,
+                           stream=stream_of(rows))
+    assert probe_problems(report) == []
+    assert [record["half"] for record in report["sources"]] == \
+        ["code", "general"]
+    assert report["alternatives"][0]["license_verdict"] == UNDECLARED_LICENSE
+
+
+def test_a_probe_histograms_the_source_column_it_filters_on():
+    """Which values a mixture actually carries is the measurement that decided
+    the table, and a build cannot re-derive it after filtering them out."""
+
+    rows = rows_for([("self-oss-instruct", chat("q", "a"))] * 2 +
+                    [("openhermes-50k", chat("q", "a"))] * 3)
+    record = probe_source(CODE_SOURCE, rows=10, stream=stream_of(rows))
+    assert record["source_values"] == {"openhermes-50k": 3,
+                                       "self-oss-instruct": 2}
+
+
+def test_a_probe_passes_the_contamination_indexes_through_by_name():
+    ngrams = ngram_set("a benchmark prompt that must never enter training data",
+                       n=6)
+    rows = rows_for([("self-oss-instruct",
+                      chat("a benchmark prompt that must never enter training data",
+                           fenced("python", "x = 1")))])
+    record = probe_source(CODE_SOURCE, rows=5, stream=stream_of(rows),
+                          indexes={"code": ngrams}, n=6)
+    assert record["report"]["refusals"]["contaminated"] == 1

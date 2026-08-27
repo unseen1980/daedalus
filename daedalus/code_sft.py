@@ -83,6 +83,19 @@ so scanning inside blocks would drop well-commented answers as reasoning traces.
 the whole rendered example, blocks included. The character cap bounds verbosity;
 the token budget bounds what fits.
 
+One difference from `assistant_char_count` is carried rather than hidden. Both
+sum across *every* assistant turn, so the denominators match, and removing
+fenced blocks can only shrink this one -- which is what makes the reuse strictly
+more permissive on code. But `parse_messages` joins the per-turn prose with a
+newline, so a conversation with `k` assistant turns is measured one character
+per extra turn above the sum `keep_example` would take. It is left that way: the
+separator is what stops a chain-of-thought marker being fabricated across a turn
+boundary ("...step" + "1: ..."), the overshoot is at most a few characters
+against a 1,200-character cap, and it can only ever refuse a conversation
+sitting within `k-1` characters of the bound -- never admit one. Pinned by
+`test_the_prose_cap_is_the_borrowed_one_plus_its_separators` so it stays a
+recorded property rather than a later surprise.
+
 Order of checks
 ---------------
 
@@ -92,12 +105,23 @@ fixed `ADMISSION_REASONS` order is the one reported, and the counts in
 content filters so that a contaminated example can never be counted as one
 dropped for being verbose -- the contamination count is the one that must not be
 under-read. Execution is last because it is the only check that costs a process.
+
+Where the conversations come from
+---------------------------------
+
+`SFT_SOURCES` is the table the gate is pointed at, and like every other table in
+this phase it names what to *ask* for rather than what exists:
+`scripts/code_sft.py probe` resolves each entry against real rows before a
+dataset is built from it. The measurements that chose the entries are in
+`RECORDED_ALTERNATIVES` beside the ones that did not, because a table showing
+only the current answer cannot be used to re-derive how the answer was reached.
 """
 
 from __future__ import annotations
 
 import ast
 import collections.abc
+import warnings
 from dataclasses import dataclass, field
 from typing import (Callable, Dict, Iterable, List, Mapping, Optional, Sequence,
                     Set, Tuple)
@@ -156,10 +180,20 @@ class CodeSFTError(ValueError):
 def _python_syntax(source: str) -> Tuple[bool, Optional[str]]:
     """`(ok, message)`. Parsed, never executed -- `code_eval.check_syntax`'s
     contract, reimplemented here so importing this module does not pull in the
-    evaluation harness."""
+    evaluation harness.
+
+    `SyntaxWarning` is suppressed rather than surfaced. `"\\d"` in a non-raw
+    string is a deprecation, not a syntax error: the block parses, it is
+    admitted, and the warning says nothing about the decision. Left on, real
+    code triggers several per block and a build over tens of thousands of
+    conversations writes a log in which its own progress lines cannot be found
+    -- the first live probe printed twelve of them before its first result.
+    """
 
     try:
-        ast.parse(source)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            ast.parse(source)
     except SyntaxError as error:
         return False, f"SyntaxError: {error.msg} (line {error.lineno})"
     except ValueError as error:                 # e.g. source with null bytes
@@ -384,8 +418,12 @@ def _refuse(reason: str, detail: str = "", **measured) -> Verdict:
     return Verdict(admitted=False, reason=reason, detail=detail, **measured)
 
 
-def _default_execute(solution: str, test_code: str, *, timeout_s: float,
-                     memory_mb: int) -> dict:
+def default_execute(solution: str, test_code: str, *, timeout_s: float,
+                    memory_mb: int) -> dict:
+    """The real `code_eval` sandbox. Public because `probe_source` takes the
+    runner as an argument -- a caller asking for real execution should not have
+    to import a private name to get the same one `vet_example` defaults to."""
+
     from scripts.code_eval import run_in_sandbox
 
     return run_in_sandbox(solution, test_code, timeout_s=timeout_s,
@@ -497,7 +535,7 @@ def vet_example(
                        f"a test was supplied but the assistant turn has "
                        f"{len(runnable)} Python blocks", **measured)
 
-    runner = execute or _default_execute
+    runner = execute or default_execute
     outcome = runner(runnable[0].source, test_code, timeout_s=timeout_s,
                      memory_mb=memory_mb)
     measured["executed"] = True
@@ -594,3 +632,466 @@ def share_report(verdicts: Iterable[Verdict]) -> dict:
         "supervised_tokens_by_language": dict(sorted(
             supervised_by_language.items())),
     }
+
+
+# --------------------------------------------------------------- the sources ---
+
+#: Dataset licences an SFT source may declare.
+#:
+#: A *second* allow-list rather than a reuse of `codeprep.PERMISSIVE_LICENSES`,
+#: because the two are about different objects and sharing one would refuse the
+#: right sources for the wrong reason. That list classifies the licence of a
+#: *source file inside a repository*, where `odc-by` and `cc-by-4.0` never
+#: appear; this one classifies the licence of a *dataset as a whole*, where they
+#: are the two commonest permissive declarations. Merging them would have to
+#: either admit data licences into the corpus gate or refuse the only licence
+#: `bigcode` publishes under -- and a source refused for a reason that is not
+#: about it is indistinguishable in a manifest from one refused correctly.
+#:
+#: The line is **attribution-only**. Everything here asks for credit and nothing
+#: else: no reciprocal obligation, no field-of-use restriction, no downstream
+#: licence condition. That is the same reading of "permissive" the corpus gate
+#: uses when it puts `mpl-2.0` and `lgpl-*` on the refused side.
+PERMISSIVE_DATASET_LICENSES = frozenset({
+    "apache-2.0", "bsd-2-clause", "bsd-3-clause", "cc-by-4.0", "cc0-1.0",
+    "isc", "mit", "odc-by", "unlicense",
+})
+
+#: Declarations known to be refused, kept by name so "we know this one and it
+#: does not qualify" stays distinguishable from "we have never seen this
+#: string". Share-alike (`*-sa-*`) and non-commercial (`*-nc-*`) both carry the
+#: condition permissive means the absence of; `other` and the model-derived
+#: licences name terms that live somewhere else entirely.
+KNOWN_NON_PERMISSIVE_DATASET_LICENSES = frozenset({
+    "afl-3.0", "agpl-3.0", "bigscience-openrail-m", "cc-by-nc-4.0",
+    "cc-by-nc-sa-4.0", "cc-by-sa-3.0", "cc-by-sa-4.0", "gpl-2.0", "gpl-3.0",
+    "llama2", "llama3", "openrail", "other",
+})
+
+#: A card with no licence field and no `license:` tag at all. Deliberately not
+#: folded into `unknown`: "the card names something this module does not
+#: classify" is a gap in *this* table and is fixed by widening it, while "the
+#: card names nothing" is a gap in the *dataset* and cannot be fixed here at
+#: all. The plan's hard-blocker list says ambiguous licence, and an absent
+#: declaration is the most ambiguous case there is -- it is the finding that
+#: refused `HuggingFaceTB/smoltalk`, whose `self-oss-instruct` config is
+#: otherwise exactly the code half this phase wants.
+UNDECLARED_LICENSE = "undeclared"
+
+
+def dataset_license_verdict(value) -> str:
+    """`permissive`, `non-permissive`, `unknown` or `undeclared`.
+
+    Four answers rather than two, for `codeprep.license_verdict`'s reason: an
+    allow-list that returned a bare boolean would collapse "refused because we
+    know it" into "refused because we have never seen it", and only the second
+    is news worth acting on.
+    """
+
+    if value is None:
+        return UNDECLARED_LICENSE
+    key = str(value).strip().lower()
+    if not key:
+        return UNDECLARED_LICENSE
+    if key in PERMISSIVE_DATASET_LICENSES:
+        return "permissive"
+    if key in KNOWN_NON_PERMISSIVE_DATASET_LICENSES:
+        return "non-permissive"
+    return "unknown"
+
+
+#: The two halves the plan names: "code and general SFT". Kept as a vocabulary
+#: rather than a bool so a report can say which half a count belongs to without
+#: a reader having to know which way round True meant.
+SFT_HALVES = ("code", "general")
+
+
+@dataclass(frozen=True)
+class SFTSource:
+    """One candidate conversation source, and how to read a row of it.
+
+    `source_field` with `keep_sources`/`drop_sources` is how two halves are
+    carved out of one dataset. That is not a convenience: it is what makes the
+    code half reachable under a *declared* licence at all (see `SFT_SOURCES`),
+    and it is the same shape `codeprep.RepositoryGate` uses to partition one
+    directory into two disjoint streams.
+    """
+
+    key: str
+    half: str
+    dataset: str
+    declared_license: str
+    note: str
+    split: str = "train"
+    config: Optional[str] = None
+    revision: Optional[str] = None
+    #: Row key naming the sub-dataset a row came from, when the source is a
+    #: mixture. None when the whole dataset is one source.
+    source_field: Optional[str] = None
+    #: Values of `source_field` to keep. Empty keeps everything not dropped.
+    keep_sources: Tuple[str, ...] = ()
+    #: Values to drop. Empty drops nothing.
+    drop_sources: Tuple[str, ...] = ()
+    messages_field: str = "messages"
+
+    def __post_init__(self):
+        if self.half not in SFT_HALVES:
+            raise CodeSFTError(f"{self.key}: half must be one of {SFT_HALVES}")
+        if self.keep_sources and self.drop_sources:
+            # Both at once has two readings -- keep-then-drop and drop-then-keep
+            # -- that differ on a value in both lists, and nothing about the
+            # table says which. One list, so the partition is a fact rather
+            # than an argument about precedence.
+            raise CodeSFTError(
+                f"{self.key}: keep_sources and drop_sources are two ways to "
+                f"write one partition; pass one")
+        if (self.keep_sources or self.drop_sources) and not self.source_field:
+            raise CodeSFTError(
+                f"{self.key}: a source filter needs the row key to read it from")
+
+    @property
+    def license_verdict(self) -> str:
+        return dataset_license_verdict(self.declared_license)
+
+
+#: What phase 8 step 6 actually trains on, pending the probe that resolves it.
+#:
+#: Both halves are views of **one** apache-2.0 dataset, `smol-smoltalk` -- the
+#: source the released instruct model was itself post-trained on, which is the
+#: borrow-rather-than-invent rule this program has followed every time a
+#: decision arrived without one. Its `source` column carries the sub-dataset a
+#: row came from, so the two halves are a partition of it rather than two
+#: datasets that could disagree about tokenizer, rendering or turn structure.
+#:
+#: The code half is `self-oss-instruct`: StarCoder2-generated Python answers to
+#: instructions seeded from permissively licensed repositories, execution
+#: filtered upstream. Measured at **10.30%** of the dataset over 40,000 rows,
+#: and 28.2% of those rows carry an executable assertion in the user turn --
+#: which is where this phase's "execution-tested" comes from, since nothing on
+#: this box can manufacture a test for a source that ships none.
+#:
+#: The general half is everything else, and `self-oss-instruct` is dropped from
+#: it *by name*. Left in, the same rows would be counted in both halves: the
+#: code-language shares would be a property of the general stream too, and the
+#: 65/35 the model card will claim would describe neither.
+SFT_SOURCES: Tuple[SFTSource, ...] = (
+    SFTSource(
+        key="code-self-oss-instruct",
+        half="code",
+        dataset="HuggingFaceTB/smol-smoltalk",
+        declared_license="apache-2.0",
+        source_field="source",
+        keep_sources=("self-oss-instruct",),
+        note="StarCoder2 self-alignment on permissively licensed seeds, "
+             "rendered as chat and redistributed under the subset's own "
+             "apache-2.0 declaration; 10.30% of the dataset, 28.2% of it "
+             "carrying a user-turn assertion",
+    ),
+    SFTSource(
+        key="general-smoltalk",
+        half="general",
+        dataset="HuggingFaceTB/smol-smoltalk",
+        declared_license="apache-2.0",
+        source_field="source",
+        drop_sources=("self-oss-instruct",),
+        note="the released instruct model's own SFT distribution, minus the "
+             "code half above so the two are disjoint",
+    ),
+)
+
+assert {s.key for s in SFT_SOURCES}.__len__() == len(SFT_SOURCES), \
+    "SFT source keys must be unique"
+assert all(s.license_verdict == "permissive" for s in SFT_SOURCES), \
+    "every source in the live table must declare a permissive licence"
+assert {s.half for s in SFT_SOURCES} == set(SFT_HALVES), \
+    "the plan asks for code and general SFT; both halves must be represented"
+
+
+#: Candidates measured and not used, with the measurement that decided each.
+#: Kept for `codeprep.GITHUB_CODE_LANGUAGES`' reason: these are the evidence
+#: that the pick above is a choice rather than the only thing anyone tried, and
+#: a later slice that wants more code conversations starts from here rather than
+#: from a fresh guess.
+RECORDED_ALTERNATIVES: Tuple[Tuple[str, str, str], ...] = (
+    ("HuggingFaceTB/smoltalk::self-oss-instruct", UNDECLARED_LICENSE,
+     "the same conversations, already `messages`-shaped, and the most direct "
+     "route to the code half -- refused because the card carries no licence "
+     "field and no `license:` tag at all. Its apache-2.0 subset carries the "
+     "same rows, so nothing is lost by refusing it"),
+    ("bigcode/self-oss-instruct-sc2-exec-filter-50k", "odc-by",
+     "the upstream of the code half, permissively declared and usable. Not "
+     "used because it ships `instruction`/`response` rather than messages, so "
+     "reading it would mean a second rendering of the same conversations that "
+     "could drift from the one the released instruct model saw. Its "
+     "instruction field carries a python block in 40.0% of rows and an "
+     "assertion in 32.3%, matching the chat rendering's 37.9%/28.2%"),
+    ("ise-uiuc/Magicoder-OSS-Instruct-75K", "mit",
+     "declared MIT, but generated by a proprietary model whose terms are not "
+     "the dataset's licence. Not refused by this table -- not read, either"),
+    ("HuggingFaceH4/CodeAlpaca_20K", "cc",
+     "declares the string `cc`, which names no version and no clauses. The "
+     "`unknown` verdict this module returns for it is the correct one"),
+)
+
+
+def row_messages(source: SFTSource, row) -> Tuple[Optional[List[dict]],
+                                                  Optional[str]]:
+    """`(messages, refusal)` for one raw row of `source`.
+
+    Separate from `vet_example` because the two refuse different things. This
+    decides whether a row is *for this source at all*; the gate decides whether
+    a conversation is fit to train on. Folding them together would count a row
+    belonging to the other half as a quality drop.
+    """
+
+    if not isinstance(row, collections.abc.Mapping):
+        return None, "not_a_mapping"
+    if source.source_field is not None:
+        if source.source_field not in row:
+            # The silent-failure case, and the reason the probe exists: a
+            # `source_field` the dataset does not have refuses every row, and
+            # the build then writes an empty file and exits zero.
+            return None, "no_source_field"
+        value = row.get(source.source_field)
+        if source.keep_sources and value not in source.keep_sources:
+            return None, "other_source"
+        if source.drop_sources and value in source.drop_sources:
+            return None, "other_source"
+    messages = row.get(source.messages_field)
+    if not messages:
+        return None, "no_messages"
+    try:
+        rendered = [{"role": m["role"], "content": m["content"]}
+                    for m in messages]
+    except (KeyError, TypeError):
+        return None, "no_messages"
+    return rendered, None
+
+
+#: Why a row that carries user-turn code still has no test to run.
+NO_TEST_REASONS = ("no_user_block", "ambiguous_user_block", "no_assertion")
+
+
+def shipped_test(messages: Sequence[Mapping[str, str]]
+                 ) -> Tuple[Optional[str], Optional[str]]:
+    """`(test_code, why_not)` -- the test this conversation ships, if any.
+
+    `self-oss-instruct` states its test in the *user* turn: "Your code should
+    pass the following assertion", then a fenced python block. That block is a
+    real test -- it names the function the assistant must define and asserts an
+    output -- so it is the execution evidence this phase's "execution-tested"
+    means, and it is the only such evidence available: this box cannot
+    manufacture a test for a source that ships none.
+
+    Two refusals rather than a best effort:
+
+    **An assertion is required.** A user-turn block that only *demonstrates*
+    usage runs to completion whatever the assistant wrote, so admitting it
+    would grow `execution_tested` with tests that cannot fail. A gate that
+    cannot return no is not a gate.
+
+    **Exactly one block.** Two blocks in the user turn is the `ambiguous_solution`
+    reasoning from the other side: concatenating them runs setup code as though
+    it were the assertion, and picking one is a guess about which.
+    """
+
+    blocks = [b for message in messages
+              for b in parse_markdown(message.get("content") or "",
+                                      role=message.get("role") or "").blocks
+              if (message.get("role") == "user" and b.tag == "python"
+                  and b.closed)]
+    if not blocks:
+        return None, "no_user_block"
+    if len(blocks) > 1:
+        return None, "ambiguous_user_block"
+    if "assert" not in blocks[0].source:
+        return None, "no_assertion"
+    return blocks[0].source, None
+
+
+#: Why a row never reached the admission gate. Counted apart from
+#: `ADMISSION_REASONS` so a source filter and a quality filter are never added
+#: together: `other_source` is 90% of the code half's stream by design, and
+#: folding it into the refusals would report that half as 10% admitted.
+ROW_REFUSALS = ("not_a_mapping", "no_source_field", "other_source",
+                "no_messages")
+
+
+def _stream_hub(source: SFTSource):
+    """Streaming rows of one source. Isolated so `probe_source` is testable
+    without the Hub, matching `codeprep._stream_github_code`."""
+
+    from datasets import load_dataset
+
+    return load_dataset(source.dataset, source.config, split=source.split,
+                        revision=source.revision, streaming=True)
+
+
+def probe_source(
+    source: SFTSource,
+    *,
+    rows: int = 2_000,
+    stream: Optional[Callable[[SFTSource], Iterable]] = None,
+    indexes: Optional[Mapping[str, Set[str]]] = None,
+    n: int = DEFAULT_CODE_N,
+    tokenizer=None,
+    max_len: int = DEFAULT_MAX_LEN,
+    execute: Optional[Callable[..., dict]] = None,
+    timeout_s: float = 30.0,
+    memory_mb: int = 1024,
+) -> dict:
+    """Read real rows of one source and report what the build would do with them.
+
+    `execute` is opt-in and off by default. A probe that ran every shipped test
+    would spend a process per row at up to `timeout_s` each -- minutes of
+    sandboxing to answer a question about *fields*. So the record publishes
+    `shipped_test_share` (how many admitted rows carry a runnable test) beside
+    `share_report`'s `execution_tested_share` (how many were actually run), and
+    when nothing was executed the second is zero with `executed` False rather
+    than a share that reads as a measurement.
+    """
+
+    reader = stream or _stream_hub
+    record: dict = {
+        "key": source.key, "half": source.half, "dataset": source.dataset,
+        "config": source.config, "split": source.split,
+        "declared_license": source.declared_license,
+        "license_verdict": source.license_verdict,
+        "source_field": source.source_field,
+        "keep_sources": list(source.keep_sources),
+        "drop_sources": list(source.drop_sources),
+        "rows_requested": rows, "rows_offered": 0, "rows_kept": 0,
+        "resolved": False, "executed": execute is not None,
+        "row_refusals": {reason: 0 for reason in ROW_REFUSALS},
+        "fields": [], "source_values": {},
+        "shipped_tests": 0, "shipped_tests_admitted": 0,
+        "no_test_reasons": {reason: 0 for reason in NO_TEST_REASONS},
+    }
+
+    try:
+        iterator = iter(reader(source))
+    except Exception as error:                           # noqa: BLE001
+        record["error"] = f"{type(error).__name__}: {error}"
+        return record
+
+    fields: Set[str] = set()
+    source_values: Dict[str, int] = {}
+    verdicts: List[Verdict] = []
+    for offered, row in enumerate(iterator):
+        if offered >= rows:
+            break
+        record["rows_offered"] = offered + 1
+        record["resolved"] = True
+        if isinstance(row, collections.abc.Mapping):
+            fields |= set(row)
+            if source.source_field is not None:
+                value = str(row.get(source.source_field))
+                source_values[value] = source_values.get(value, 0) + 1
+        messages, refusal = row_messages(source, row)
+        if refusal is not None:
+            record["row_refusals"][refusal] += 1
+            continue
+        record["rows_kept"] += 1
+        test_code, why_not = shipped_test(messages)
+        if test_code is None:
+            record["no_test_reasons"][why_not] += 1
+        else:
+            record["shipped_tests"] += 1
+        verdicts.append(vet_example(
+            messages, indexes=indexes, n=n, tokenizer=tokenizer,
+            max_len=max_len,
+            test_code=test_code if execute is not None else None,
+            execute=execute, timeout_s=timeout_s, memory_mb=memory_mb))
+
+    record["fields"] = sorted(fields)
+    record["source_values"] = dict(sorted(source_values.items(),
+                                          key=lambda kv: (-kv[1], kv[0])))
+    report = share_report(verdicts)
+    record["report"] = report
+    admitted = report["admitted"]
+    # Two counts, because `shipped_tests` is over *kept* rows and the share has
+    # to be over *admitted* ones to be comparable with
+    # `execution_tested_share`. Reported as one number with the other's
+    # denominator, they differ by however many test-carrying conversations the
+    # gate refused -- a real quantity that would read as an arithmetic slip.
+    record["shipped_tests_admitted"] = sum(
+        1 for v in verdicts if v.admitted and shipped_test_available(v))
+    record["shipped_test_share"] = None if not admitted else (
+        record["shipped_tests_admitted"] / admitted)
+    record["kept_share"] = (record["rows_kept"] / record["rows_offered"]
+                            if record["rows_offered"] else None)
+    return record
+
+
+def shipped_test_available(verdict: Verdict) -> bool:
+    """True when this admitted conversation carried a runnable user-turn test.
+
+    Read off the verdict's own blocks rather than recomputed from the messages,
+    so the share and the execution are answering over one parse.
+    """
+
+    blocks = [b for b in verdict.blocks
+              if b.role == "user" and b.tag == "python" and b.closed]
+    return len(blocks) == 1 and "assert" in blocks[0].source
+
+
+def probe_sources(
+    sources: Optional[Sequence[SFTSource]] = None, **kwargs
+) -> dict:
+    """`probe_source` over the table, plus what the alternatives measured."""
+
+    chosen = list(sources if sources is not None else SFT_SOURCES)
+    return {
+        "schema": SCHEMA,
+        "sources": [probe_source(source, **kwargs) for source in chosen],
+        "alternatives": [{"dataset": name, "declared_license": declared,
+                          "license_verdict": dataset_license_verdict(
+                              None if declared == UNDECLARED_LICENSE else declared),
+                          "note": note}
+                         for name, declared, note in RECORDED_ALTERNATIVES],
+    }
+
+
+def probe_problems(report: Mapping) -> List[str]:
+    """Everything in a probe that would make a build quietly produce nothing."""
+
+    problems: List[str] = []
+    halves = {half: 0 for half in SFT_HALVES}
+    for record in report.get("sources") or ():
+        key = record.get("key")
+        half = record.get("half")
+        if half in halves:
+            halves[half] += record.get("rows_kept", 0)
+        if record.get("error"):
+            problems.append(f"{key} did not resolve: {record['error']}")
+            continue
+        if not record.get("resolved"):
+            problems.append(f"{key} did not resolve: it yielded no rows at all")
+            continue
+        if record.get("license_verdict") != "permissive":
+            problems.append(
+                f"{key} declares {record.get('declared_license')!r}, which this "
+                f"module reads as {record.get('license_verdict')}")
+        refusals = record.get("row_refusals") or {}
+        if refusals.get("no_source_field"):
+            # Fatal rather than reported: the filter names a key the rows do
+            # not have, so every row is refused and the build's own counters
+            # look like an unremarkable low yield.
+            problems.append(
+                f"{key} filters on a row key {record.get('source_field')!r} "
+                f"that its rows do not have; {refusals['no_source_field']:,} of "
+                f"{record.get('rows_offered', 0):,} rows lack it")
+        if not record.get("rows_kept"):
+            problems.append(
+                f"{key} kept none of {record.get('rows_offered', 0):,} offered "
+                f"rows, so a build from it would write nothing")
+        elif not (record.get("report") or {}).get("admitted"):
+            problems.append(
+                f"{key} kept {record['rows_kept']:,} rows and the admission "
+                f"gate refused every one")
+    for half, kept in sorted(halves.items()):
+        if half in SFT_HALVES and not kept:
+            problems.append(
+                f"the {half} half kept no rows; the plan asks for code *and* "
+                f"general SFT and this probe found only one of them")
+    return problems
