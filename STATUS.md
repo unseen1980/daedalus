@@ -1,11 +1,11 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-27T02:44:42.599717Z`
+- Heartbeat: `2026-08-27T02:49:43.987922Z`
 - Phase: `phase8-probe-scoring`
 - Status: `running`
 - Source: `vast/daedalus-code-20260824` at `fcda6ceada48`
-- Elapsed: `64.0h` of `144.0h`
-- Finalization window opens in: `72.0h`
+- Elapsed: `64.09h` of `144.0h`
+- Finalization window opens in: `71.91h`
 - Deadline stage: `active`
 
 ## Lanes
@@ -29,6 +29,6 @@
 {
   "memory_total_mb": 24564,
   "memory_used_mb": 4020,
-  "utilization_pct": 97
+  "utilization_pct": 100
 }
 ```
