@@ -1,6 +1,7 @@
-"""Phase 8 gate 2's collector: four measurements read back as one branch score.
+"""Phase 8 gate 2's scoring pass and collector: five measurements, one score.
 
     python scripts/code_branch_report.py plan
+    python scripts/code_branch_report.py score --device cuda
     python scripts/code_branch_report.py verdict --json-out runs/code-probes/branch-1b-verdict.json
 
 `daedalus/code_gates.py::branch_1b_verdict` is the rule that decides whether the
@@ -43,16 +44,30 @@ scores 1.000 when prompts are well-formed, and phase 3's baseline records it at
 dropped it would pass while the thing that proves the other depths mean anything
 was failing. If it is what falls, `retrieval_drops` names it as the worst key and
 a reader sees immediately that the finding is about the harness.
+
+**`score` runs the branch's half of that pair, configured from the base's own
+cards.** The base was measured across two phases and four evaluators, and the
+knobs that fix what its numbers *are* -- `--per-depth`, the depth set, the seed,
+the generation budget, the model config, `--task-limit` -- live in its
+scorecards' provenance rather than in anyone's memory. `branch_pass_plan` reads
+them back out and builds the branch's argv from them, so the pair is comparable
+by construction instead of by a command line retyped three days later. The one
+knob no scorecard records is MQAR's query count, which only ever appears inside
+a prompt: `assert_items_reproduce` regenerates the items the settings imply and
+refuses unless their identity digest is the base card's -- on the CPU, before
+the checkpoint is loaded, rather than at the verdict after the GPU time is
+spent.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -61,15 +76,20 @@ if _ROOT not in sys.path:
 from daedalus.code_gates import (BranchScore, ProbeGateError,  # noqa: E402
                                  branch_1b_verdict)
 from daedalus.scorecard import (Scorecard, ScorecardError,  # noqa: E402
-                                item_digest, load_scorecard)
-from scripts.code_branch import BRANCH_NAME  # noqa: E402
+                                item_digest, load_scorecard, sha256_file)
+from scripts.code_branch import BRANCH_NAME, BRANCH_TOKENS  # noqa: E402
+from scripts.code_probes import (DEFAULT_MIXTURE_RECORD,  # noqa: E402
+                                 arm_is_complete)
 from scripts.code_probe_report import (BASE_MODEL, CODE_CARD,  # noqa: E402
                                        DATASETS, DEFAULT_BASE_EVAL_DIR,
                                        DEFAULT_EVAL_ROOT, GENERAL_CARD,
                                        PAIRED_RUNTIME_FIELDS,
                                        ProbeScoringError, ScoredModel,
                                        assert_paired, card_path,
-                                       read_general_bpb, read_probe_score)
+                                       execution_command, read_general_bpb,
+                                       read_probe_score, score_bpb,
+                                       score_execution, scored_from,
+                                       scoring_plan)
 from scripts.qat_recovery import FIVE_TASKS, five_task_mean  # noqa: E402
 
 
@@ -448,6 +468,413 @@ def harness_constraints(collected: CollectedScore) -> Dict[str, dict]:
     return constraints
 
 
+# ----------------------------------------------------------- scoring pass ---
+
+#: How many queries an MQAR item asks. The one harness knob no scorecard
+#: records: `retrieval_eval.py` writes the backend, the device and the
+#: generation budget into runtime and the per-depth counts into metrics, but the
+#: query count only ever appears *inside* a prompt. So it is stated here as the
+#: evaluator's own default -- which is what the base was scored with -- and
+#: `assert_items_reproduce` proves it against the base's own items before the
+#: checkpoint is loaded. A stated value checked before it costs anything is not
+#: a guess; an unchecked one rewrites every MQAR item, and the pair would be
+#: refused at the verdict, after the GPU time.
+DEFAULT_N_QUERIES = 4
+
+#: The control's items carry depth 0, so its per-depth count is
+#: `--control-items` rather than `--per-depth`.
+CONTROL_CARD = "retrieval-copy-control"
+
+
+def _one(values: Sequence, what: str):
+    """The single distinct value, or a refusal naming the disagreement."""
+
+    distinct = list(dict.fromkeys(values))
+    if len(distinct) != 1:
+        raise BranchScoringError(
+            f"the base's cards disagree on {what} ({distinct}); the branch's "
+            f"pass is configured from them, and there is no single setting "
+            f"here that would reproduce all of them")
+    if distinct[0] is None:
+        raise BranchScoringError(
+            f"the base's cards record no {what}, so the branch's pass would "
+            f"have to guess it")
+    return distinct[0]
+
+
+def per_depth_counts(card: Scorecard) -> Dict[int, int]:
+    """`{depth: items}` off a retrieval card's `n_d<depth>` metrics."""
+
+    counts = {int(key[len("n_d"):]): int(value)
+              for key, value in card.metrics.items() if key.startswith("n_d")}
+    if not counts:
+        raise BranchScoringError(
+            f"retrieval scorecard {card.name!r} has no per-depth item count, "
+            f"so the --per-depth the branch must match cannot be read from it")
+    return counts
+
+
+@dataclass(frozen=True)
+class RetrievalSettings:
+    """The `retrieval_eval.py` configuration that reproduces the base's items."""
+
+    depths: Tuple[int, ...]
+    per_depth: int
+    control_items: int
+    seed: int
+    max_new_tokens: int
+    backend: str = "torch"
+    n_queries: int = DEFAULT_N_QUERIES
+
+    def to_dict(self) -> dict:
+        return {"depths": list(self.depths), "per_depth": self.per_depth,
+                "control_items": self.control_items, "seed": self.seed,
+                "max_new_tokens": self.max_new_tokens, "backend": self.backend,
+                "n_queries": self.n_queries}
+
+
+def retrieval_settings_from(cards: Mapping[str, Scorecard], *,
+                            n_queries: int = DEFAULT_N_QUERIES
+                            ) -> RetrievalSettings:
+    """The branch's retrieval harness, read off the base's own cards.
+
+    Every value here is one a mismatch in would produce a finite, plausible,
+    wrong drop: a smaller `--per-depth` is a different denominator, a different
+    seed is different needles behind the same item ids, a shorter generation
+    budget is a different definition of an answer.
+    """
+
+    if not cards:
+        raise BranchScoringError(
+            "there is no base retrieval card to configure the branch's pass "
+            "from; a remembered command line is how a branch ends up scored at "
+            "the evaluator's default --per-depth of 10 against a base scored "
+            "at 100")
+    control = cards.get(CONTROL_CARD)
+    if control is None:
+        raise BranchScoringError(
+            f"the base has no {CONTROL_CARD} card, so --control-items would be "
+            f"a guess -- and the control is in this gate, so a branch pass that "
+            f"sized it differently could not be paired against the base at all")
+    measured = {name: card for name, card in cards.items()
+                if name != CONTROL_CARD}
+    if not measured:
+        raise BranchScoringError(
+            "the base's only retrieval card is the copy control; there is no "
+            "depth curve for the branch's pass to reproduce")
+
+    backend = _one([card.provenance.runtime.get("backend")
+                    for card in cards.values()], "the retrieval backend")
+    if backend != "torch":
+        raise BranchScoringError(
+            f"the base's retrieval cards were scored through the {backend!r} "
+            f"backend; this pass scores a PyTorch checkpoint, and a card from "
+            f"another backend is a different harness rather than a different "
+            f"model")
+    counts = {name: per_depth_counts(card) for name, card in measured.items()}
+    return RetrievalSettings(
+        depths=_one([tuple(sorted(count)) for count in counts.values()],
+                    "the depth set"),
+        per_depth=int(_one([n for count in counts.values()
+                            for n in count.values()],
+                           "the per-depth item count")),
+        control_items=int(_one(list(per_depth_counts(control).values()),
+                               f"{CONTROL_CARD}'s item count")),
+        seed=int(_one([card.provenance.seed for card in cards.values()],
+                      "the seed")),
+        max_new_tokens=int(_one([card.provenance.runtime.get("max_new_tokens")
+                                 for card in cards.values()],
+                                "max_new_tokens")),
+        backend=str(backend),
+        n_queries=int(n_queries),
+    )
+
+
+def generated_identity_digests(settings: RetrievalSettings, *,
+                               tokenizer=None) -> Dict[str, str]:
+    """The item identity digest these settings produce, per card name.
+
+    Built by running the real `score_items` over empty completions rather than
+    reading the identity fields off the items directly: the sidecar's fields are
+    whatever that function puts in a record, and a hand-written second copy of
+    that list would drift from it silently -- in the direction of a digest that
+    never matches anything and a pass that can never start.
+    """
+
+    from daedalus.retrieval import make_all_items, score_items
+
+    if tokenizer is None:
+        from daedalus.data import get_tokenizer
+
+        tokenizer = get_tokenizer()
+    generated = make_all_items(tokenizer, depths=list(settings.depths),
+                               per_depth=settings.per_depth,
+                               seed=settings.seed,
+                               n_queries=settings.n_queries,
+                               control_items=settings.control_items)
+    digests: Dict[str, str] = {}
+    for task, items in generated.items():
+        records = score_items(items, [""] * len(items))
+        for item, record in zip(items, records):
+            record["prompt"] = item.prompt
+        digests[f"retrieval-{task}"] = item_digest(
+            [{key: value for key, value in record.items()
+              if key not in RETRIEVAL_OUTCOME_FIELDS} for record in records])
+    return digests
+
+
+def assert_items_reproduce(settings: RetrievalSettings,
+                           cards: Mapping[str, Scorecard], *,
+                           tokenizer=None) -> Dict[str, str]:
+    """Refuse settings that would not regenerate the base's own items.
+
+    The verdict already refuses two retrieval cards whose items differ. This is
+    the same check moved to where it is free: item generation is seeded string
+    assembly on the CPU, so a misconfigured pass is caught in seconds instead of
+    after the branch has been generated from for an hour.
+    """
+
+    digests = generated_identity_digests(settings, tokenizer=tokenizer)
+    for name, card in sorted(cards.items()):
+        if name not in digests:
+            raise BranchScoringError(
+                f"the base has a {name} card, but these settings generate no "
+                f"such task (only {', '.join(sorted(digests))})")
+        if digests[name] != retrieval_identity_digest(card):
+            raise BranchScoringError(
+                f"{name}: these settings would score different items than the "
+                f"base's card ({digests[name]} vs "
+                f"{retrieval_identity_digest(card)}). Every setting but "
+                f"--n-queries is read off the base's own cards, so this is "
+                f"almost always the query count: the pass is configured for "
+                f"{settings.n_queries} and the base's prompts say otherwise.")
+    return digests
+
+
+def retrieval_command(model: ScoredModel, settings: RetrievalSettings, *,
+                      device: str = "cuda", config: str,
+                      python: str = sys.executable) -> List[str]:
+    """The one `retrieval_eval.py` invocation that writes all three cards."""
+
+    # Resolved beside this file rather than relative to the working directory: a
+    # phase the controller detaches is not guaranteed to be standing in the
+    # repository root, and a retrieval pass that dies on "No such file" costs
+    # the branch's scoring slot for a cwd.
+    evaluator = Path(__file__).resolve().parent / "retrieval_eval.py"
+    return [python, str(evaluator),
+            "--backend", settings.backend,
+            "--checkpoint", str(model.checkpoint),
+            "--config", str(config),
+            "--device", str(device),
+            "--depths", ",".join(str(int(depth)) for depth in settings.depths),
+            "--per-depth", str(settings.per_depth),
+            "--n-queries", str(settings.n_queries),
+            "--control-items", str(settings.control_items),
+            "--max-new-tokens", str(settings.max_new_tokens),
+            "--seed", str(settings.seed),
+            "--out-dir", str(model.out_dir)]
+
+
+def tasks_settings_from(payload: dict, path) -> dict:
+    """`eval.py`'s harness, read off the base's own payload.
+
+    `eval.py` has no task-selection flag -- it scores the same five -- so what
+    has to match is the config the checkpoint is built with, the seed, and the
+    per-task limit. The limit matters most: the base was scored on the full
+    validation splits, and a branch scored on a 500-example subset would carry
+    about two points of sampling noise against a one-point gate.
+    """
+
+    provenance = payload.get("provenance") or {}
+    config = provenance.get("config")
+    seed = provenance.get("seed")
+    if not config or seed is None:
+        raise BranchScoringError(
+            f"{path} records no config/seed, so the branch's five-task pass "
+            f"would have to be configured from memory")
+    tasks = provenance.get("tasks") or {}
+    if not tasks:
+        raise BranchScoringError(
+            f"{path} records no task provenance, so the --task-limit the "
+            f"branch must match cannot be read from it")
+    limits = list(dict.fromkeys((spec or {}).get("limit")
+                                for spec in tasks.values()))
+    if len(limits) != 1:
+        raise BranchScoringError(
+            f"{path} scored its tasks at {len(limits)} different limits "
+            f"({limits}); there is no single --task-limit that reproduces it")
+    return {"config": str(config), "seed": int(seed), "task_limit": limits[0],
+            "device": provenance.get("device")}
+
+
+def tasks_command(model: ScoredModel, settings: Mapping[str, object], *,
+                  device: Optional[str] = None, out: Optional[str] = None,
+                  python: str = sys.executable) -> List[str]:
+    """The `eval.py` argv for the branch's five-task pass.
+
+    `--no-wandb`, deliberately: this is a scoring pass whose output is a file
+    the gate reads, and a run that can fail on a network call is a run that can
+    lose an hour of scoring to something that has nothing to do with the model.
+    """
+
+    command = [python, str(Path(_ROOT) / "eval.py"),
+               "--config", str(settings["config"]),
+               "--checkpoints", str(model.checkpoint),
+               "--device", str(device or settings.get("device") or "cuda"),
+               "--seed", str(settings["seed"]),
+               "--out", str(out or default_tasks_path(model.out_dir)),
+               "--no-wandb"]
+    if settings.get("task_limit"):
+        command += ["--task-limit", str(int(settings["task_limit"]))]
+    return command
+
+
+def branch_pass_plan(model: ScoredModel, base: CollectedScore, *,
+                     device: str = "cuda",
+                     n_queries: int = DEFAULT_N_QUERIES) -> dict:
+    """Every command the branch's scoring pass will run, and what fixed it.
+
+    Assembled before anything is spent, and printed by `plan`, so the harness
+    the branch will be measured with is reviewable against the base's
+    provenance rather than after the fact against its cards.
+    """
+
+    config = _one([card.provenance.artifact.config
+                   for card in (*base.execution_cards.values(),
+                                *base.retrieval_cards.values())],
+                  "the model config")
+    execution_seed = int(_one([card.provenance.seed
+                               for card in base.execution_cards.values()],
+                              "the execution seed"))
+    retrieval = retrieval_settings_from(base.retrieval_cards,
+                                        n_queries=n_queries)
+    tasks_path = base.cards[TASKS_CARD]
+    tasks = tasks_settings_from(read_tasks_payload(tasks_path), tasks_path)
+    return {
+        "config": str(config),
+        "device": device,
+        "execution_seed": execution_seed,
+        "retrieval": retrieval,
+        "tasks": tasks,
+        "commands": {
+            "tasks": tasks_command(model, tasks, device=device),
+            "retrieval": retrieval_command(model, retrieval, device=device,
+                                           config=config),
+            **{dataset: execution_command(model, dataset, device=device,
+                                          config=str(config),
+                                          seed=execution_seed)
+               for dataset in sorted(base.execution_cards)},
+        },
+    }
+
+
+def tasks_scored_from(path, checkpoint_sha: str) -> bool:
+    """True when this `eval.py` payload already scores exactly these bytes.
+
+    `scored_from`'s counterpart for the one input that is not a scorecard.
+    """
+
+    try:
+        return tasks_artifact_sha256(read_tasks_payload(path),
+                                     path) == checkpoint_sha
+    except BranchScoringError:
+        return False
+
+
+def _run_subprocess(command: Sequence[str]) -> int:
+    return subprocess.run([str(part) for part in command], cwd=_ROOT).returncode
+
+
+def _run_step(runner: Optional[Callable[[Sequence[str]], int]],
+              command: Sequence[str], *, what: str) -> None:
+    code = (runner or _run_subprocess)(command)
+    if code != 0:
+        raise BranchScoringError(
+            f"{what} exited {code}; command was "
+            f"{' '.join(str(part) for part in command)}")
+
+
+def score_branch(model: ScoredModel, *, base: CollectedScore, bpb_plan: dict,
+                 pass_plan: Optional[dict] = None, device: str = "cuda",
+                 batch_size: int = 8, n_queries: int = DEFAULT_N_QUERIES,
+                 total_tokens: Optional[int] = BRANCH_TOKENS,
+                 run_dir=None, refresh: bool = False, tokenizer=None,
+                 runner: Optional[Callable[[Sequence[str]], int]] = None
+                 ) -> dict:
+    """Write the branch's five cards with the harness the base's cards fix.
+
+    Re-entrant on the same terms as the probe pass: a card is reused only when
+    the bytes it scored are the bytes on disk now, so a session that ends
+    mid-pass costs the one measurement it was on rather than the whole set.
+    """
+
+    checkpoint = Path(model.checkpoint)
+    if not checkpoint.exists():
+        raise BranchScoringError(
+            f"{model.name} has no checkpoint at {checkpoint}; it either never "
+            f"ran or its run directory was moved")
+    digest = sha256_file(checkpoint)
+    if digest == base.sha256:
+        raise BranchScoringError(
+            f"{model.name}'s checkpoint is the base ({digest[:12]}); this gate "
+            f"measures what 1B tokens of continued pretraining changed, so "
+            f"scoring it would spend the pass to measure nothing")
+    if total_tokens:
+        directory = Path(run_dir) if run_dir else checkpoint.parent
+        if not arm_is_complete(directory, int(total_tokens)):
+            raise BranchScoringError(
+                f"{directory} has not trained its {int(total_tokens):,}-token "
+                f"budget. A checkpoint is written throughout a run, so its "
+                f"existence says 'this can be resumed', not 'this is done' -- "
+                f"and gating the branch on a model that is still training is a "
+                f"verdict about a checkpoint nobody can name.")
+
+    pass_plan = pass_plan or branch_pass_plan(model, base, device=device,
+                                              n_queries=n_queries)
+    # Before the checkpoint is loaded: seconds of CPU against an hour of GPU.
+    assert_items_reproduce(pass_plan["retrieval"], base.retrieval_cards,
+                           tokenizer=tokenizer)
+
+    config = pass_plan["config"]
+    # BPB first. It is the one pass that runs in-process, and it releases the
+    # device in its own `finally`, so the subprocesses below never land on a
+    # card that is still holding a model.
+    bpb = score_bpb(model, plan=bpb_plan, config=config, device=device,
+                    batch_size=batch_size, refresh=refresh)
+    execution = score_execution(model, datasets=tuple(sorted(base.execution_cards)),
+                                device=device, config=config,
+                                seed=pass_plan["execution_seed"],
+                                refresh=refresh, runner=runner)
+
+    ran: Dict[str, dict] = {}
+    tasks_path = default_tasks_path(model.out_dir)
+    if refresh or not tasks_scored_from(tasks_path, digest):
+        command = pass_plan["commands"]["tasks"]
+        _run_step(runner, command, what=f"{model.name}'s five-task pass")
+        ran["tasks"] = {"card": tasks_path, "command": list(command)}
+    else:
+        ran["tasks"] = {"card": tasks_path, "skipped": "already-scored"}
+
+    cards = {name: str(card_path(model, name))
+             for name in sorted(base.retrieval_cards)}
+    stale = [name for name, path in cards.items()
+             if refresh or not scored_from(path, digest)]
+    if stale:
+        # One invocation writes all three cards, so a single stale card
+        # rescores the set rather than leaving two of them from other bytes.
+        command = pass_plan["commands"]["retrieval"]
+        _run_step(runner, command, what=f"{model.name}'s retrieval pass")
+        ran["retrieval"] = {"cards": cards, "command": list(command),
+                            "rescored": stale}
+    else:
+        ran["retrieval"] = {"cards": cards, "skipped": "already-scored"}
+
+    return {"model": model.name, "checkpoint_sha256": digest, "config": config,
+            "retrieval_settings": pass_plan["retrieval"].to_dict(),
+            "tasks_settings": dict(pass_plan["tasks"]),
+            "bpb": bpb, "execution": execution["execution"], "ran": ran}
+
+
 # ------------------------------------------------------------------- gate ---
 
 def build_branch_verdict(base: CollectedScore, branch: CollectedScore) -> dict:
@@ -517,8 +944,42 @@ def _write_json(path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
+def _load_mixture(path) -> dict:
+    try:
+        with open(path) as handle:
+            record = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BranchScoringError(f"cannot read the mixture record {path}: "
+                                 f"{exc}") from exc
+    if not isinstance(record, dict) or not record.get("holdout_root"):
+        raise BranchScoringError(
+            f"{path} names no holdout_root; the branch's two BPB cards are "
+            f"aggregated over its sources")
+    return record
+
+
+def _print_pass(model: ScoredModel, base: CollectedScore, a) -> None:
+    """What `score` would run for this branch, and what fixed each setting."""
+
+    try:
+        plan = branch_pass_plan(model, base, device=a.device,
+                                n_queries=a.n_queries)
+    except (BranchScoringError, ProbeScoringError) as exc:
+        print(f"\nthe branch's pass cannot be configured: {exc}")
+        return
+    settings = plan["retrieval"]
+    print(f"\n=== the branch's scoring pass ({model.name}) ===")
+    print(f"  config {plan['config']}, execution seed "
+          f"{plan['execution_seed']}, task limit "
+          f"{plan['tasks']['task_limit'] or 'full splits'}")
+    print(f"  retrieval {json.dumps(settings.to_dict(), sort_keys=True)}")
+    for label, command in plan["commands"].items():
+        print(f"  {label:16s} {' '.join(str(part) for part in command)}")
+
+
 def _plan(a) -> int:
     base, branch = _models(a)
+    collected_base: Optional[CollectedScore] = None
     ready = True
     for model, is_base in ((base, True), (branch, False)):
         paths = input_paths(
@@ -542,6 +1003,8 @@ def _plan(a) -> int:
             ready = False
             print(f"  REFUSE: {exc}")
             continue
+        if is_base:
+            collected_base = collected
         print(f"  checkpoint {collected.sha256[:12]}, "
               f"code BPB {collected.score.code_bpb:.4f}, "
               f"general BPB {collected.score.general_bpb:.4f}, "
@@ -549,10 +1012,33 @@ def _plan(a) -> int:
               f"{len(collected.score.retrieval)} retrieval depth(s)")
         for name, entry in harness_constraints(collected).items():
             print(f"      {name:24s} {json.dumps(entry, sort_keys=True)}")
+    if collected_base is not None:
+        _print_pass(branch, collected_base, a)
     print("\nboth sides are ready" if ready else
-          "\nnot ready: the branch is scored by the pass that writes the cards "
-          "marked M above, with the harness settings printed for the base")
+          "\nnot ready: the branch is scored by `score`, which writes the cards "
+          "marked M above with the harness the base's own cards fix")
     return 0 if ready else 1
+
+
+def _score(a) -> int:
+    base, branch = _models(a)
+    try:
+        collected_base = _collect_args(a, base, is_base=True)
+        record = _load_mixture(a.mixture_record)
+        outcome = score_branch(
+            branch, base=collected_base,
+            bpb_plan=scoring_plan(record, record["holdout_root"]),
+            device=a.device, batch_size=a.batch_size, n_queries=a.n_queries,
+            total_tokens=a.total_tokens, run_dir=a.run_dir, refresh=a.refresh)
+    except (BranchScoringError, ProbeGateError, ProbeScoringError,
+            ScorecardError, OSError, ValueError, KeyError) as exc:
+        print(f"REFUSE: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(outcome, indent=2, sort_keys=True, default=str),
+          flush=True)
+    # The gate, on the cards this pass just wrote -- including the pairing
+    # checks, which are the only place a scored branch is proved comparable.
+    return _verdict(a)
 
 
 def _verdict(a) -> int:
@@ -614,9 +1100,36 @@ def _cli(argv=None) -> int:
         parser.add_argument("--branch-retrieval", action="append", default=None)
 
     plan = sub.add_parser("plan", help="which cards exist, and what the branch "
-                                       "pass must match")
+                                       "pass would run")
     shared(plan)
+    plan.add_argument("--device", default="cuda")
+    plan.add_argument("--n-queries", type=int, default=DEFAULT_N_QUERIES)
     plan.set_defaults(fn=_plan)
+
+    score = sub.add_parser("score", help="write the branch's cards, then run "
+                                         "the gate on them")
+    shared(score)
+    score.add_argument("--mixture-record", default=DEFAULT_MIXTURE_RECORD)
+    score.add_argument("--device", default="cuda")
+    score.add_argument("--batch-size", type=int, default=8)
+    score.add_argument(
+        "--n-queries", type=int, default=DEFAULT_N_QUERIES,
+        help="MQAR queries per item; the only retrieval setting not read off "
+             "the base's cards, and checked against its items before anything "
+             "is spent")
+    score.add_argument(
+        "--total-tokens", type=int, default=BRANCH_TOKENS,
+        help="refuse to score until the run has trained this budget; 0 scores "
+             "whatever is on disk")
+    score.add_argument(
+        "--run-dir", default=None,
+        help="where the branch's metrics.jsonl is (default: beside its "
+             "checkpoint)")
+    score.add_argument("--refresh", action="store_true",
+                       help="re-measure even when a card already scores these "
+                            "exact bytes")
+    score.add_argument("--json-out", default=DEFAULT_VERDICT)
+    score.set_defaults(fn=_score)
 
     verdict = sub.add_parser("verdict", help="the 1B gate from existing cards")
     shared(verdict)

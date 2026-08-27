@@ -19,16 +19,20 @@ payload, so the fixtures write them.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
 from daedalus.scorecard import (ArtifactRef, Provenance, Scorecard,
-                                write_scorecard)
+                                sha256_file, write_scorecard)
+from scripts.code_branch import BRANCH_TOKENS
 from scripts.code_branch_report import (BranchScoringError, CollectedScore,
                                         DEFAULT_BASE_RETRIEVAL_DIR,
-                                        RETRIEVAL_TASKS, _cli,
+                                        RETRIEVAL_TASKS, RetrievalSettings,
+                                        _cli, assert_items_reproduce,
                                         assert_one_artifact,
                                         assert_retrieval_paired,
+                                        branch_pass_plan,
                                         build_branch_verdict, collect,
                                         default_retrieval_paths,
                                         five_task_scores, harness_constraints,
@@ -37,8 +41,12 @@ from scripts.code_branch_report import (BranchScoringError, CollectedScore,
                                         read_tasks_payload,
                                         retrieval_identity_digest,
                                         retrieval_scores,
-                                        tasks_artifact_sha256)
+                                        retrieval_settings_from, score_branch,
+                                        tasks_artifact_sha256,
+                                        tasks_scored_from, tasks_settings_from)
 from scripts.code_probe_report import BASE_MODEL, ScoredModel
+
+_sha = sha256_file
 
 BASE_SHA = "b" * 64
 BRANCH_SHA = "c" * 64
@@ -117,13 +125,17 @@ def _retrieval_card(path, task, sha, *, exact=None, depths=DEPTHS, per_depth=2,
         else _retrieval_items(task, depths=depths, per_depth=per_depth)))
 
 
-def _tasks_payload(sha, *, mean=0.45, drop=None):
+def _tasks_payload(sha, *, mean=0.45, drop=None, config="daedalus-150m",
+                   seed=SEED, limit=None, device="cuda"):
     scores = {task: mean for task in
               ("hellaswag", "arc_easy", "piqa", "openbookqa", "winogrande")}
     if drop:
         scores.pop(drop)
     return {"provenance": {"checkpoints": [{"path": "checkpoint.pt",
-                                            "sha256": sha}]},
+                                            "sha256": sha}],
+                           "config": config, "seed": seed, "device": device,
+                           "tasks": {task: {"limit": limit}
+                                     for task in scores}},
             "mean": {**scores, "hellaswag_n": 10042.0}}
 
 
@@ -501,6 +513,360 @@ def test_execution_cards_from_different_harnesses_are_refused(tmp_path):
     from scripts.code_probe_report import ProbeScoringError
     with pytest.raises(ProbeScoringError, match="not comparable"):
         build_branch_verdict(_collect(base), _collect(branch))
+
+
+# ------------------------------------------------------------ scoring pass ---
+# The pass writes the branch's half of the pair. Everything below is about it
+# being configured from the base's own cards rather than from a command line
+# retyped days later, because every knob that differs between the two sides is a
+# difference in the harness that the gate would read as a difference in the
+# model -- and the expensive version of finding out is at the verdict, after the
+# GPU time.
+
+
+class WhitespaceTokenizer:
+    """Words as tokens: deterministic, and enough for the item generators."""
+
+    def encode(self, text, add_special_tokens=False):
+        return text.split()
+
+    def decode(self, ids):
+        return " ".join(ids)
+
+
+GEN_DEPTHS = (128, 256)
+
+
+def _generated_retrieval(out_dir, sha, *, depths=GEN_DEPTHS, per_depth=2,
+                         control_items=2, n_queries=4, seed=SEED,
+                         max_new_tokens=24, correct=True):
+    """Real generator output, written as the cards `retrieval_eval.py` writes.
+
+    The identity check regenerates items and compares digests, so a fixture of
+    hand-written items could only ever fail it. These are the real ones.
+    """
+
+    from daedalus.retrieval import make_all_items, score_items, summarize
+
+    items_by_task = make_all_items(WhitespaceTokenizer(), depths=list(depths),
+                                   per_depth=per_depth, seed=seed,
+                                   n_queries=n_queries,
+                                   control_items=control_items)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for task, items in items_by_task.items():
+        records = score_items(items, [item.answer if correct else ""
+                                      for item in items])
+        for item, record in zip(items, records):
+            record["prompt"] = item.prompt
+        write_scorecard(out_dir / f"retrieval-{task}.json", Scorecard(
+            kind="retrieval", name=f"retrieval-{task}",
+            provenance=_provenance(sha, seed=seed,
+                                   runtime={"backend": "torch",
+                                            "device": "cuda",
+                                            "max_new_tokens": max_new_tokens}),
+            metrics=summarize(items, records),
+            created_at="2026-08-27T00:00:00Z", items=records))
+    return sorted(f"retrieval-{task}" for task in items_by_task)
+
+
+def _base_with_real_items(tmp_path, sha=BASE_SHA, **over):
+    """A full base card set whose retrieval cards came from the generator."""
+
+    model = _write_model(tmp_path, "base", sha)
+    for stale in ("passkey", "mqar"):
+        (tmp_path / "base" / f"retrieval-{stale}.json").unlink()
+        (tmp_path / "base" / f"retrieval-{stale}.items.json").unlink()
+    names = _generated_retrieval(tmp_path / "base", sha, **over)
+    return model, collect(model, tasks=f"{model.out_dir}/tasks.json",
+                          retrieval=[f"{model.out_dir}/{name}.json"
+                                     for name in names])
+
+
+def _branch_model(tmp_path, *, name="code-branch-1b", body=b"branch weights",
+                  tokens=BRANCH_TOKENS):
+    """A branch checkpoint on disk, with the metrics row that says it finished."""
+
+    run_dir = tmp_path / "runs" / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint = run_dir / "checkpoint.pt"
+    checkpoint.write_bytes(body)
+    if tokens is not None:
+        (run_dir / "metrics.jsonl").write_text(
+            json.dumps({"step": 1, "tokens": tokens}) + "\n")
+    out_dir = tmp_path / "eval" / name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return ScoredModel(name=name, checkpoint=str(checkpoint),
+                       out_dir=str(out_dir))
+
+
+def _recording_runner(codes=None):
+    commands = []
+
+    def run(command):
+        commands.append([str(part) for part in command])
+        return (codes or {}).get(Path(str(command[1])).name, 0)
+
+    return commands, run
+
+
+def test_retrieval_settings_are_read_off_the_base_cards(tmp_path):
+    _, base = _base_with_real_items(tmp_path, per_depth=3, control_items=5,
+                                    max_new_tokens=32)
+
+    settings = retrieval_settings_from(base.retrieval_cards)
+
+    assert settings.depths == GEN_DEPTHS
+    assert settings.per_depth == 3
+    assert settings.control_items == 5
+    assert settings.max_new_tokens == 32
+    assert settings.seed == SEED
+    assert settings.backend == "torch"
+
+
+def test_retrieval_settings_refuse_cards_scored_at_different_seeds(tmp_path):
+    _, base = _base_with_real_items(tmp_path)
+    reseeded = dict(base.retrieval_cards)
+    card = reseeded["retrieval-passkey"]
+    reseeded["retrieval-passkey"] = Scorecard(
+        kind=card.kind, name=card.name,
+        provenance=_provenance(BASE_SHA, seed=7,
+                               runtime=dict(card.provenance.runtime)),
+        metrics=card.metrics, created_at=card.created_at, items=card.items)
+
+    with pytest.raises(BranchScoringError, match="disagree on the seed"):
+        retrieval_settings_from(reseeded)
+
+
+def test_retrieval_settings_refuse_a_ragged_per_depth(tmp_path):
+    """`retrieval_eval.py` scores one --per-depth for every depth."""
+    _, base = _base_with_real_items(tmp_path)
+    card = base.retrieval_cards["retrieval-mqar"]
+    metrics = {**card.metrics, "n_d256": 1.0}
+    ragged = {**base.retrieval_cards, "retrieval-mqar": Scorecard(
+        kind=card.kind, name=card.name, provenance=card.provenance,
+        metrics=metrics, created_at=card.created_at, items=card.items)}
+
+    with pytest.raises(BranchScoringError, match="per-depth item count"):
+        retrieval_settings_from(ragged)
+
+
+def test_retrieval_settings_refuse_a_missing_copy_control(tmp_path):
+    """--control-items would be a guess, and the control is in this gate."""
+    _, base = _base_with_real_items(tmp_path)
+    without = {name: card for name, card in base.retrieval_cards.items()
+               if name != "retrieval-copy-control"}
+
+    with pytest.raises(BranchScoringError, match="control-items"):
+        retrieval_settings_from(without)
+
+
+def test_retrieval_settings_refuse_a_llama_cpp_base(tmp_path):
+    """A GGUF card is a different harness, not a different model."""
+    _, base = _base_with_real_items(tmp_path)
+    swapped = {name: Scorecard(
+        kind=card.kind, name=card.name,
+        provenance=_provenance(BASE_SHA, seed=SEED,
+                               runtime={"backend": "llama-cpp",
+                                        "max_new_tokens": 24}),
+        metrics=card.metrics, created_at=card.created_at, items=card.items)
+        for name, card in base.retrieval_cards.items()}
+
+    with pytest.raises(BranchScoringError, match="llama-cpp"):
+        retrieval_settings_from(swapped)
+
+
+def test_the_settings_regenerate_the_bases_own_items(tmp_path):
+    _, base = _base_with_real_items(tmp_path)
+    settings = retrieval_settings_from(base.retrieval_cards)
+
+    digests = assert_items_reproduce(settings, base.retrieval_cards,
+                                     tokenizer=WhitespaceTokenizer())
+
+    assert sorted(digests) == ["retrieval-copy-control", "retrieval-mqar",
+                               "retrieval-passkey"]
+
+
+def test_the_one_unrecorded_knob_is_caught_before_the_model_loads(tmp_path):
+    """--n-queries appears only inside a prompt, so the items are the check."""
+    _, base = _base_with_real_items(tmp_path, n_queries=4)
+    settings = retrieval_settings_from(base.retrieval_cards, n_queries=3)
+
+    with pytest.raises(BranchScoringError,
+                       match="retrieval-mqar: these settings would score"):
+        assert_items_reproduce(settings, base.retrieval_cards,
+                               tokenizer=WhitespaceTokenizer())
+
+
+def test_a_reseeded_pass_is_caught_by_the_item_digest(tmp_path):
+    _, base = _base_with_real_items(tmp_path, seed=SEED)
+    settings = retrieval_settings_from(base.retrieval_cards)
+    reseeded = RetrievalSettings(
+        depths=settings.depths, per_depth=settings.per_depth,
+        control_items=settings.control_items, seed=SEED + 1,
+        max_new_tokens=settings.max_new_tokens)
+
+    with pytest.raises(BranchScoringError, match="would score different items"):
+        assert_items_reproduce(reseeded, base.retrieval_cards,
+                               tokenizer=WhitespaceTokenizer())
+
+
+def test_the_branch_pass_plan_carries_every_derived_setting(tmp_path):
+    _, base = _base_with_real_items(tmp_path, per_depth=3, control_items=5)
+    branch = _branch_model(tmp_path)
+
+    plan = branch_pass_plan(branch, base, device="cuda")
+    retrieval = " ".join(plan["commands"]["retrieval"])
+    tasks = " ".join(plan["commands"]["tasks"])
+
+    assert plan["config"] == "daedalus-150m"
+    assert "--per-depth 3" in retrieval and "--control-items 5" in retrieval
+    assert "--depths 128,256" in retrieval and "--n-queries 4" in retrieval
+    assert f"--seed {SEED}" in retrieval and "--max-new-tokens 24" in retrieval
+    assert f"--out-dir {branch.out_dir}" in retrieval
+    assert f"--checkpoints {branch.checkpoint}" in tasks
+    assert "--no-wandb" in tasks
+    # The base scored the full validation splits, so the branch must too.
+    assert "--task-limit" not in tasks
+    assert "humaneval-plus" in plan["commands"]
+
+
+def test_a_task_limit_the_base_used_is_carried_into_the_branch(tmp_path):
+    model, base = _base_with_real_items(tmp_path)
+    (tmp_path / "base" / "tasks.json").write_text(
+        json.dumps(_tasks_payload(BASE_SHA, limit=500)))
+    base = collect(model, tasks=f"{model.out_dir}/tasks.json",
+                   retrieval=[f"{model.out_dir}/retrieval-{task}.json"
+                              for task in RETRIEVAL_TASKS])
+
+    plan = branch_pass_plan(_branch_model(tmp_path), base)
+
+    assert "--task-limit 500" in " ".join(plan["commands"]["tasks"])
+
+
+def test_score_branch_runs_the_passes_the_branch_has_no_card_for(tmp_path):
+    _, base = _base_with_real_items(tmp_path)
+    branch = _branch_model(tmp_path)
+    _bpb_card(Path(branch.out_dir) / "code-bpb.json", "code-bpb",
+              _sha(branch.checkpoint), 1.10)
+    _bpb_card(Path(branch.out_dir) / "general-bpb.json", "general-bpb",
+              _sha(branch.checkpoint), 3.85)
+    commands, runner = _recording_runner()
+
+    outcome = score_branch(branch, base=base, bpb_plan={},
+                           tokenizer=WhitespaceTokenizer(), runner=runner)
+
+    assert outcome["bpb"]["skipped"] == "already-scored"
+    assert [Path(command[1]).name for command in commands] == [
+        "code_eval.py", "code_eval.py", "eval.py", "retrieval_eval.py"]
+    assert outcome["ran"]["retrieval"]["rescored"] == [
+        "retrieval-copy-control", "retrieval-mqar", "retrieval-passkey"]
+
+
+def test_score_branch_reuses_cards_that_score_exactly_these_bytes(tmp_path):
+    _, base = _base_with_real_items(tmp_path)
+    branch = _branch_model(tmp_path)
+    digest = _sha(branch.checkpoint)
+    for name, value in (("code-bpb", 1.10), ("general-bpb", 3.85)):
+        _bpb_card(Path(branch.out_dir) / f"{name}.json", name, digest, value)
+    for dataset in ("humaneval-plus", "mbpp-plus"):
+        _execution_card(Path(branch.out_dir) / f"{dataset}.json", dataset,
+                        digest, n=164 if dataset == "humaneval-plus" else 378)
+    (Path(branch.out_dir) / "tasks.json").write_text(
+        json.dumps(_tasks_payload(digest)))
+    _generated_retrieval(Path(branch.out_dir), digest)
+    commands, runner = _recording_runner()
+
+    outcome = score_branch(branch, base=base, bpb_plan={},
+                           tokenizer=WhitespaceTokenizer(), runner=runner)
+
+    assert commands == []
+    assert outcome["ran"]["tasks"]["skipped"] == "already-scored"
+    assert outcome["ran"]["retrieval"]["skipped"] == "already-scored"
+
+
+def test_score_branch_refuses_a_checkpoint_that_is_the_base(tmp_path):
+    _, base = _base_with_real_items(tmp_path)
+    branch = _branch_model(tmp_path)
+    Path(branch.checkpoint).write_bytes(b"base weights")
+    trimmed = CollectedScore(score=base.score, sha256=_sha(branch.checkpoint),
+                             cards=base.cards,
+                             retrieval_cards=base.retrieval_cards,
+                             execution_cards=base.execution_cards,
+                             details=base.details)
+    commands, runner = _recording_runner()
+
+    with pytest.raises(BranchScoringError, match="is the base"):
+        score_branch(branch, base=trimmed, bpb_plan={},
+                     tokenizer=WhitespaceTokenizer(), runner=runner)
+    assert commands == []
+
+
+def test_score_branch_refuses_a_run_that_has_not_reached_its_budget(tmp_path):
+    """A checkpoint is written throughout a run; existence is not completion."""
+    _, base = _base_with_real_items(tmp_path)
+    branch = _branch_model(tmp_path, tokens=250_000_000)
+    commands, runner = _recording_runner()
+
+    with pytest.raises(BranchScoringError, match="1,000,000,000-token budget"):
+        score_branch(branch, base=base, bpb_plan={},
+                     tokenizer=WhitespaceTokenizer(), runner=runner)
+    assert commands == []
+
+
+def test_score_branch_refuses_a_missing_checkpoint(tmp_path):
+    _, base = _base_with_real_items(tmp_path)
+    branch = _branch_model(tmp_path)
+    Path(branch.checkpoint).unlink()
+
+    with pytest.raises(BranchScoringError, match="no checkpoint"):
+        score_branch(branch, base=base, bpb_plan={},
+                     tokenizer=WhitespaceTokenizer())
+
+
+def test_score_branch_refuses_misconfigured_settings_before_any_pass(tmp_path):
+    """The item check runs before the checkpoint is loaded, not after."""
+    _, base = _base_with_real_items(tmp_path, n_queries=4)
+    branch = _branch_model(tmp_path)
+    commands, runner = _recording_runner()
+
+    with pytest.raises(BranchScoringError, match="would score different items"):
+        score_branch(branch, base=base, bpb_plan={}, n_queries=2,
+                     tokenizer=WhitespaceTokenizer(), runner=runner)
+    assert commands == []
+
+
+def test_a_failed_pass_is_raised_with_its_command(tmp_path):
+    _, base = _base_with_real_items(tmp_path)
+    branch = _branch_model(tmp_path)
+    for name, value in (("code-bpb", 1.10), ("general-bpb", 3.85)):
+        _bpb_card(Path(branch.out_dir) / f"{name}.json", name,
+                  _sha(branch.checkpoint), value)
+    for dataset in ("humaneval-plus", "mbpp-plus"):
+        _execution_card(Path(branch.out_dir) / f"{dataset}.json", dataset,
+                        _sha(branch.checkpoint),
+                        n=164 if dataset == "humaneval-plus" else 378)
+    commands, runner = _recording_runner({"eval.py": 3})
+
+    with pytest.raises(BranchScoringError, match="five-task pass exited 3"):
+        score_branch(branch, base=base, bpb_plan={},
+                     tokenizer=WhitespaceTokenizer(), runner=runner)
+
+
+def test_tasks_scored_from_keys_on_the_checkpoint_digest(tmp_path):
+    path = tmp_path / "tasks.json"
+    path.write_text(json.dumps(_tasks_payload(BRANCH_SHA)))
+
+    assert tasks_scored_from(path, BRANCH_SHA) is True
+    assert tasks_scored_from(path, BASE_SHA) is False
+    assert tasks_scored_from(tmp_path / "absent.json", BRANCH_SHA) is False
+
+
+def test_tasks_settings_refuse_a_payload_with_mixed_limits(tmp_path):
+    payload = _tasks_payload(BASE_SHA)
+    payload["provenance"]["tasks"]["piqa"]["limit"] = 500
+
+    with pytest.raises(BranchScoringError, match="different limits"):
+        tasks_settings_from(payload, "tasks.json")
 
 
 # --------------------------------------------------------------------- cli ---
