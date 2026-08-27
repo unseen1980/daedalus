@@ -322,6 +322,40 @@ The alternatives are recorded with the measurement that decided each, so a later
 
 Record in `runs/code-sft/probe.json`, with the Hub metadata and row-shape checks that chose the table in `hub-check.json`, `hub-rows.json` and `hub-shape.json` beside it. 64 focused tests; 282 across `code_sft`, `code_gates`, `chatml`, `post` and `codeprep`.
 
+### Building the set the gate admits
+
+`scripts/code_sft.py build` is the pass the probe authorises: the same rows through the same gate, with what passes written once to `train.jsonl`, `holdout.jsonl` and a manifest carrying every count step 6 is asked to track.
+
+It is a build to disk rather than a filter inside the training loop, for two reasons that are not tidiness. Execution costs a sandboxed process per shipped test, and a training step waiting on one is a GPU idling behind a CPU fork — the same argument that put `dataprep` before `train.py` rather than inside it. And a stream filtered live is a different corpus on every run: the admitted set would depend on the order rows happened to arrive in, so no two arms of a comparison would train on the same data and nothing would say so.
+
+**The share is borrowed and the budget is not, so the budget is what gives way.** 65% code is the continued-pretraining corpus's own preregistered figure, and `SFT_SOURCES` already records it as the thing keeping the halves disjoint makes true. It is measured in **supervised tokens**, not conversations — the two halves average 186 and 121 supervised tokens per admitted conversation, so an example-counted 65/35 is a token-counted 72/28. The 8M total is this build's *own* default and a flag: the plan names step 6's filter and what to track, not how much to build, and inventing a preregistered-looking number for it would be the one thing this phase has refused to do everywhere else. So a half whose stream runs short **trims the other** rather than shipping a correctly sized set at a mixture nobody chose, and `build_problems` reports it.
+
+Short is read off the **fill** stage, not off what survived the trim, and that distinction is the one defect the tests caught. Filling stops at the first conversation that reaches the budget, so a half that met it lands a few tokens over; the trim then cuts both halves to exactly proportional and lands a few tokens under. Comparing the trimmed figure against the budget reported every healthy build as short by one conversation — and buried the case the clause exists for, which is a half whose stream ran out.
+
+**The holdout is taken first and does not spend the budget.** Off the head of the same stream, so a held-out conversation is one no epoch can reach: `post.take_eval_pairs`' property, for its reason. Held out any other way, the evaluation relies on two reads of a streaming dataset agreeing about order, and when they quietly disagree it scores conversations the model trained on.
+
+**One pass, and a row two sources claim is fatal.** Both halves are views of one dataset, so they are grouped by what they read and served by a single pass. Two reads are two chances for a Hub-side change between them to make the halves overlap. A row claimed by two sources is counted and refused rather than assigned: whichever half it went to, the shares would describe a corpus nobody built, and a best-effort assignment throws away the count that would say so.
+
+**Counters, not verdicts.** A `Verdict` carries every parsed block's source text, so a list of them over a few hundred thousand streamed rows is the corpus held in memory — the growth the resident-memory caps exist to catch. `ShareAccumulator` is `share_report`'s own counts fed one verdict at a time, and `share_report` delegates to it, so there is one implementation rather than a streaming copy free to disagree with the probe that authorised the build. `source_problems` is shared between probe and build for the same reason.
+
+Four refusals before anything is written: no tokenizer (the mixture is measured in supervised tokens, and `over_token_budget` is the only place an example the encoder would silently drop gets a reason), no decontamination indexes (an SFT set built without them is training data carrying the benchmarks this phase is gated on, under a gate that reads "pass@1 improves over base"), a share over a half with no source, and an existing built set that would be silently replaced. The probe's `--no-decontam` and `--no-tokenizer` are deliberately **not offered** here: they exist to check a source's shape, and nothing should train on the result.
+
+**The `-6` trap recorded above is closed rather than worked around.** pyarrow aborts in `PyGILState_Release` during interpreter finalization, *after* everything is written, so a probe that succeeded still reported failure to the controller. `__main__` now flushes and exits on its own return code without finalizing. The controller reads a phase's exit status to decide whether the work happened, and this build is the longest thing in step 6.
+
+**Smoked end to end** against the real sources, real indexes, real tokenizer and the real sandbox, bounded at 20,000 supervised tokens and written to `runs/code-sft/smoke` — deliberately not `data/code-sft`, so a smoke cannot be read as the set the SFT run trains on:
+
+| | code | general |
+| --- | ---: | ---: |
+| rows offered (one pass, 825 rows) | 84 kept of 825 | 190 kept of 825 |
+| admitted | 75 (89.3% of kept) | 61 (32.1% of kept) |
+| supervised tokens | 13,009 of a 13,000 budget | 7,110 admitted, **trimmed to 6,940** |
+| ships a runnable test | 18 of 75 admitted (24.0%) | 0 |
+| written | 71 train, 4 held out | 56 train, 4 held out |
+
+Realized code share **65.2%** over 127 conversations, 0 rows claimed by more than one source, `problems: []`, exit 0. Two conversations were refused by `execution_failed` and one by `ambiguous_solution` — the sandbox is exercised rather than assumed, which is the whole difference between "syntax-checked" and the plan's "syntax-checked *and* execution-tested". The manifest carries both index digests, the tokenizer, the seed and the per-half budgets, so which set trained a model is re-derivable from the artifact rather than from the command that wrote it.
+
+26 new focused tests; 389 across `code_sft`, `chatml`, `post`, `codeprep` and `code_gates`.
+
 ## Status
 
 Branch created from #14's tested SHA; parent recorded in `runs/vast-program/code-run-manifest.json`. Base baselines and both harness oracles are in, the code decontamination index is frozen and verified, and the *repository* admission gate — the one above, which decides which source files enter the corpus — is written and measured against the real sources. Step 6's *SFT* admission gate is a separate rule over conversations, below.
@@ -354,6 +388,8 @@ One defect the probes exposed and did not depend on: `train.py`'s in-run validat
 
 **Step 5's launcher is written ahead of the branch it extends**, for the same reason its wording could be settled honestly: nothing it depends on has produced a number yet. `scripts/code_extension.py` is the 2B stage as one command — 39 focused tests, 262 across the phase 8 and controller suites — and it is waiting on two things that do not exist yet: gate 2's verdict, and a 1B run to read a rate and a throughput off. What it did establish now is supply: the corpus composed at a 250M budget can draw the 2B stage inside the four-epoch cap with the replay floor intact.
 
-**Step 6's SFT admission gate is written on the same terms**, and for once "before the thing it judges exists" was literal: no candidate SFT source had been read when its eleven refusals were fixed. **It now has a source list**, resolved against real rows rather than assumed — two halves of one apache-2.0 dataset, 1,956 code and 5,189 general conversations admitted from 20,000 offered rows each, with 27.5% of the code half carrying a test that can actually be executed. The section above is what the probe measured and what it refused.
+**Step 6's SFT admission gate is written on the same terms**, and for once "before the thing it judges exists" was literal: no candidate SFT source had been read when its eleven refusals were fixed. **It now has a source list**, resolved against real rows rather than assumed — two halves of one apache-2.0 dataset, 1,956 code and 5,189 general conversations admitted from 20,000 offered rows each, with 27.5% of the code half carrying a test that can actually be executed.
 
-What remains for step 6 is the build itself, and `post.py` taking a locally built dataset — that half is shared work, so it goes to #14 first and forward-merges, as `train.py`'s per-source BPB and the DPO preference gate both did.
+**And it now has a build.** `scripts/code_sft.py build` writes the set the gate admits — one pass, execution on, the 65/35 held as the invariant with the budget giving way, a holdout the trainer cannot reach, and a manifest that makes which set trained a model re-derivable from the artifact. Smoked end to end against the real sources, indexes, tokenizer and sandbox at a bounded 20,000 supervised tokens, into a path a real run cannot mistake for the gate's. The two sections above are what the probe measured and what the build does with it.
+
+What remains for step 6 is `post.py` taking a locally built dataset. That half is shared work, so it goes to #14 first and forward-merges, as `train.py`'s per-source BPB and the DPO preference gate both did.
