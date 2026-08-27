@@ -4,19 +4,19 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 62.91,
-    "finalization_in_hours": 73.09,
+    "elapsed_hours": 63.0,
+    "finalization_in_hours": 73.0,
     "hard_hours": 144.0,
-    "remaining_hours": 81.09,
+    "remaining_hours": 81.0,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
-    "memory_used_mb": 9,
-    "utilization_pct": 0
+    "memory_used_mb": 4000,
+    "utilization_pct": 97
   },
-  "heartbeat_at": "2026-08-27T01:39:23.348565Z",
+  "heartbeat_at": "2026-08-27T01:44:24.924028Z",
   "lanes": {
     "directive": {
       "details": {
@@ -62,16 +62,16 @@
         "attempts": 1,
         "command": [
           "python",
-          "-c",
-          "\nimport json\ns = json.load(open('runs/vast-program/state.json'))\nprint('main:', s['phase'], s['status'])\nfor lane, v in sorted(s['lanes'].items()):\n    print(f'  {lane}: {v[\"phase\"]} {v[\"status\"]}')\n"
+          "scripts/code_probe_report.py",
+          "plan"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-lane-state-check",
+      "phase": "phase8-probe-scoring-plan",
       "status": "passed",
-      "updated_at": "2026-08-26T21:16:46.299096Z"
+      "updated_at": "2026-08-27T01:42:09.264759Z"
     },
     "operator": {
       "details": {
@@ -127,12 +127,12 @@
     }
   },
   "metrics": {},
-  "phase": "phase8-code-probes-250m",
+  "phase": "phase8-probe-scoring",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "1dc7be620976",
+  "source_sha": "97cdca6d56af",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
-  "status": "passed",
-  "updated_at": "2026-08-27T01:25:09.147000Z"
+  "status": "running",
+  "updated_at": "2026-08-27T01:42:45.379926Z"
 }
