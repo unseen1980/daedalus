@@ -492,16 +492,32 @@ def test_the_real_corpus_can_fill_the_branchs_budget(tmp_path):
     GPU idle and a launch expected; finding it here leaves time to repair the
     mixture. The hash and the throughput projection come along for free, which
     covers the other two inputs a launch depends on.
+
+    Asked of the three inputs directly rather than through `branch_plan`,
+    because the plan carries one more refusal that is *not* about the corpus:
+    once the branch has trained its budget, `arm_is_complete` refuses to spend
+    it a second time. That refusal is the launcher working. Routed through the
+    plan, this test inverted at 09:51Z on 2026-08-27 -- it began reporting a
+    corpus that can fill the budget as a corpus that cannot, at the moment the
+    run it was gating succeeded.
     """
+    record = CB.load_mixture(_MIXTURE)
+    preflight = CB.mixture_preflight_at(record, CB.BRANCH_TOKENS)
+    assert preflight["total_run_tokens"] == CB.BRANCH_TOKENS
+    assert preflight["l1_skew_pts"] <= CB.MAX_L1_SKEW_PTS
+    assert CB.assert_base_checkpoint(_BASE, None) == (
+        "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153")
+    assert 0.0 < CB.projected_hours()["hours"] < 24.0
+
+    # And the launcher on those same inputs: either it still has a launch to
+    # authorise, or the run is done and it declines to repeat it. Anything else
+    # is a refusal about the corpus, which is what this test is here to catch.
     try:
         plan = CB.branch_plan(verdict_path=_verdict(tmp_path), init_from=_BASE,
                               mixture_record=_MIXTURE)
     except CB.BranchRefused as exc:
-        pytest.fail(f"the 1B branch cannot launch as preregistered: {exc}")
-
-    preflight = plan["mixture"]["preflight"]
-    assert preflight["total_run_tokens"] == CB.BRANCH_TOKENS
-    assert preflight["l1_skew_pts"] <= CB.MAX_L1_SKEW_PTS
-    assert plan["init_from"]["sha256"] == (
-        "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153")
-    assert 0.0 < plan["estimated_hours"] < 24.0
+        assert "already trained" in str(exc), (
+            f"the 1B branch cannot launch as preregistered: {exc}")
+    else:
+        assert plan["mixture"]["preflight"] == preflight
+        assert 0.0 < plan["estimated_hours"] < 24.0
