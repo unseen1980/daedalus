@@ -4,19 +4,19 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 64.09,
-    "finalization_in_hours": 71.91,
+    "elapsed_hours": 64.17,
+    "finalization_in_hours": 71.83,
     "hard_hours": 144.0,
-    "remaining_hours": 79.91,
+    "remaining_hours": 79.83,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
     "memory_used_mb": 4020,
-    "utilization_pct": 100
+    "utilization_pct": 97
   },
-  "heartbeat_at": "2026-08-27T02:49:43.987922Z",
+  "heartbeat_at": "2026-08-27T02:54:45.415353Z",
   "lanes": {
     "directive": {
       "details": {
@@ -59,19 +59,32 @@
     },
     "inspect": {
       "details": {
-        "attempts": 1,
-        "command": [
-          "python",
-          "-c",
-          "\nimport json\nfrom scripts.code_branch_report import (collect, harness_constraints,\n                                        DEFAULT_BASE_TASKS,\n                                        DEFAULT_BASE_RETRIEVAL_DIR,\n                                        default_retrieval_paths)\nfrom scripts.code_probe_report import BASE_MODEL, DEFAULT_BASE_EVAL_DIR, ScoredModel\n\nPINNED = \"cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153\"\nmodel = ScoredModel(name=BASE_MODEL,\n                    checkpoint=\"/root/daedalus/final/hero/checkpoint.pt\",\n                    out_dir=DEFAULT_BASE_EVAL_DIR)\nc = collect(model, tasks=DEFAULT_BASE_TASKS,\n            retrieval=default_retrieval_paths(DEFAULT_BASE_RETRIEVAL_DIR),\n            expected_sha256=PINNED)\nprint(\"artifact   \", c.sha256[:12])\nprint(\"code_bpb   \", round(c.score.code_bpb, 6))\nprint(\"general_bpb\", round(c.score.general_bpb, 6))\nprint(\"five_task  \", round(c.score.five_task_mean, 6))\nprint(\"per_task   \", json.dumps(c.details[\"five_task_scores\"], sort_keys=True))\nprint(\"retrieval  \", json.dumps(c.score.retrieval, sort_keys=True))\nprint(\"execution  \", json.dumps({k: [v.pass_at_1, v.pass_at_1_plus, v.syntax_valid, v.n] for k, v in c.score.execution.items()}, sort_keys=True))\nprint(\"harness    \", json.dumps(harness_constraints(c), sort_keys=True))\n"
-        ],
-        "returncodes": [
-          0
-        ]
+        "derived_from_the_real_base_cards": {
+          "config": "daedalus-150m",
+          "execution_seed": 20260824,
+          "retrieval": {
+            "backend": "torch",
+            "control_items": 8,
+            "depths": [
+              256,
+              512,
+              1024,
+              2048
+            ],
+            "max_new_tokens": 24,
+            "n_queries": 4,
+            "per_depth": 100,
+            "seed": 20260824
+          },
+          "task_limit": null
+        },
+        "evidence": "every value above was read out of runs/eval/code-base/*.json, runs/eval/retrieval-base-n100/*.json and runs/eval/baseline-hero-tasks.json provenance rather than typed; the retrieval defaults are per-depth 10 and control-items 8, so a hand-typed pass would have scored a tenth of the base denominator",
+        "returncode": 1,
+        "why_non_zero": "plan exits 1 while either side is unscored, and the branch has no cards because its 1B run has not started. That is the command reporting the program state, not a defect; run-phase records any non-zero as failed, so this transition restates the outcome with the reason."
       },
-      "phase": "phase8-branch-collector-selfcheck",
+      "phase": "phase8-branch-pass-plan",
       "status": "passed",
-      "updated_at": "2026-08-27T02:36:35.148126Z"
+      "updated_at": "2026-08-27T02:52:32.962918Z"
     },
     "operator": {
       "details": {
@@ -130,9 +143,9 @@
   "phase": "phase8-probe-scoring",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "fcda6ceada48",
+  "source_sha": "8003adc1ca7b",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
-  "updated_at": "2026-08-27T02:36:35.148126Z"
+  "updated_at": "2026-08-27T02:52:32.962918Z"
 }
