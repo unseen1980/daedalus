@@ -1026,3 +1026,198 @@ def test_detached_phase_argv_carries_supervision_to_the_child(tmp_path):
     assert argv[argv.index("--") + 1:] == [
         "python", "train.py", "--run-name", "phase8-code-1b",
     ]
+
+
+# ------------------------------------------ a run that cannot save its work ---
+
+def _trainer_phase(state, checkpoint, *, init_from=None, extra=()):
+    """`main` argv for a supervised trainer whose checkpoint is `checkpoint`."""
+
+    command = ["python", "train.py", "--run-name", Path(checkpoint).parent.name,
+               "--run-dir", str(Path(checkpoint).parent)]
+    if init_from is not None:
+        command += ["--init-from", str(init_from)]
+    return ["--state", str(state), "run-phase", "--phase", "phase8-extension",
+            "--supervise-checkpoint", str(checkpoint), *extra, "--", *command]
+
+
+def test_the_space_floor_is_read_off_a_file_that_exists_not_estimated(tmp_path):
+    """The checkpoint it resumes outranks the weights it starts from, and with
+    neither on disk there is no evidence and so no verdict."""
+
+    from scripts.vast_program import expected_checkpoint_bytes
+
+    resumed = tmp_path / "checkpoint.pt"
+    init_from = tmp_path / "hero.pt"
+    command = ["python", "train.py", "--init-from", str(init_from)]
+
+    assert expected_checkpoint_bytes(str(resumed), command) is None
+
+    init_from.write_bytes(b"x" * 300)
+    size, why = expected_checkpoint_bytes(str(resumed), command)
+    assert (size, "--init-from" in why) == (300, True)
+
+    resumed.write_bytes(b"x" * 700)
+    size, why = expected_checkpoint_bytes(str(resumed), command)
+    assert (size, str(resumed) in why) == (700, True), (
+        "an attempt that already wrote a checkpoint knows its real size; the "
+        "--init-from weights are only the stand-in until it does")
+
+    # An empty file is a failed write, not a 0-byte checkpoint.
+    resumed.write_bytes(b"")
+    assert expected_checkpoint_bytes(str(resumed), command)[0] == 300
+
+
+def test_a_supervised_run_is_refused_when_its_first_save_cannot_fit(
+        tmp_path, monkeypatch):
+    """The failure this replaces costs hours per attempt and writes nothing.
+
+    A trainer does not touch the disk until its first save, so a volume too full
+    to hold a checkpoint looks fine at launch: the run trains, raises ENOSPC at
+    the save, leaves no checkpoint, and the supervisor restarts it from step zero
+    into the same wall. At the 2B extension's throughput that is 11 GPU-hours an
+    attempt.
+    """
+
+    import scripts.vast_program as vp
+
+    state = tmp_path / "state.json"
+    assert vp.main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    init_from = tmp_path / "hero.pt"
+    init_from.write_bytes(b"x" * 1000)
+    # Room for one copy, but a save holds the file and its .tmp at once.
+    monkeypatch.setattr(vp.shutil, "disk_usage",
+                        lambda _p: type("u", (), {"free": 1500})())
+
+    with pytest.raises(SystemExit, match="fail on ENOSPC"):
+        vp.main(_trainer_phase(state, tmp_path / "ext" / "checkpoint.pt",
+                               init_from=init_from))
+
+    # Refused before anything was claimed, exactly like the other launch guards.
+    assert json.loads(state.read_text())["phase"] == "bootstrap"
+    assert not (tmp_path / "controller.lock").exists()
+
+
+def test_a_supervised_run_with_room_for_the_save_still_starts(
+        tmp_path, monkeypatch):
+    """The guard has to be able to say yes, or it is just an outage."""
+
+    import scripts.vast_program as vp
+
+    state = tmp_path / "state.json"
+    assert vp.main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    init_from = tmp_path / "hero.pt"
+    init_from.write_bytes(b"x" * 1000)
+    monkeypatch.setattr(vp.shutil, "disk_usage",
+                        lambda _p: type("u", (), {"free": 2000})())
+
+    argv = _trainer_phase(state, tmp_path / "ext" / "checkpoint.pt",
+                          init_from=init_from)
+    # Nothing is actually trained: the supervised runner is replaced by one that
+    # reports success, because what is under test is admission, not training.
+    monkeypatch.setattr(vp, "supervised_runner",
+                        lambda *a, **k: (lambda command: 0))
+    assert vp.main(argv) == 0
+    assert json.loads(state.read_text())["status"] == "passed"
+
+
+def test_an_explicit_floor_overrides_the_derived_one(tmp_path, monkeypatch):
+    """`--min-free-bytes 0` is the escape for a run whose checkpoint is not the
+    size of its input -- a different config, or a shape nothing has trained. It
+    has to be explicit, and it has to be in the argv the state file records."""
+
+    import scripts.vast_program as vp
+
+    state = tmp_path / "state.json"
+    assert vp.main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    init_from = tmp_path / "hero.pt"
+    init_from.write_bytes(b"x" * 1000)
+    monkeypatch.setattr(vp.shutil, "disk_usage",
+                        lambda _p: type("u", (), {"free": 1500})())
+    monkeypatch.setattr(vp, "supervised_runner",
+                        lambda *a, **k: (lambda command: 0))
+
+    argv = _trainer_phase(state, tmp_path / "ext" / "checkpoint.pt",
+                          init_from=init_from, extra=["--min-free-bytes", "0"])
+    assert vp.main(argv) == 0
+
+    # And an explicit floor above what is free still refuses.
+    with pytest.raises(SystemExit, match="--min-free-bytes 9000"):
+        vp.main(_trainer_phase(state, tmp_path / "ext2" / "checkpoint.pt",
+                               init_from=init_from,
+                               extra=["--min-free-bytes", "9000"]))
+
+
+def test_an_unsupervised_phase_is_not_subject_to_the_space_floor(
+        tmp_path, monkeypatch):
+    """Scoring passes and report generators write kilobytes and own no
+    checkpoint. Holding them to a trainer's floor would idle the box during
+    exactly the pressure that makes freeing space urgent."""
+
+    import scripts.vast_program as vp
+
+    state = tmp_path / "state.json"
+    assert vp.main(["--state", str(state), "--base-sha", "abc123", "init"]) == 0
+    monkeypatch.setattr(vp.shutil, "disk_usage",
+                        lambda _p: type("u", (), {"free": 1})())
+
+    assert vp.main(["--state", str(state), "--lease",
+                    str(tmp_path / "controller.lock"), "run-phase",
+                    "--phase", "phase8-scorecard", "--", "python", "-c",
+                    "pass"]) == 0
+    assert json.loads(state.read_text())["status"] == "passed"
+
+
+def test_detached_phase_argv_carries_only_an_explicit_space_floor(tmp_path):
+    """The child re-derives the default, so carrying it would be noise -- but
+    dropping an override would have the parent admit a phase the child refuses,
+    into a log nobody is watching."""
+
+    from scripts.vast_program import detached_phase_argv
+
+    common = dict(state=tmp_path / "state.json", phase="phase8-extension",
+                  command=["python", "train.py"],
+                  supervise_checkpoint="runs/ext/checkpoint.pt")
+
+    assert "--min-free-bytes" not in detached_phase_argv(**common)
+    argv = detached_phase_argv(**common, min_free_bytes=0)
+    assert argv[argv.index("--min-free-bytes") + 1] == "0"
+
+
+def test_a_direct_detach_is_held_to_the_space_floor_too(tmp_path, monkeypatch):
+    """`code_branch.launch` and the extension's launcher call `detach_phase`
+    rather than `main`. Checked only in `main`, the refusal would be taken by the
+    detached child and written to the phase log the caller is walking away
+    from."""
+
+    import scripts.vast_program as vp
+
+    init_from = tmp_path / "hero.pt"
+    init_from.write_bytes(b"x" * 1000)
+    spawned = []
+    monkeypatch.setattr(vp.shutil, "disk_usage",
+                        lambda _p: type("u", (), {"free": 1500})())
+
+    def spawn(argv, **kwargs):
+        spawned.append(argv)
+        return type("p", (), {"pid": 4321})()
+
+    kwargs = dict(state=tmp_path / "state.json", phase="phase8-extension",
+                  command=["python", "train.py", "--init-from", str(init_from)],
+                  log_path=tmp_path / "ext.log",
+                  supervise_checkpoint=str(tmp_path / "ext" / "checkpoint.pt"),
+                  spawn=spawn)
+
+    with pytest.raises(SystemExit, match="fail on ENOSPC"):
+        vp.detach_phase(**kwargs)
+    assert spawned == [], "refused before the child was started, not after"
+
+    monkeypatch.setattr(vp.shutil, "disk_usage",
+                        lambda _p: type("u", (), {"free": 4000})())
+    started = vp.detach_phase(**kwargs)
+    assert len(spawned) == 1
+    assert started["space"] == {"free_bytes": 4000, "required_bytes": 2000,
+                                "basis": f"2 x 1000 bytes, from its --init-from "
+                                         f"weights at {init_from}"}, (
+        "what the volume looked like at admission, so a run that later dies on "
+        "ENOSPC reads as the disk moving under it rather than nobody looking")
