@@ -4,19 +4,19 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 63.83,
-    "finalization_in_hours": 72.17,
+    "elapsed_hours": 63.92,
+    "finalization_in_hours": 72.08,
     "hard_hours": 144.0,
-    "remaining_hours": 80.17,
+    "remaining_hours": 80.08,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
     "memory_used_mb": 2795,
-    "utilization_pct": 4
+    "utilization_pct": 74
   },
-  "heartbeat_at": "2026-08-27T02:34:39.573653Z",
+  "heartbeat_at": "2026-08-27T02:39:41.214712Z",
   "lanes": {
     "directive": {
       "details": {
@@ -63,15 +63,15 @@
         "command": [
           "python",
           "-c",
-          "\nimport json, os\ns = json.load(open('runs/vast-program/state.json'))\nprint('main lane:', s['phase'], s['status'])\nlease = json.load(open('runs/vast-program/controller.lock'))\npid = lease['pid']\nprint('lease pid', pid, 'sid', os.getsid(pid), '(own session)' if os.getsid(pid) == pid else '(NOT a session leader)')\n"
+          "\nimport json\nfrom scripts.code_branch_report import (collect, harness_constraints,\n                                        DEFAULT_BASE_TASKS,\n                                        DEFAULT_BASE_RETRIEVAL_DIR,\n                                        default_retrieval_paths)\nfrom scripts.code_probe_report import BASE_MODEL, DEFAULT_BASE_EVAL_DIR, ScoredModel\n\nPINNED = \"cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153\"\nmodel = ScoredModel(name=BASE_MODEL,\n                    checkpoint=\"/root/daedalus/final/hero/checkpoint.pt\",\n                    out_dir=DEFAULT_BASE_EVAL_DIR)\nc = collect(model, tasks=DEFAULT_BASE_TASKS,\n            retrieval=default_retrieval_paths(DEFAULT_BASE_RETRIEVAL_DIR),\n            expected_sha256=PINNED)\nprint(\"artifact   \", c.sha256[:12])\nprint(\"code_bpb   \", round(c.score.code_bpb, 6))\nprint(\"general_bpb\", round(c.score.general_bpb, 6))\nprint(\"five_task  \", round(c.score.five_task_mean, 6))\nprint(\"per_task   \", json.dumps(c.details[\"five_task_scores\"], sort_keys=True))\nprint(\"retrieval  \", json.dumps(c.score.retrieval, sort_keys=True))\nprint(\"execution  \", json.dumps({k: [v.pass_at_1, v.pass_at_1_plus, v.syntax_valid, v.n] for k, v in c.score.execution.items()}, sort_keys=True))\nprint(\"harness    \", json.dumps(harness_constraints(c), sort_keys=True))\n"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-scoring-liveness",
+      "phase": "phase8-branch-collector-selfcheck",
       "status": "passed",
-      "updated_at": "2026-08-27T01:52:50.482741Z"
+      "updated_at": "2026-08-27T02:36:35.148126Z"
     },
     "operator": {
       "details": {
@@ -130,9 +130,9 @@
   "phase": "phase8-probe-scoring",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "d20460d363bf",
+  "source_sha": "fcda6ceada48",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
-  "updated_at": "2026-08-27T01:52:50.482741Z"
+  "updated_at": "2026-08-27T02:36:35.148126Z"
 }
