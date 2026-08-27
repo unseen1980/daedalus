@@ -1,13 +1,13 @@
 # Daedalus Vast Program Status
 
-> **Action required.** lane inspect: phase8-branch-1b-scoring-plan failed
+> **Action required.** 3 repair continuations failed on phase phase8-branch-1b-scoring
 
-- Heartbeat: `2026-08-27T11:02:12.337052Z`
+- Heartbeat: `2026-08-27T11:07:13.953042Z`
 - Phase: `phase8-branch-1b-scoring`
-- Status: `passed`
+- Status: `blocked`
 - Source: `vast/daedalus-code-20260824` at `89826d93bfc5`
-- Elapsed: `72.29h` of `144.0h`
-- Finalization window opens in: `63.71h`
+- Elapsed: `72.38h` of `144.0h`
+- Finalization window opens in: `63.62h`
 - Deadline stage: `active`
 
 ## Lanes
