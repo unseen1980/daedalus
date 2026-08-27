@@ -4,19 +4,19 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 64.84,
-    "finalization_in_hours": 71.16,
+    "elapsed_hours": 64.92,
+    "finalization_in_hours": 71.08,
     "hard_hours": 144.0,
-    "remaining_hours": 79.16,
+    "remaining_hours": 79.08,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
     "memory_used_mb": 4020,
-    "utilization_pct": 97
+    "utilization_pct": 99
   },
-  "heartbeat_at": "2026-08-27T03:34:57.601223Z",
+  "heartbeat_at": "2026-08-27T03:39:59.032383Z",
   "lanes": {
     "directive": {
       "details": {
@@ -59,32 +59,18 @@
     },
     "inspect": {
       "details": {
-        "derived_from_the_real_base_cards": {
-          "config": "daedalus-150m",
-          "execution_seed": 20260824,
-          "retrieval": {
-            "backend": "torch",
-            "control_items": 8,
-            "depths": [
-              256,
-              512,
-              1024,
-              2048
-            ],
-            "max_new_tokens": 24,
-            "n_queries": 4,
-            "per_depth": 100,
-            "seed": 20260824
-          },
-          "task_limit": null
-        },
-        "evidence": "every value above was read out of runs/eval/code-base/*.json, runs/eval/retrieval-base-n100/*.json and runs/eval/baseline-hero-tasks.json provenance rather than typed; the retrieval defaults are per-depth 10 and control-items 8, so a hand-typed pass would have scored a tenth of the base denominator",
-        "returncode": 1,
-        "why_non_zero": "plan exits 1 while either side is unscored, and the branch has no cards because its 1B run has not started. That is the command reporting the program state, not a defect; run-phase records any non-zero as failed, so this transition restates the outcome with the reason."
+        "attempts": 1,
+        "command": [
+          "python",
+          "runs/code-sft/hub-check.py"
+        ],
+        "returncodes": [
+          0
+        ]
       },
-      "phase": "phase8-branch-pass-plan",
+      "phase": "phase8-sft-source-hub-check",
       "status": "passed",
-      "updated_at": "2026-08-27T02:52:32.962918Z"
+      "updated_at": "2026-08-27T03:39:44.168868Z"
     },
     "operator": {
       "details": {
@@ -147,5 +133,5 @@
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
-  "updated_at": "2026-08-27T02:52:32.962918Z"
+  "updated_at": "2026-08-27T03:39:44.168868Z"
 }
