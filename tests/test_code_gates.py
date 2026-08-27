@@ -1,30 +1,43 @@
-"""Tests for phase 8's 250M-token probe gate.
+"""Tests for phase 8's two escalation gates.
 
-The wording this gate implements -- "no arm improves code BPB by >=2% or moves
-execution/syntax signal" -- has two readings that spend a 1B-token budget
-differently, and an undefined "moves" that one item out of 378 would satisfy.
-These tests pin the reading and the movement thresholds, so that a later change
-to either is a visible change to a preregistered quantity rather than a quiet
-one. The two cases that matter most are the ones that separate the readings:
-an arm with BPB movement and no execution movement, and an arm with execution
-movement and no BPB movement. Both continue.
+The 250M wording -- "no arm improves code BPB by >=2% or moves execution/syntax
+signal" -- has two readings that spend a 1B-token budget differently, and an
+undefined "moves" that one item out of 378 would satisfy. The 1B wording --
+"general BPB regression <=1.5%, five-task mean drop <=1 point, retrieval drop
+<=2 points at every depth, code metrics improve" -- carries three exact numbers
+and one clause with none at all.
+
+These tests pin both readings and every threshold, so that a later change to any
+of them is a visible change to a preregistered quantity rather than a quiet one.
+The cases that matter most are the ones that separate the readings: at 250M, an
+arm with BPB movement and no execution movement and an arm with the reverse,
+both of which continue; at 1B, the same reverse case, which does *not*.
 """
 
 import pytest
 
 from daedalus.code_gates import (
+    BRANCH_CODE_BPB_IMPROVEMENT_PCT,
+    BRANCH_FIVE_TASK_DROP_POINTS_MAX,
+    BRANCH_GENERAL_BPB_REGRESSION_PCT_MAX,
+    BRANCH_RETRIEVAL_DROP_POINTS_MAX,
     CODE_BPB_IMPROVEMENT_PCT,
     EXECUTION_MOVE_POINTS,
     PASS_AT_1_MOVE_POINTS,
     SYNTAX_VALID_MOVE_POINTS,
+    BranchScore,
     ExecutionScore,
     ProbeGateError,
     ProbeScore,
     arm_verdict,
+    branch_1b_verdict,
     code_bpb_improvement_pct,
     execution_moves,
+    execution_regressions,
     execution_score,
+    general_bpb_regression_pct,
     probes_250m_verdict,
+    retrieval_drops,
 )
 from daedalus.scorecard import ArtifactRef, Provenance, Scorecard
 
@@ -272,3 +285,266 @@ def test_a_scorecard_of_another_kind_is_refused():
 def test_a_scorecard_missing_an_execution_metric_is_refused():
     with pytest.raises(ProbeGateError, match="syntax_valid"):
         execution_score(_scorecard(metrics={"pass@1": 0.0, "pass@1_plus": 0.0}))
+
+
+# ========================================================= the 1B branch ===
+#
+# The untouched base's general-side numbers, in the shape
+# `qat_recovery.collect_observation` already produces: a five-task mean in
+# points and retrieval keyed `<task>:d<depth>` as a fraction.
+
+BRANCH_BASE = BranchScore(
+    name="base",
+    code_bpb=1.2000,
+    execution=BASE.execution,
+    general_bpb=0.9000,
+    five_task_mean=47.374,
+    retrieval={"retrieval-passkey:d256": 0.83, "retrieval-passkey:d512": 0.81,
+               "retrieval-mqar:d1024": 0.91, "retrieval-mqar:d2048": 0.86},
+)
+
+
+def _branch(*, code_bpb=1.14, general_bpb=0.9000, five_task_mean=47.374,
+            retrieval=None, mbpp_syntax=0.2381, mbpp_pass=0.0079,
+            humaneval_pass=0.0, name="code-branch-1b") -> BranchScore:
+    """A branch that passes every clause, unless the caller breaks one."""
+
+    arm = _arm(name, code_bpb=code_bpb, mbpp_syntax=mbpp_syntax,
+               mbpp_pass=mbpp_pass, humaneval_pass=humaneval_pass)
+    return BranchScore(
+        name=name, code_bpb=arm.code_bpb, execution=arm.execution,
+        general_bpb=general_bpb, five_task_mean=five_task_mean,
+        retrieval=dict(BRANCH_BASE.retrieval if retrieval is None else retrieval),
+    )
+
+
+def _check(verdict, gate) -> dict:
+    return next(entry for entry in verdict["checks"] if entry["gate"] == gate)
+
+
+def test_a_branch_that_clears_every_clause_continues():
+    verdict = branch_1b_verdict(BRANCH_BASE, _branch())
+    assert verdict["continue"] is True
+    assert verdict["failed"] == []
+    assert verdict["gate"] == "branch_1b"
+
+
+# ----------------------------------------- "code metrics improve", pinned ---
+
+def test_code_bpb_is_required_and_execution_movement_cannot_substitute():
+    # The case that separates this gate's reading from the 250M one. At 250M an
+    # arm that moved MBPP+ syntax validity with no BPB movement qualifies; here
+    # the same numbers stop the branch, because a `continue_if` clause is a
+    # requirement and a further 2B tokens is what it authorises.
+    verdict = branch_1b_verdict(BRANCH_BASE,
+                                _branch(code_bpb=1.2000, mbpp_syntax=0.30))
+    assert verdict["continue"] is False
+    assert verdict["failed"] == ["code-bpb"]
+    assert _check(verdict, "code-execution-regression")["passed"] is True
+    # Still reported -- it is real evidence about the run, just not authority.
+    assert _check(verdict, "code-execution-regression")["moved"] == ["mbpp-plus"]
+
+
+def test_the_same_arm_qualifies_at_250m_and_is_stopped_at_1b():
+    # Both readings applied to one set of numbers, so the divergence is a
+    # property this file asserts rather than one a reader has to infer.
+    arm = _arm("lr1e-3", code_bpb=1.2000, mbpp_syntax=0.30)
+    assert arm_verdict(BASE, arm)["qualifies"] is True
+    assert branch_1b_verdict(
+        BRANCH_BASE, _branch(code_bpb=1.2000, mbpp_syntax=0.30))["continue"] is False
+
+
+def test_the_bpb_bar_is_the_250m_stage_bar_and_not_the_final_one():
+    # Borrowed, not invented. If this ever reads 5.0 it has silently become the
+    # `final` gate and the plan's staged 1B -> 2B -> SFT design is gone.
+    assert BRANCH_CODE_BPB_IMPROVEMENT_PCT == CODE_BPB_IMPROVEMENT_PCT == 2.0
+
+
+def test_a_branch_exactly_on_the_bpb_bar_continues():
+    exact = _branch(code_bpb=BRANCH_BASE.code_bpb
+                    * (1 - BRANCH_CODE_BPB_IMPROVEMENT_PCT / 100))
+    assert _check(branch_1b_verdict(BRANCH_BASE, exact), "code-bpb")["passed"] \
+        is True
+
+
+def test_execution_regression_past_its_own_bar_stops_the_branch():
+    # A branch unlearning Python while its code BPB improves. The BPB clause
+    # alone would continue it.
+    collapsed = _branch(code_bpb=1.10, mbpp_syntax=0.2381 - 0.05)
+    verdict = branch_1b_verdict(BRANCH_BASE, collapsed)
+    assert verdict["continue"] is False
+    assert verdict["failed"] == ["code-execution-regression"]
+    fallen = _check(verdict, "code-execution-regression")["regressed"]
+    assert [(entry["benchmark"], entry["metric"]) for entry in fallen] == \
+        [("mbpp-plus", "syntax_valid")]
+
+
+def test_a_regression_inside_the_bar_is_not_a_failure():
+    # Symmetric with movement: a rise of less than two points is not movement,
+    # so a fall of less than two points is not a regression this gate acts on.
+    inside = _branch(code_bpb=1.10,
+                     mbpp_syntax=0.2381 - (SYNTAX_VALID_MOVE_POINTS - 0.01) / 100)
+    assert _check(branch_1b_verdict(BRANCH_BASE, inside),
+                  "code-execution-regression")["passed"] is True
+
+
+def test_execution_regressions_uses_the_same_thresholds_as_movement():
+    fallen = execution_regressions(
+        execution_moves(BASE, _arm("a", mbpp_pass=0.0079 - 1 / 378)))
+    # 1/378 is 0.26 points against a 1.0-point bar, in the other direction.
+    assert fallen == []
+
+
+# ------------------------------------------------------- retention halves ---
+
+def test_general_bpb_regression_is_positive_when_the_branch_is_worse():
+    worse = _branch(general_bpb=0.9090)
+    assert general_bpb_regression_pct(BRANCH_BASE, worse) == pytest.approx(1.0)
+
+
+def test_general_bpb_regression_past_the_limit_stops_the_branch():
+    verdict = branch_1b_verdict(BRANCH_BASE, _branch(general_bpb=0.9200))
+    assert verdict["failed"] == ["general-bpb"]
+    check = _check(verdict, "general-bpb")
+    assert check["observed_regression_pct"] == pytest.approx(2.2222, abs=1e-3)
+    assert check["limit_regression_pct"] == BRANCH_GENERAL_BPB_REGRESSION_PCT_MAX
+
+
+def test_a_branch_exactly_on_the_general_bpb_limit_continues():
+    exact = _branch(general_bpb=BRANCH_BASE.general_bpb
+                    * (1 + BRANCH_GENERAL_BPB_REGRESSION_PCT_MAX / 100))
+    assert _check(branch_1b_verdict(BRANCH_BASE, exact),
+                  "general-bpb")["passed"] is True
+
+
+def test_an_unmeasured_general_bpb_fails_rather_than_passing_silently():
+    # The failure a retention gate exists to catch: the evaluation did not run.
+    verdict = branch_1b_verdict(BRANCH_BASE, _branch(general_bpb=None))
+    assert verdict["continue"] is False
+    assert "not taken" in _check(verdict, "general-bpb")["reason"]
+
+
+def test_a_non_finite_general_bpb_is_a_broken_run_not_a_regression():
+    with pytest.raises(ProbeGateError, match="non-finite"):
+        general_bpb_regression_pct(BRANCH_BASE,
+                                   _branch(general_bpb=float("nan")))
+
+
+def test_a_five_task_drop_past_one_point_stops_the_branch():
+    verdict = branch_1b_verdict(BRANCH_BASE, _branch(five_task_mean=46.20))
+    assert verdict["failed"] == ["five-task-mean"]
+    assert _check(verdict, "five-task-mean")["observed_drop_points"] == \
+        pytest.approx(1.174)
+
+
+def test_a_branch_exactly_one_point_down_continues():
+    exact = _branch(five_task_mean=BRANCH_BASE.five_task_mean
+                    - BRANCH_FIVE_TASK_DROP_POINTS_MAX)
+    assert _check(branch_1b_verdict(BRANCH_BASE, exact),
+                  "five-task-mean")["passed"] is True
+
+
+def test_an_unmeasured_five_task_mean_fails_rather_than_passing_silently():
+    verdict = branch_1b_verdict(BRANCH_BASE, _branch(five_task_mean=None))
+    assert verdict["continue"] is False
+    assert "not measured" in _check(verdict, "five-task-mean")["reason"]
+
+
+# -------------------------------------------------- retrieval, every depth ---
+
+def test_retrieval_is_gated_per_depth_and_not_on_the_aggregate():
+    # Loses 4 points at 2048, gains 4 at 256: the mean is flat and the gate
+    # still says no, which is the whole reason it reads every depth.
+    nets_out = dict(BRANCH_BASE.retrieval)
+    nets_out["retrieval-mqar:d2048"] = 0.82
+    nets_out["retrieval-passkey:d256"] = 0.87
+    verdict = branch_1b_verdict(BRANCH_BASE, _branch(retrieval=nets_out))
+    assert verdict["failed"] == ["retrieval"]
+    check = _check(verdict, "retrieval")
+    assert check["worst_key"] == "retrieval-mqar:d2048"
+    assert check["worst_drop_points"] == pytest.approx(4.0)
+
+
+def test_a_branch_exactly_two_points_down_at_one_depth_continues():
+    exact = dict(BRANCH_BASE.retrieval)
+    exact["retrieval-passkey:d512"] = 0.81 - BRANCH_RETRIEVAL_DROP_POINTS_MAX / 100
+    assert _check(branch_1b_verdict(BRANCH_BASE, _branch(retrieval=exact)),
+                  "retrieval")["passed"] is True
+
+
+def test_a_depth_the_branch_never_measured_fails_the_gate():
+    # "at every depth" must not quietly become "at every depth we measured":
+    # dropping the deepest key and reporting the worst of the rest is exactly
+    # how a long-context regression goes unseen.
+    partial = {key: value for key, value in BRANCH_BASE.retrieval.items()
+               if key != "retrieval-mqar:d2048"}
+    verdict = branch_1b_verdict(BRANCH_BASE, _branch(retrieval=partial))
+    assert verdict["failed"] == ["retrieval"]
+    assert "retrieval-mqar:d2048" in _check(verdict, "retrieval")["reason"]
+
+
+def test_a_branch_measured_at_extra_depths_is_not_penalised_for_them():
+    # More coverage than the baseline is not a missing measurement.
+    extra = dict(BRANCH_BASE.retrieval)
+    extra["retrieval-passkey:d4096"] = 0.10
+    assert _check(branch_1b_verdict(BRANCH_BASE, _branch(retrieval=extra)),
+                  "retrieval")["passed"] is True
+
+
+def test_no_retrieval_baseline_fails_rather_than_reporting_a_clean_sweep():
+    base = BranchScore(name="base", code_bpb=BRANCH_BASE.code_bpb,
+                       execution=BRANCH_BASE.execution,
+                       general_bpb=BRANCH_BASE.general_bpb,
+                       five_task_mean=BRANCH_BASE.five_task_mean)
+    verdict = branch_1b_verdict(base, _branch())
+    assert verdict["failed"] == ["retrieval"]
+    assert "no retrieval baseline" in _check(verdict, "retrieval")["reason"]
+
+
+def test_retrieval_drops_reports_every_key_it_compared():
+    drops = retrieval_drops(BRANCH_BASE, _branch())
+    assert sorted(drops["per_key"]) == sorted(BRANCH_BASE.retrieval)
+    assert drops["missing"] == []
+
+
+# ------------------------------------------------------------- reporting ---
+
+def test_every_clause_is_reported_even_when_several_fail():
+    verdict = branch_1b_verdict(
+        BRANCH_BASE, _branch(code_bpb=1.2000, general_bpb=0.95,
+                             five_task_mean=40.0))
+    assert [entry["gate"] for entry in verdict["checks"]] == [
+        "code-bpb", "code-execution-regression", "general-bpb",
+        "five-task-mean", "retrieval"]
+    assert verdict["failed"] == ["code-bpb", "general-bpb", "five-task-mean"]
+
+
+def test_the_recorded_thresholds_are_the_ones_that_were_applied():
+    verdict = branch_1b_verdict(BRANCH_BASE, _branch())
+    assert verdict["thresholds"] == {
+        "code_bpb_improvement_pct": BRANCH_CODE_BPB_IMPROVEMENT_PCT,
+        "execution_move_points": dict(EXECUTION_MOVE_POINTS),
+        "general_bpb_regression_pct_max": BRANCH_GENERAL_BPB_REGRESSION_PCT_MAX,
+        "five_task_drop_points_max": BRANCH_FIVE_TASK_DROP_POINTS_MAX,
+        "retrieval_drop_points_max": BRANCH_RETRIEVAL_DROP_POINTS_MAX,
+    }
+
+
+def test_the_manifest_numbers_are_what_this_module_applies():
+    # The three clauses that came with their own figures. A change here is a
+    # change to a preregistered quantity and has to be visible.
+    assert (BRANCH_GENERAL_BPB_REGRESSION_PCT_MAX,
+            BRANCH_FIVE_TASK_DROP_POINTS_MAX,
+            BRANCH_RETRIEVAL_DROP_POINTS_MAX) == (1.5, 1.0, 2.0)
+
+
+def test_a_branch_scored_on_different_benchmarks_is_refused_not_gated():
+    # Non-comparable evidence raises, as it does at 250M; only an *absent*
+    # measurement degrades to a failed clause.
+    mismatched = BranchScore(
+        name="code-branch-1b", code_bpb=1.10,
+        execution={"mbpp-plus": BASE.execution["mbpp-plus"]},
+        general_bpb=0.90, five_task_mean=47.374,
+        retrieval=dict(BRANCH_BASE.retrieval))
+    with pytest.raises(ProbeGateError, match="same benchmarks"):
+        branch_1b_verdict(BRANCH_BASE, mismatched)
