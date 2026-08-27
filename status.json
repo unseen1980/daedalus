@@ -4,19 +4,19 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 61.74,
-    "finalization_in_hours": 74.26,
+    "elapsed_hours": 61.82,
+    "finalization_in_hours": 74.18,
     "hard_hours": 144.0,
-    "remaining_hours": 82.26,
+    "remaining_hours": 82.18,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
     "memory_used_mb": 14232,
-    "utilization_pct": 99
+    "utilization_pct": 100
   },
-  "heartbeat_at": "2026-08-27T00:29:02.430800Z",
+  "heartbeat_at": "2026-08-27T00:34:03.878360Z",
   "lanes": {
     "directive": {
       "details": {
@@ -130,7 +130,7 @@
   "phase": "phase8-code-probes-250m",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "29f0e29b597a",
+  "source_sha": "19769df98d3d",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
