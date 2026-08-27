@@ -2,12 +2,12 @@
 
 > **Action required.** lane inspect: phase8-branch-1b-scoring-plan failed
 
-- Heartbeat: `2026-08-27T10:16:58.263739Z`
+- Heartbeat: `2026-08-27T10:17:25.192441Z`
 - Phase: `phase8-branch-1b-scoring`
 - Status: `running`
-- Source: `vast/daedalus-code-20260824` at `be89c1c83c94`
-- Elapsed: `71.54h` of `144.0h`
-- Finalization window opens in: `64.46h`
+- Source: `vast/daedalus-code-20260824` at `131ecde88b1d`
+- Elapsed: `71.55h` of `144.0h`
+- Finalization window opens in: `64.45h`
 - Deadline stage: `active`
 
 ## Lanes
