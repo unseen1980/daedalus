@@ -4,19 +4,19 @@
     "user_action_required": true
   },
   "deadline": {
-    "elapsed_hours": 72.13,
-    "finalization_in_hours": 63.87,
+    "elapsed_hours": 72.21,
+    "finalization_in_hours": 63.79,
     "hard_hours": 144.0,
-    "remaining_hours": 71.87,
+    "remaining_hours": 71.79,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
-    "memory_used_mb": 2785,
-    "utilization_pct": 51
+    "memory_used_mb": 9,
+    "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-27T10:52:09.151233Z",
+  "heartbeat_at": "2026-08-27T10:57:10.706156Z",
   "lanes": {
     "directive": {
       "details": {
@@ -133,6 +133,6 @@
   "source_sha": "89826d93bfc5",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
-  "status": "running",
-  "updated_at": "2026-08-27T10:06:31.043577Z"
+  "status": "passed",
+  "updated_at": "2026-08-27T10:54:46.543570Z"
 }
