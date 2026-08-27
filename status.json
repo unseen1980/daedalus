@@ -1,22 +1,22 @@
 {
   "attention": {
-    "blocker": "",
-    "user_action_required": false
+    "blocker": "lane inspect: phase8-sft-source-shape failed",
+    "user_action_required": true
   },
   "deadline": {
-    "elapsed_hours": 64.92,
-    "finalization_in_hours": 71.08,
+    "elapsed_hours": 65.01,
+    "finalization_in_hours": 70.99,
     "hard_hours": 144.0,
-    "remaining_hours": 79.08,
+    "remaining_hours": 78.99,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
-    "memory_used_mb": 4020,
-    "utilization_pct": 99
+    "memory_used_mb": 2797,
+    "utilization_pct": 97
   },
-  "heartbeat_at": "2026-08-27T03:39:59.032383Z",
+  "heartbeat_at": "2026-08-27T03:45:00.492794Z",
   "lanes": {
     "directive": {
       "details": {
@@ -62,15 +62,17 @@
         "attempts": 1,
         "command": [
           "python",
-          "runs/code-sft/hub-check.py"
+          "runs/code-sft/hub-shape.py",
+          "40000",
+          "4000"
         ],
         "returncodes": [
-          0
+          -6
         ]
       },
-      "phase": "phase8-sft-source-hub-check",
-      "status": "passed",
-      "updated_at": "2026-08-27T03:39:44.168868Z"
+      "phase": "phase8-sft-source-shape",
+      "status": "failed",
+      "updated_at": "2026-08-27T03:41:39.268679Z"
     },
     "operator": {
       "details": {
@@ -133,5 +135,5 @@
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
-  "updated_at": "2026-08-27T03:39:44.168868Z"
+  "updated_at": "2026-08-27T03:41:39.268679Z"
 }
