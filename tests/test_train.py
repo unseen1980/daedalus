@@ -3,6 +3,7 @@ exercised through fakes/local repos so the suite stays fast and offline.
 
 Run: python -m pytest tests/test_train.py -v
 """
+import errno
 import json
 import math
 import os
@@ -293,6 +294,89 @@ def test_checkpoint_never_leaves_partial_file(tmp_path):
     save_checkpoint(path, model, muon, adamw, step=1, tokens_seen=1, cfg=cfg)
     assert os.path.exists(path)
     assert not os.path.exists(path + ".tmp")
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"),
+                    reason="needs /dev/full to produce a real ENOSPC")
+def test_torch_save_raises_on_a_full_device(tmp_path):
+    """The premise the tmp-then-rename below rests on: a write that runs out of
+    space *raises*.
+
+    Worth asserting rather than assuming, because the alternative is silent: a
+    `torch.save` that swallowed the error would return normally, `os.replace`
+    would move a truncated file over the good checkpoint, and the run would keep
+    going until something tried to resume from it. `/dev/full` is a real device
+    that returns ENOSPC on every write, so this exercises torch's own writer
+    against the same errno a full volume produces.
+    """
+    payload = {"model": {"w": torch.zeros(4096)}, "step": 1}
+    with pytest.raises(Exception):
+        torch.save(payload, "/dev/full")
+
+
+def test_checkpoint_write_failure_keeps_last_good_and_reclaims_the_partial(
+        tmp_path, monkeypatch):
+    """A save that fails part-way must cost neither the run nor the disk.
+
+    The scenario is the volume filling during the 1B branch run: `torch.save`
+    writes part of a 1.4 GB payload and raises. tmp-then-rename already means
+    the previous checkpoint is untouched -- `os.replace` never runs -- so the
+    run stays resumable, which is the half that matters most.
+
+    The other half is the partial file. Left behind, it holds a whole
+    checkpoint's worth of exactly the resource that just ran out, and nothing
+    removes it until a later save succeeds -- which, on a full volume, is the
+    save that cannot happen. If the supervisor then exhausts its attempts, the
+    orphan outlives the run and phase 9 exports into what is left.
+    """
+    cfg = PRESETS["tiny"]
+    model = Daedalus(cfg)
+    muon, adamw, _ = build_optimizers(model)
+    path = str(tmp_path / "ckpt.pt")
+    save_checkpoint(path, model, muon, adamw, step=11, tokens_seen=1100, cfg=cfg)
+    good = open(path, "rb").read()
+
+    real_save = torch.save
+
+    def out_of_space(payload, target, *args, **kwargs):
+        with open(target, "wb") as handle:      # a partial write, as ENOSPC leaves
+            handle.write(b"\x00" * 4096)
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(torch, "save", out_of_space)
+    with pytest.raises(OSError):
+        save_checkpoint(path, model, muon, adamw, step=12, tokens_seen=1200,
+                        cfg=cfg)
+    monkeypatch.setattr(torch, "save", real_save)
+
+    assert open(path, "rb").read() == good, "the good checkpoint was overwritten"
+    assert load_checkpoint(path, Daedalus(cfg))["step"] == 11
+    assert not os.path.exists(path + ".tmp"), "the partial write still holds disk"
+
+
+def test_checkpoint_write_interrupted_reclaims_the_partial(tmp_path, monkeypatch):
+    """The same reclaim on SIGINT, which is how this program stops a run.
+
+    `KeyboardInterrupt` is not an `OSError`, and the deadline drain and every
+    manual stop deliver exactly it: at T+144h the controller SIGINTs the trainer
+    and waits for the checkpoint to drain. An interrupt landing inside the write
+    is the ordinary case at that boundary, not an exotic one.
+    """
+    cfg = PRESETS["tiny"]
+    model = Daedalus(cfg)
+    muon, adamw, _ = build_optimizers(model)
+    path = str(tmp_path / "ckpt.pt")
+
+    def interrupted(payload, target, *args, **kwargs):
+        with open(target, "wb") as handle:
+            handle.write(b"\x00" * 4096)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(torch, "save", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        save_checkpoint(path, model, muon, adamw, step=1, tokens_seen=1, cfg=cfg)
+    assert not os.path.exists(path + ".tmp")
+    assert not os.path.exists(path)
 
 
 # ------------------------------------------------------------------ metrics ---

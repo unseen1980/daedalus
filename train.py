@@ -154,7 +154,25 @@ def save_checkpoint(path: str, model, muon, adamw, step: int, tokens_seen: int,
     if d:
         os.makedirs(d, exist_ok=True)
     tmp = path + ".tmp"
-    torch.save(payload, tmp)
+    try:
+        torch.save(payload, tmp)
+    except BaseException:
+        # A failed write must not also cost the disk. `os.replace` below is
+        # skipped, so the previous checkpoint is still the good one and the run
+        # stays resumable -- but the partial `.tmp` holds a whole checkpoint's
+        # worth (1.4 GB for the code branch) of exactly the resource that just
+        # ran out, and nothing removes it until a later save succeeds. On a full
+        # volume that later save is the one that cannot happen, and if the
+        # supervisor then exhausts its attempts the orphan outlives the run.
+        #
+        # `BaseException` because the other way a write stops part-way is
+        # `KeyboardInterrupt`: at T+144h the controller SIGINTs the trainer and
+        # waits for the checkpoint to drain, so an interrupt inside the write is
+        # the ordinary case at that boundary. Re-raised either way -- reclaiming
+        # the space is not a reason to hide why the save failed.
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
     os.replace(tmp, path)  # never leave a half-written checkpoint on crash
     return path
 
