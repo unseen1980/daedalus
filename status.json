@@ -4,19 +4,19 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 65.43,
-    "finalization_in_hours": 70.57,
+    "elapsed_hours": 65.51,
+    "finalization_in_hours": 70.49,
     "hard_hours": 144.0,
-    "remaining_hours": 78.57,
+    "remaining_hours": 78.49,
     "reserve_hours": 8.0,
     "stage": "active"
   },
   "gpu": {
     "memory_total_mb": 24564,
-    "memory_used_mb": 9,
-    "utilization_pct": 0
+    "memory_used_mb": 13474,
+    "utilization_pct": 100
   },
-  "heartbeat_at": "2026-08-27T04:10:07.782134Z",
+  "heartbeat_at": "2026-08-27T04:15:09.403193Z",
   "lanes": {
     "directive": {
       "details": {
@@ -62,20 +62,20 @@
         "attempts": 1,
         "command": [
           "python",
-          "scripts/code_sft.py",
-          "probe",
-          "--rows",
-          "20000",
+          "scripts/code_branch.py",
+          "launch",
           "--json-out",
-          "runs/code-sft/probe.json"
+          "runs/code-probes/branch-launch.json",
+          "--log",
+          "runs/code-probes/branch-1b.log"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-sft-source-probe",
+      "phase": "phase8-branch-launch",
       "status": "passed",
-      "updated_at": "2026-08-27T03:52:53.234935Z"
+      "updated_at": "2026-08-27T04:14:42.543653Z"
     },
     "operator": {
       "details": {
@@ -131,12 +131,12 @@
     }
   },
   "metrics": {},
-  "phase": "phase8-probe-scoring",
+  "phase": "phase8-branch-1b",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "b3bc572d0fcc",
+  "source_sha": "ca31cc41010f",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
-  "status": "passed",
-  "updated_at": "2026-08-27T04:02:33.322220Z"
+  "status": "running",
+  "updated_at": "2026-08-27T04:14:43.138630Z"
 }
