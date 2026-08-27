@@ -9,6 +9,7 @@ all three weightings, named.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -240,6 +241,114 @@ def test_run_bpb_eval_defaults_to_equal_weighting_in_the_record(tmp_path):
     card = load_scorecard(_run(tmp_path, out)["scorecard"])
 
     assert card.details["weighting"] == "equal"
+
+
+def test_per_source_bpb_reads_the_breakdown_behind_the_aggregate(tmp_path):
+    """The inverse of `summarize_bpb`: the mean, back into what it is a mean of.
+
+    Reported wherever the aggregate is, because a code gain concentrated in one
+    language is not the same result as an even one, and only this table says
+    which happened.
+    """
+    from scripts.bpb_eval import per_source_bpb
+
+    _make_holdout(tmp_path, {"python": 100, "rust": 50})
+    card = load_scorecard(_run(tmp_path, tmp_path / "out",
+                               weights={"python": 0.7, "rust": 0.3})["scorecard"])
+
+    table = per_source_bpb(card)
+
+    assert sorted(table) == ["python", "rust"]
+    assert table["python"]["bpb"] == pytest.approx(1.2)
+    assert table["rust"]["bpb"] == pytest.approx(1.6)
+    assert table["python"]["tokens"] == pytest.approx(100)
+    # The share the aggregate applied, so the parts reconstruct the whole.
+    assert table["python"]["weight"] == pytest.approx(0.7)
+    assert sum(entry["bpb"] * entry["weight"] for entry in table.values()) \
+        == pytest.approx(card.metrics["bpb"])
+
+
+def test_per_source_bpb_reports_the_equal_share_an_unweighted_card_used(tmp_path):
+    """Without explicit weights `summarize_bpb`'s headline is the equal-weighted
+    mean, so the reported share has to be the equal one or the parts would not
+    add up to the card's own number."""
+    from scripts.bpb_eval import per_source_bpb
+
+    _make_holdout(tmp_path, {"python": 100, "rust": 50})
+    card = load_scorecard(_run(tmp_path, tmp_path / "out")["scorecard"])
+
+    table = per_source_bpb(card)
+
+    assert table["python"]["weight"] == pytest.approx(0.5)
+    assert sum(entry["bpb"] * entry["weight"] for entry in table.values()) \
+        == pytest.approx(card.metrics["bpb"])
+
+
+def test_per_source_bpb_does_not_read_an_aggregate_as_a_source(tmp_path):
+    """`bpb_equal_weight` and `bpb_token_weighted` share the per-source prefix.
+    Read as languages they would appear in the breakdown as two extra sources,
+    one of which is an average of the real ones."""
+    from scripts.bpb_eval import per_source_bpb
+
+    _make_holdout(tmp_path, {"python": 100, "rust": 50})
+    card = load_scorecard(_run(tmp_path, tmp_path / "out")["scorecard"])
+
+    assert sorted(per_source_bpb(card)) == ["python", "rust"]
+
+
+def test_per_source_bpb_refuses_a_card_that_is_not_a_bpb_card(tmp_path):
+    from daedalus.scorecard import (ArtifactRef, Provenance, Scorecard)
+    from scripts.bpb_eval import per_source_bpb
+
+    card = Scorecard(
+        kind="code-execution", name="humaneval-plus",
+        provenance=Provenance(
+            artifact=ArtifactRef(path="ckpt.pt", sha256="a" * 64,
+                                 kind="checkpoint"),
+            tokenizer=ArtifactRef(path="t.json", sha256="b" * 64,
+                                  kind="tokenizer"),
+            seed=3, git_sha="deadbee"),
+        metrics={"pass@1": 0.0}, item_count=164,
+        created_at="2026-08-27T00:00:00Z")
+
+    with pytest.raises(ValueError, match="not 'bpb'"):
+        per_source_bpb(card)
+
+
+def test_per_source_bpb_refuses_an_aggregate_with_no_breakdown(tmp_path):
+    """An aggregate that cannot be broken down is exactly the number this table
+    exists to stop being reported alone."""
+    from daedalus.scorecard import (ArtifactRef, Provenance, Scorecard)
+    from scripts.bpb_eval import per_source_bpb
+
+    card = Scorecard(
+        kind="bpb", name="code-bpb",
+        provenance=Provenance(
+            artifact=ArtifactRef(path="ckpt.pt", sha256="a" * 64,
+                                 kind="checkpoint"),
+            tokenizer=ArtifactRef(path="t.json", sha256="b" * 64,
+                                  kind="tokenizer"),
+            seed=3, git_sha="deadbee"),
+        metrics={"bpb": 0.58}, item_count=3,
+        created_at="2026-08-27T00:00:00Z")
+
+    with pytest.raises(ValueError, match="no per-source"):
+        per_source_bpb(card)
+
+
+def test_per_source_bpb_refuses_a_card_that_disagrees_with_itself(tmp_path):
+    """A card claiming three sources and carrying two describes a holdout that
+    does not exist, and its aggregate is a mean over the wrong one."""
+    from scripts.bpb_eval import per_source_bpb
+
+    _make_holdout(tmp_path, {"python": 100, "rust": 50})
+    paths = _run(tmp_path, tmp_path / "out")
+    payload = json.loads(Path(paths["scorecard"]).read_text())
+    payload["details"]["sources_requested"] = ["python", "rust", "go"]
+    Path(paths["scorecard"]).write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="different holdouts"):
+        per_source_bpb(load_scorecard(paths["scorecard"]))
 
 
 def test_two_checkpoints_are_pairable_at_source_granularity(tmp_path):

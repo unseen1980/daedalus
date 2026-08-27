@@ -80,15 +80,16 @@ from daedalus.scorecard import (Scorecard, ScorecardError,  # noqa: E402
 from scripts.code_branch import BRANCH_NAME, BRANCH_TOKENS  # noqa: E402
 from scripts.code_probes import (DEFAULT_MIXTURE_RECORD,  # noqa: E402
                                  arm_is_complete)
+from scripts.bpb_eval import per_source_bpb  # noqa: E402
 from scripts.code_probe_report import (BASE_MODEL, CODE_CARD,  # noqa: E402
                                        DATASETS, DEFAULT_BASE_EVAL_DIR,
                                        DEFAULT_EVAL_ROOT, GENERAL_CARD,
                                        PAIRED_RUNTIME_FIELDS,
                                        ProbeScoringError, ScoredModel,
                                        assert_paired, card_path,
-                                       execution_command, read_general_bpb,
-                                       read_probe_score, score_bpb,
-                                       score_execution, scored_from,
+                                       execution_command, pair_by_source,
+                                       read_general_bpb, read_probe_score,
+                                       score_bpb, score_execution, scored_from,
                                        scoring_plan)
 from scripts.qat_recovery import FIVE_TASKS, five_task_mean  # noqa: E402
 
@@ -405,6 +406,13 @@ def collect(model: ScoredModel, *, tasks: Optional[str] = None,
     try:
         probe = read_probe_score(model, datasets)
         general = read_general_bpb(model)
+        bpb_cards = {label: load_scorecard(paths[label])
+                     for label in (CODE_CARD, GENERAL_CARD)}
+        # The breakdown behind `code_bpb`, carried from here so the verdict can
+        # pair it without re-reading the card. Read inside the try because a
+        # card whose aggregate has no breakdown is a refusal of this model's
+        # inputs, not a crash in the middle of the gate.
+        code_by_source = per_source_bpb(bpb_cards[CODE_CARD])
         execution_cards = {dataset: load_scorecard(paths[dataset])
                            for dataset in datasets}
         retrieval_cards = {
@@ -414,8 +422,8 @@ def collect(model: ScoredModel, *, tasks: Optional[str] = None,
         raise BranchScoringError(f"{model.name}: {exc}") from exc
 
     tasks_payload = read_tasks_payload(paths[TASKS_CARD])
-    digests = {label: load_scorecard(paths[label]).provenance.artifact.sha256
-               for label in (CODE_CARD, GENERAL_CARD)}
+    digests = {label: card.provenance.artifact.sha256
+               for label, card in bpb_cards.items()}
     digests.update({name: card.provenance.artifact.sha256
                     for name, card in execution_cards.items()})
     digests.update({name: card.provenance.artifact.sha256
@@ -437,6 +445,7 @@ def collect(model: ScoredModel, *, tasks: Optional[str] = None,
         score=score, sha256=digest, cards=dict(paths),
         retrieval_cards=retrieval_cards, execution_cards=execution_cards,
         details={"checkpoint": model.checkpoint,
+                 "code_bpb_by_source": code_by_source,
                  "general_bpb_share_covered": general.get("share_covered"),
                  "general_bpb_sources": general.get("sources"),
                  "five_task_scores": five_task_scores(tasks_payload)})
@@ -901,6 +910,14 @@ def build_branch_verdict(base: CollectedScore, branch: CollectedScore) -> dict:
     return {
         "schema": 1,
         "gate": gate,
+        # The gate's code clause is a 5% improvement in a mixture-weighted mean
+        # over the holdout's languages. Reported beside it, because at 250M
+        # tokens that mean moved -23.6% overall and -2.3% on Python, and the two
+        # execution benchmarks in the same verdict are Python-only.
+        "code_bpb_by_source": pair_by_source(
+            base.details["code_bpb_by_source"],
+            branch.details["code_bpb_by_source"],
+            measured_name=branch.score.name),
         "continue": bool(gate["continue"]),
         "reason": gate["reason"],
         "models": {
@@ -1010,6 +1027,10 @@ def _plan(a) -> int:
               f"general BPB {collected.score.general_bpb:.4f}, "
               f"five-task {collected.score.five_task_mean:.2f}, "
               f"{len(collected.score.retrieval)} retrieval depth(s)")
+        for source, value in sorted(
+                collected.details["code_bpb_by_source"].items()):
+            print(f"      code BPB {source:43s} {value['bpb']:.5f} "
+                  f"(weight {value['weight']:.3f})")
         for name, entry in harness_constraints(collected).items():
             print(f"      {name:24s} {json.dumps(entry, sort_keys=True)}")
     if collected_base is not None:
@@ -1073,6 +1094,10 @@ def _print_verdict(verdict: dict) -> None:
             detail = (f"{len(check['regressed'])} metric(s) fell past their bar"
                       if check["regressed"] else "no metric fell past its bar")
         print(f"  {mark}  {check['gate']:28s} {detail}")
+    print("\ncode BPB by source (the mean the code clause is measured on):")
+    for source, value in sorted(verdict["code_bpb_by_source"].items()):
+        print(f"  {source:52s} {value['base']:.5f} -> {value['measured']:.5f} "
+              f"({value['improvement_pct']:+.2f}%, weight {value['weight']:.3f})")
 
 
 def _cli(argv=None) -> int:

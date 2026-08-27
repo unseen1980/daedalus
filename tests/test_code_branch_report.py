@@ -68,11 +68,25 @@ def _provenance(sha, *, seed=SEED, runtime=None):
         runtime=dict(runtime or {"backend": "torch", "max_new_tokens": 24}))
 
 
-def _bpb_card(path, name, sha, bpb, **details):
+def _bpb_card(path, name, sha, bpb, *, per_source=None, **details):
+    """A `bpb` card with the breakdown every real one carries.
+
+    `summarize_bpb` emits one `bpb_<id>` per source on every card this program
+    writes, and the collector reports that breakdown beside the aggregate, so a
+    fixture without it would exercise a card shape that cannot be produced.
+    """
+
+    sources = list(per_source) if per_source else list(
+        details.get("sources_requested") or ["code-python"])
+    values = dict(per_source or {source: bpb for source in sources})
+    metrics = {"bpb": bpb, "n_sources": float(len(sources))}
+    for source in sources:
+        metrics[f"bpb_{source}"] = float(values[source])
+        metrics[f"tokens_{source}"] = 1000.0
     write_scorecard(path, Scorecard(
         kind="bpb", name=name, provenance=_provenance(sha),
-        metrics={"bpb": bpb}, created_at="2026-08-27T00:00:00Z",
-        item_count=1, details=dict(details)))
+        metrics=metrics, created_at="2026-08-27T00:00:00Z",
+        item_count=len(sources), details=dict(details)))
 
 
 def _execution_card(path, name, sha, *, pass_at_1=0.0, pass_plus=0.0,
@@ -142,12 +156,13 @@ def _tasks_payload(sha, *, mean=0.45, drop=None, config="daedalus-150m",
 def _write_model(root, name, sha, *, code_bpb=1.20, general_bpb=3.80,
                  tasks_mean=0.45, retrieval_exact=None, tasks_sha=None,
                  tasks_drop=None, syntax=0.24, retrieval_seed=SEED,
-                 per_depth=2, retrieval_items=None):
+                 per_depth=2, retrieval_items=None, code_bpb_by_source=None):
     """A full card set for one model, in the layout the collector expects."""
 
     out_dir = root / name
     out_dir.mkdir(parents=True, exist_ok=True)
-    _bpb_card(out_dir / "code-bpb.json", "code-bpb", sha, code_bpb)
+    _bpb_card(out_dir / "code-bpb.json", "code-bpb", sha, code_bpb,
+              per_source=code_bpb_by_source)
     _bpb_card(out_dir / "general-bpb.json", "general-bpb", sha, general_bpb,
               bucket_share_covered=0.78,
               sources_requested=["dclm-baseline", "fineweb-edu"])
@@ -476,6 +491,58 @@ def test_code_bpb_that_does_not_clear_two_percent_stops_it(tmp_path):
 
     assert verdict["continue"] is False
     assert "code-bpb" in verdict["gate"]["failed"]
+
+
+def test_the_verdict_reports_code_bpb_per_source_beside_the_clause(tmp_path):
+    """The code clause is a 5% improvement in a mixture-weighted mean over the
+    holdout's languages, and the two execution benchmarks beside it are
+    Python-only. At 250M tokens that mean moved -23.6% overall and -2.3% on
+    Python; the breakdown is what says which of those the gate cleared on."""
+    base = _write_model(tmp_path, "base", BASE_SHA, code_bpb=1.20,
+                        code_bpb_by_source={"code-python": 1.00,
+                                            "code-typescript": 1.40})
+    branch = _write_model(tmp_path, "code-branch-1b", BRANCH_SHA,
+                          code_bpb=1.10, general_bpb=3.81,
+                          code_bpb_by_source={"code-python": 0.99,
+                                              "code-typescript": 1.21})
+
+    verdict = build_branch_verdict(_collect(base), _collect(branch))
+
+    by_source = verdict["code_bpb_by_source"]
+    assert by_source["code-python"]["improvement_pct"] == pytest.approx(1.0)
+    assert by_source["code-typescript"]["improvement_pct"] == pytest.approx(13.57,
+                                                                            abs=0.01)
+    assert by_source["code-typescript"]["base"] == pytest.approx(1.40)
+    # And it is on the model record too, so a single side can be read alone.
+    assert verdict["models"]["base"]["details"]["code_bpb_by_source"][
+        "code-python"]["bpb"] == pytest.approx(1.00)
+
+
+def test_a_branch_scored_over_different_code_sources_is_refused(tmp_path):
+    """Two aggregates over different holdouts are not a difference between
+    models, and the breakdown is the only place that would have shown."""
+    base = _write_model(tmp_path, "base", BASE_SHA,
+                        code_bpb_by_source={"code-python": 1.0,
+                                            "code-typescript": 1.4})
+    branch = _write_model(tmp_path, "code-branch-1b", BRANCH_SHA,
+                          code_bpb_by_source={"code-python": 0.99})
+
+    from scripts.code_probe_report import ProbeScoringError
+    with pytest.raises(ProbeScoringError, match="different holdouts"):
+        build_branch_verdict(_collect(base), _collect(branch))
+
+
+def test_a_code_card_without_a_breakdown_is_refused_at_collection(tmp_path):
+    """A card whose aggregate cannot be broken down is a refusal of the model's
+    inputs, named as such, rather than a crash in the middle of the gate."""
+    model = _write_model(tmp_path, "code-branch-1b", BRANCH_SHA)
+    write_scorecard(Path(model.out_dir) / "code-bpb.json", Scorecard(
+        kind="bpb", name="code-bpb", provenance=_provenance(BRANCH_SHA),
+        metrics={"bpb": 1.10}, created_at="2026-08-27T00:00:00Z",
+        item_count=1))
+
+    with pytest.raises(BranchScoringError, match="no per-source"):
+        _collect(model)
 
 
 def test_scoring_the_same_checkpoint_twice_is_refused(tmp_path):

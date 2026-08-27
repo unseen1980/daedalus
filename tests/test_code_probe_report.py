@@ -190,7 +190,21 @@ def test_models_put_the_base_first(tmp_path):
 
 # ------------------------------------------------------------------ scoring ---
 
-def _bpb_card(path, name, sha, *, bpb, sources, share_covered=1.0):
+def _bpb_card(path, name, sha, *, bpb, sources, share_covered=1.0,
+              per_source=None):
+    """A `bpb` card as `run_bpb_eval` writes one, breakdown included.
+
+    `per_source` defaults to the aggregate repeated for every source: every
+    card this program writes goes through `summarize_bpb`, which always emits
+    one `bpb_<id>` per source, so a fixture without a breakdown would be
+    exercising a card shape that cannot be produced.
+    """
+
+    values = dict(per_source or {source: bpb for source in sources})
+    metrics = {"bpb": bpb, "n_sources": float(len(sources))}
+    for source in sources:
+        metrics[f"bpb_{source}"] = float(values[source])
+        metrics[f"tokens_{source}"] = 1000.0
     write_scorecard(path, Scorecard(
         kind="bpb", name=name,
         provenance=Provenance(
@@ -199,7 +213,7 @@ def _bpb_card(path, name, sha, *, bpb, sources, share_covered=1.0):
             tokenizer=ArtifactRef(path="<smollm2-default>", sha256=ZERO_SHA,
                                   kind="tokenizer"),
             seed=20260824, git_sha="abc1234", bpb_mode="full"),
-        metrics={"bpb": bpb, "n_sources": float(len(sources))},
+        metrics=metrics,
         item_count=len(sources), created_at="2026-08-27T00:00:00Z",
         details={"sources_requested": list(sources),
                  "bucket_share_covered": share_covered}))
@@ -329,15 +343,19 @@ def test_execution_command_is_the_same_harness_for_every_model(tmp_path):
 
 def _scored_pair(tmp_path, *, base_code=1.2, base_general=0.9,
                  arm_code=1.1, arm_general=0.9, arm_pass=0.0,
-                 arm_syntax=0.2381, arm_n=378, arm_max_new_tokens=384):
+                 arm_syntax=0.2381, arm_n=378, arm_max_new_tokens=384,
+                 base_code_by_source=None, arm_code_by_source=None):
     models = []
     for name, code_bpb, general_bpb, sha in (
             (BASE_MODEL, base_code, base_general, ZERO_SHA),
             ("arm", arm_code, arm_general, ARM_SHA)):
         out = tmp_path / name
         out.mkdir(parents=True, exist_ok=True)
+        by_source = (base_code_by_source if name == BASE_MODEL
+                     else arm_code_by_source)
         _bpb_card(out / f"{CODE_CARD}.json", CODE_CARD, sha, bpb=code_bpb,
-                  sources=["code-python"])
+                  sources=sorted(by_source) if by_source else ["code-python"],
+                  per_source=by_source)
         _bpb_card(out / f"{GENERAL_CARD}.json", GENERAL_CARD, sha,
                   bpb=general_bpb, sources=["dclm-baseline", "fineweb-edu"],
                   share_covered=0.7792)
@@ -416,6 +434,60 @@ def test_general_bpb_carries_its_coverage_into_the_verdict(tmp_path):
 
     assert verdict["general_bpb_base"]["share_covered"] == pytest.approx(0.7792)
     assert verdict["retention"]["arm"]["share_covered"] == pytest.approx(0.7792)
+
+
+#: The shape phase 8's first two arms actually produced: a large aggregate code
+#: BPB gain that is almost entirely TypeScript, on a corpus that is 55% Python.
+#: Both execution benchmarks in the same verdict are Python-only.
+UNEVEN_BASE = {"code-python": 0.52122,
+               "code-javascript-typescript-typescript-all": 0.59634}
+UNEVEN_ARM = {"code-python": 0.50899,
+              "code-javascript-typescript-typescript-all": 0.21692}
+
+
+def test_verdict_reports_code_bpb_per_source_beside_the_aggregate(tmp_path):
+    """The aggregate alone invites a conclusion the breakdown does not support.
+
+    -23.6% overall reads as "much better at code"; what happened was -63.6% on
+    TypeScript and -2.3% on Python, which is the language the corpus is mostly
+    made of. The gate is unchanged -- this is the number reported beside it.
+    """
+    verdict = build_verdict(_scored_pair(
+        tmp_path, base_code=0.58714, arm_code=0.44845,
+        base_code_by_source=UNEVEN_BASE, arm_code_by_source=UNEVEN_ARM))
+
+    entry = verdict["gate"]["arms"][0]
+    assert entry["code_bpb_improvement_pct"] == pytest.approx(23.62, abs=0.01)
+    by_source = entry["code_bpb_by_source"]
+    assert by_source["code-python"]["improvement_pct"] == pytest.approx(2.35,
+                                                                        abs=0.01)
+    assert by_source["code-javascript-typescript-typescript-all"][
+        "improvement_pct"] == pytest.approx(63.63, abs=0.01)
+    assert by_source["code-python"]["base"] == pytest.approx(0.52122)
+    assert by_source["code-python"]["measured"] == pytest.approx(0.50899)
+
+
+def test_verdict_reports_the_bases_own_breakdown(tmp_path):
+    """Every arm's number is a difference against the base's, so the base's
+    aggregate needs its breakdown for the same reason the arm's does."""
+    verdict = build_verdict(_scored_pair(
+        tmp_path, base_code=0.58714, arm_code=0.44845,
+        base_code_by_source=UNEVEN_BASE, arm_code_by_source=UNEVEN_ARM))
+
+    base_table = verdict["code_bpb_base_by_source"]
+
+    assert sorted(base_table) == sorted(UNEVEN_BASE)
+    assert base_table["code-python"]["bpb"] == pytest.approx(0.52122)
+
+
+def test_an_arm_scored_over_different_code_sources_is_refused(tmp_path):
+    """Two aggregates over different holdouts are already not comparable, and
+    the breakdown is the only place that would have been visible."""
+    models = _scored_pair(tmp_path, base_code_by_source=UNEVEN_BASE,
+                          arm_code_by_source={"code-python": 0.5})
+
+    with pytest.raises(ProbeScoringError, match="different holdouts"):
+        build_verdict(models)
 
 
 def test_verdict_without_a_base_is_refused(tmp_path):

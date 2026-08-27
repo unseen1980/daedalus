@@ -240,6 +240,65 @@ def parse_weights(pairs) -> Dict[str, float]:
     return weights
 
 
+#: The aggregates `summarize_bpb` writes under the same `bpb_` prefix as the
+#: per-source values. Read back as source names they would appear in a
+#: breakdown as two extra languages, one of which is an average of the real
+#: ones -- which is how an aggregate gets counted twice.
+BPB_AGGREGATE_METRICS = ("bpb_equal_weight", "bpb_token_weighted")
+
+
+def per_source_bpb(card: Scorecard) -> Dict[str, Dict[str, Optional[float]]]:
+    """Read a `bpb` scorecard back as the per-source table behind its aggregate.
+
+    The inverse of `summarize_bpb`, and it lives beside it so the two keep
+    agreeing about how a source is named. It exists because the aggregate alone
+    invites a conclusion the breakdown does not support: phase 8's first two
+    probe arms moved overall code BPB by -23.6%, of which TypeScript was -63.6%
+    and Python -2.3%, on a corpus that is 55% Python. "The model got much better
+    at code" and "the model got much better at TypeScript" are different claims,
+    and only the second one is in the numbers.
+
+    `weight` is the share the aggregate actually applied -- renormalized over
+    the sources present, and an equal share when the card was written without
+    explicit weights, which is what `summarize_bpb` does in that case. Reporting
+    the raw requested weight instead would not add up to the `bpb` on the card.
+    """
+
+    if card.kind != "bpb":
+        raise ValueError(
+            f"scorecard {card.name!r} is kind {card.kind!r}, not 'bpb'; there "
+            f"is no per-source bits-per-byte to read from it")
+    metrics = card.metrics
+    sources = sorted(key[len("bpb_"):] for key in metrics
+                     if key.startswith("bpb_")
+                     and key not in BPB_AGGREGATE_METRICS)
+    if not sources:
+        raise ValueError(
+            f"scorecard {card.name!r} carries no per-source bits-per-byte; it "
+            f"has {sorted(metrics)}. Its aggregate cannot be broken down, and "
+            f"an aggregate reported without its breakdown is the thing this "
+            f"function exists to prevent.")
+    requested = (card.details or {}).get("sources_requested")
+    if requested is not None and sorted(requested) != sources:
+        raise ValueError(
+            f"scorecard {card.name!r} says it scored {sorted(requested)} but "
+            f"carries per-source values for {sources}; the aggregate and the "
+            f"breakdown describe different holdouts")
+
+    weights = (card.details or {}).get("weights") or {}
+    total_weight = sum(float(value) for value in weights.values())
+    return {
+        name: {
+            "bpb": float(metrics[f"bpb_{name}"]),
+            "tokens": (float(metrics[f"tokens_{name}"])
+                       if f"tokens_{name}" in metrics else None),
+            "weight": (float(weights.get(name, 0.0)) / total_weight
+                       if total_weight > 0 else 1.0 / len(sources)),
+        }
+        for name in sources
+    }
+
+
 def summarize_bpb(records: List[dict],
                   weights: Optional[Dict[str, float]] = None) -> Dict[str, float]:
     """Per-source BPB plus all three aggregates, each under its own name."""

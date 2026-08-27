@@ -23,6 +23,15 @@ a name prefix: the record is what composed the corpus, and a second opinion
 about which source is code would be a second corpus definition free to drift
 from the first.
 
+**Every code aggregate carries its per-source breakdown.** The code card's
+`bpb` is a mixture-weighted mean over the holdout's languages, and phase 8's
+first two arms moved it by -23.6% while moving Python -- 55% of the corpus by
+design -- by -2.3%; TypeScript moved -63.6%. Both execution benchmarks are
+Python-only, so the aggregate and the pass@1 it sits beside are measuring
+different languages. The verdict therefore reports `code_bpb_by_source`
+wherever it reports `code_bpb`, and `_print_verdict` prints them together, so
+the split is the number rather than a caveat added under a headline.
+
 **`data/holdout/stack-edu-python` is not general retention.** The mixture record
 says so in its own caveats, and the bucket split honours it -- that source is
 served by the 65% code bucket and drawn from the same dataset the code corpus
@@ -56,7 +65,7 @@ from daedalus.code_gates import (ProbeGateError, ProbeScore,  # noqa: E402
 from daedalus.scorecard import (ArtifactRef, ScorecardError,  # noqa: E402
                                 load_scorecard, sha256_file)
 from scripts.bpb_eval import (_git_short_sha, discover_sources,  # noqa: E402
-                              run_bpb_eval)
+                              per_source_bpb, run_bpb_eval)
 from scripts.code_probes import DEFAULT_MIXTURE_RECORD, DEFAULT_REPORT  # noqa: E402
 
 
@@ -475,6 +484,56 @@ def read_probe_score(model: ScoredModel,
                                  for name, card in execution.items()})
 
 
+def pair_by_source(base_table: Dict[str, dict], measured_table: Dict[str, dict],
+                   *, measured_name: str = "the measured model") -> dict:
+    """Two per-source BPB tables as one paired breakdown, source by source.
+
+    Keyed `base`/`measured` rather than `base`/`arm` because the 1B branch gate
+    reads the same table for a model that is not an arm, and a key that means
+    "arm" in one verdict and "branch" in the other is a key a reader has to
+    translate.
+
+    A source on one side only is refused rather than dropped. The aggregate is a
+    weighted mean over whatever the card measured, so two aggregates over
+    different source sets are already not comparable -- and a breakdown that
+    silently omitted the difference would be the one place that fact was
+    visible.
+    """
+
+    if sorted(base_table) != sorted(measured_table):
+        raise ProbeScoringError(
+            f"the base scored code sources {sorted(base_table)} and "
+            f"{measured_name} scored {sorted(measured_table)}; these aggregates "
+            f"are means over different holdouts and their difference is not a "
+            f"difference between models")
+    paired = {}
+    for name in sorted(base_table):
+        base_bpb = float(base_table[name]["bpb"])
+        measured_bpb = float(measured_table[name]["bpb"])
+        if base_bpb <= 0:
+            raise ProbeScoringError(
+                f"base BPB for source {name!r} is {base_bpb!r}; a relative "
+                f"improvement against it is undefined")
+        paired[name] = {
+            "base": base_bpb,
+            "measured": measured_bpb,
+            "improvement_pct": (base_bpb - measured_bpb) / base_bpb * 100.0,
+            "weight": measured_table[name]["weight"],
+            "tokens": measured_table[name]["tokens"],
+        }
+    return paired
+
+
+def code_bpb_by_source(base_model: ScoredModel, measured: ScoredModel) -> dict:
+    """One model's code BPB per holdout source, paired against the base's own."""
+
+    return pair_by_source(per_source_bpb(load_scorecard(card_path(base_model,
+                                                                  CODE_CARD))),
+                          per_source_bpb(load_scorecard(card_path(measured,
+                                                                  CODE_CARD))),
+                          measured_name=measured.name)
+
+
 def read_general_bpb(model: ScoredModel) -> dict:
     """One model's general-replay BPB, with the coverage it was measured over."""
 
@@ -527,8 +586,14 @@ def build_verdict(models: Sequence[ScoredModel], *,
     base_general = read_general_bpb(base)
     retention_by_arm = {arm.name: retention(base_general, read_general_bpb(arm))
                         for arm in arms}
+    # Beside `code_bpb` and `code_bpb_improvement_pct` in the same entry, not
+    # under them: the aggregate is a 55%-Python mean and phase 8's probes moved
+    # it almost entirely through TypeScript. A reader who sees only the
+    # aggregate concludes something the breakdown does not support.
+    by_source = {arm.name: code_bpb_by_source(base, arm) for arm in arms}
     for entry in gate["arms"]:
         entry["retention"] = retention_by_arm[entry["arm"]]
+        entry["code_bpb_by_source"] = by_source[entry["arm"]]
 
     # Applied only to arms the gate already qualified, and only ever to remove
     # one. See PROBE_RETENTION_REGRESSION_PCT_MAX for why this bound and not a
@@ -540,6 +605,8 @@ def build_verdict(models: Sequence[ScoredModel], *,
     return {
         "schema": 1,
         "gate": gate,
+        "code_bpb_base_by_source": per_source_bpb(
+            load_scorecard(card_path(base, CODE_CARD))),
         "general_bpb_base": base_general,
         "retention": retention_by_arm,
         "retention_threshold_pct": PROBE_RETENTION_REGRESSION_PCT_MAX,
@@ -666,6 +733,9 @@ def _print_verdict(verdict: dict) -> None:
     gate = verdict["gate"]
     print(f"\nbase code BPB {gate['arms'][0]['code_bpb_base']:.4f}, "
           f"general BPB {verdict['general_bpb_base']['bpb']:.4f}")
+    for source, value in sorted(verdict["code_bpb_base_by_source"].items()):
+        print(f"      {source:52s} {value['bpb']:.5f} "
+              f"(weight {value['weight']:.3f})")
     for entry in gate["arms"]:
         retained = entry["retention"]
         print(f"  {entry['arm']:24s} code {entry['code_bpb']:.4f} "
@@ -674,6 +744,12 @@ def _print_verdict(verdict: dict) -> None:
               f"B={'y' if entry['criterion_b_execution'] else 'n'} "
               f"general {retained['regression_pct']:+.2f}% "
               f"{'retained' if retained['retained'] else 'REGRESSED'}")
+        # The aggregate above is a weighted mean; these are what it is a mean
+        # of. Printed every time it is, because a gain concentrated in one
+        # language is not the same result as an even one.
+        for source, value in sorted(entry["code_bpb_by_source"].items()):
+            print(f"      {source:52s} {value['measured']:.5f} "
+                  f"({value['improvement_pct']:+.2f}%)")
     print(f"gate: {'continue' if gate['continue'] else 'STOP'} -- {gate['reason']}")
     print(f"selected: {verdict['selected'] or 'none'} -- {verdict['reason']}")
 
