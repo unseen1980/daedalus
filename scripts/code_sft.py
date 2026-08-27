@@ -1,8 +1,8 @@
-"""Phase 8 step 6's SFT sources, resolved against real rows.
+"""Phase 8 step 6's SFT sources: resolved against real rows, then built.
 
-The table in `daedalus/code_sft.py` names what to *ask* for. This resolves it:
-which datasets answer, which licence each declares, which row key carries the
-sub-dataset a row came from, how much of each stream survives the admission
+The table in `daedalus/code_sft.py` names what to *ask* for. `probe` resolves
+it: which datasets answer, which licence each declares, which row key carries
+the sub-dataset a row came from, how much of each stream survives the admission
 gate, and how many admitted conversations ship a test that could be executed.
 
 Every one of those is a guess until a row is read, and each fails in the same
@@ -11,9 +11,18 @@ nobody classified, refuses every row and leaves a build that writes an empty
 file and exits zero. `codeprep`'s corpus probe exists for the same reason and
 this is deliberately the same shape.
 
-Read the JSON rather than the exit code when the process ends in `-6`: pyarrow
-aborts in `PyGILState_Release` during interpreter finalization, after everything
-is written. That trap is recorded in the phase 8 PR body and it applies here.
+`build` is the pass the probe authorises: the same rows through the same gate,
+with the conversations that pass written once to a training file, a held-out
+file and a manifest carrying every count the plan asks step 6 to track. It runs
+the shipped tests it finds rather than only reporting that they exist, which is
+the difference between "syntax-checked" and the plan's "syntax-checked *and*
+execution-tested" -- and the reason it belongs in a detached phase rather than
+in a training loop.
+
+The `-6` trap recorded in the phase 8 PR body is closed here rather than worked
+around: pyarrow aborts in `PyGILState_Release` during interpreter finalization,
+after everything is written, so the process now exits on its own return code
+without finalizing. See the `__main__` block.
 """
 
 from __future__ import annotations
@@ -25,8 +34,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from daedalus.code_sft import (DEFAULT_MAX_LEN, SFT_SOURCES,  # noqa: E402
-                               default_execute, probe_problems, probe_sources)
+from daedalus.code_sft import (DEFAULT_CODE_SHARE,  # noqa: E402
+                               DEFAULT_HOLDOUT_EXAMPLES, DEFAULT_MAX_LEN,
+                               DEFAULT_SUPERVISED_TOKENS, SFT_SOURCES,
+                               CodeSFTError, build_dataset, default_execute,
+                               probe_problems, probe_sources)
 from daedalus.codeprep import (DEFAULT_CODE_INDEX_PATH,  # noqa: E402
                                code_coverage_problems)
 from daedalus.codeprep import load_index as load_code_index
@@ -38,34 +50,51 @@ from daedalus.codeprep import load_index as load_code_index
 DEFAULT_EVAL_INDEX_PATH = "data/decontam/eval-index-13gram.txt.gz"
 
 
-def _load_indexes(a) -> dict:
-    """`{name: ngrams}`, so a contamination hit reports *which* benchmark set it
-    came from. Not a union: `codeprep`'s build unions them because its predicate
-    takes one set, while `code_sft.contamination_hit` returns the index name and
-    the two indexes cover different benchmarks -- a code-index hit and a
-    five-task hit are different findings about a conversation."""
+def _index_provenance(path: str, provenance) -> dict:
+    """What a manifest needs to re-derive which index filtered a build.
+
+    The n-grams themselves say nothing about where they came from, and a built
+    corpus outlives the command that wrote it -- phase 7 paid for that once,
+    when establishing which sources predated a split change meant rebuilding an
+    index and matching a gram count that happened to be in a log.
+    """
+
+    fields = provenance if isinstance(provenance, dict) else {}
+    return {"path": path, "digest": fields.get("digest"), "n": fields.get("n"),
+            "ngrams": fields.get("ngrams"), "built_at": fields.get("built_at")}
+
+
+def _load_indexes(a):
+    """`({name: ngrams}, {name: provenance})`, so a contamination hit reports
+    *which* benchmark set it came from. Not a union: `codeprep`'s build unions
+    them because its predicate takes one set, while `code_sft.contamination_hit`
+    returns the index name and the two indexes cover different benchmarks -- a
+    code-index hit and a five-task hit are different findings about a
+    conversation."""
 
     if a.no_decontam:
-        return {}
-    indexes = {}
-    ngrams, provenance = load_code_index(a.code_index,
-                                         expect_digest=a.code_index_digest)
-    problems = code_coverage_problems(provenance)
+        return {}, {}
+    indexes, provenance = {}, {}
+    ngrams, record = load_code_index(a.code_index,
+                                     expect_digest=a.code_index_digest)
+    problems = code_coverage_problems(record)
     if problems:
         raise ValueError(f"{a.code_index} does not cover what phase 8 is gated "
                          f"on: {'; '.join(problems)}")
     indexes["code"] = ngrams
+    provenance["code"] = _index_provenance(a.code_index, record)
     if a.eval_index:
         from daedalus.eval_index import coverage_problems, load_index
 
-        eval_ngrams, eval_provenance = load_index(
+        eval_ngrams, eval_record = load_index(
             a.eval_index, expect_digest=a.eval_index_digest)
-        problems = coverage_problems(eval_provenance)
+        problems = coverage_problems(eval_record)
         if problems:
             raise ValueError(f"{a.eval_index} does not cover what this model is "
                              f"scored on: {'; '.join(problems)}")
         indexes["eval"] = eval_ngrams
-    return indexes
+        provenance["eval"] = _index_provenance(a.eval_index, eval_record)
+    return indexes, provenance
 
 
 def _record_lines(record: dict) -> list:
@@ -124,15 +153,13 @@ def _record_lines(record: dict) -> list:
 
 
 def _probe(a) -> int:
-    chosen = [s for s in SFT_SOURCES if not a.source or s.key in a.source]
-    unknown = sorted(set(a.source or ()) - {s.key for s in SFT_SOURCES})
-    if unknown:
-        print(f"REFUSE: unknown source key(s) {unknown}; the table carries "
-              f"{sorted(s.key for s in SFT_SOURCES)}", file=sys.stderr)
+    chosen, refusal = _chosen_sources(a)
+    if refusal:
+        print(f"REFUSE: {refusal}", file=sys.stderr)
         return 2
 
     try:
-        indexes = _load_indexes(a)
+        indexes, _ = _load_indexes(a)
     except (OSError, ValueError) as error:
         print(f"REFUSE: {error}", file=sys.stderr)
         return 2
@@ -183,6 +210,85 @@ def _probe(a) -> int:
     return 0
 
 
+def _chosen_sources(a):
+    """`(sources, refusal)` for the `--source` filter both subcommands take."""
+
+    unknown = sorted(set(a.source or ()) - {s.key for s in SFT_SOURCES})
+    if unknown:
+        return None, (f"unknown source key(s) {unknown}; the table carries "
+                      f"{sorted(s.key for s in SFT_SOURCES)}")
+    return [s for s in SFT_SOURCES if not a.source or s.key in a.source], None
+
+
+def _build(a) -> int:
+    chosen, refusal = _chosen_sources(a)
+    if refusal:
+        print(f"REFUSE: {refusal}", file=sys.stderr)
+        return 2
+
+    try:
+        indexes, provenance = _load_indexes(a)
+    except (OSError, ValueError) as error:
+        print(f"REFUSE: {error}", file=sys.stderr)
+        return 2
+
+    from daedalus.data import get_tokenizer
+
+    tokenizer = get_tokenizer()
+    print(f"building {len(chosen)} source(s) into {a.out_dir}: "
+          f"{a.supervised_tokens:,} supervised tokens at {a.code_share:.0%} "
+          f"code, {a.holdout_examples:,} held out per half; "
+          f"decontamination {', '.join(sorted(indexes))}; "
+          f"execution {'off' if a.no_execute else 'on'}", flush=True)
+
+    try:
+        manifest = build_dataset(
+            chosen, out_dir=a.out_dir, tokenizer=tokenizer, indexes=indexes,
+            index_provenance=provenance,
+            supervised_tokens=a.supervised_tokens, code_share=a.code_share,
+            holdout_examples=a.holdout_examples,
+            max_offered_rows=a.max_offered_rows, max_len=a.max_len,
+            execute=None if a.no_execute else default_execute,
+            timeout_s=a.timeout_s, memory_mb=a.memory_mb, seed=a.seed,
+            overwrite=a.overwrite, progress_every=a.progress_every,
+            log=lambda line: print(line, flush=True))
+    except CodeSFTError as error:
+        print(f"REFUSE: {error}", file=sys.stderr)
+        return 2
+
+    for record in manifest["sources"]:
+        print("\n".join(_record_lines(record)))
+        print(f"      wrote {record['written_train']:,} training and "
+              f"{record['written_holdout']:,} held-out conversations; "
+              f"{record['rows_after_budget']:,} rows arrived after this half "
+              f"was full")
+
+    print(f"\n  {manifest['rows_offered']:,} rows offered, "
+          f"{manifest['overlapping_rows']:,} claimed by more than one source")
+    for half, block in sorted(manifest["halves"].items()):
+        print(f"  {half:8s} {block['supervised_tokens']:>10,} of "
+              f"{block['budget']:,} supervised tokens "
+              f"({block['train_examples']:,} conversations, "
+              f"{block['holdout_examples']:,} held out)"
+              f"{'  TRIMMED to hold the share' if block['trimmed'] else ''}")
+    share = manifest["realized_code_share"]
+    print(f"  realized code share "
+          f"{'n/a' if share is None else f'{share:.1%}'} of "
+          f"{manifest['train_supervised_tokens']:,} supervised tokens over "
+          f"{manifest['train_examples']:,} conversations")
+    print(f"\nwrote {os.path.join(a.out_dir, 'manifest.json')}")
+
+    if manifest["problems"]:
+        print("\nthe built set is not what its manifest asks for:",
+              file=sys.stderr)
+        for problem in manifest["problems"]:
+            print(f"  - {problem}", file=sys.stderr)
+        return 3
+    print("\nevery source resolved and both halves filled their share of the "
+          "budget")
+    return 0
+
+
 def _cli(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -219,9 +325,70 @@ def _cli(argv=None) -> int:
     probe.add_argument("--json-out", default=None)
     probe.set_defaults(fn=_probe)
 
+    build = sub.add_parser(
+        "build", help="write the SFT set the sources admit, with its manifest")
+    build.add_argument("--out-dir", default="data/code-sft")
+    build.add_argument("--supervised-tokens", type=int,
+                       default=DEFAULT_SUPERVISED_TOKENS,
+                       help="training budget, in supervised tokens. Not a "
+                            "preregistered quantity -- the plan names step 6's "
+                            "filter, not its size -- so it is a flag and the "
+                            "realized figure goes in the manifest")
+    build.add_argument("--code-share", type=float, default=DEFAULT_CODE_SHARE,
+                       help="the code half's share of supervised tokens. "
+                            "Borrowed from the corpus's preregistered 65%%; "
+                            "this is the invariant the budget gives way to")
+    build.add_argument("--holdout-examples", type=int,
+                       default=DEFAULT_HOLDOUT_EXAMPLES,
+                       help="conversations held out per half, off the head of "
+                            "the same stream so the trainer cannot reach them")
+    build.add_argument("--max-offered-rows", type=int, default=None,
+                       help="stop the pass after this many rows however full "
+                            "the halves are; for smokes, which must not be "
+                            "able to write a full set into the gate's path")
+    build.add_argument("--source", action="append", default=[],
+                       help="build only this table key; repeatable. A build "
+                            "still needs a source for every weighted half")
+    build.add_argument("--max-len", type=int, default=DEFAULT_MAX_LEN,
+                       help="post.py's token budget, so an example admitted "
+                            "here is one the trainer's encoder will accept")
+    build.add_argument("--code-index", default=DEFAULT_CODE_INDEX_PATH)
+    build.add_argument("--code-index-digest", default=None)
+    build.add_argument("--eval-index", default=DEFAULT_EVAL_INDEX_PATH)
+    build.add_argument("--eval-index-digest", default=None)
+    build.add_argument("--no-execute", action="store_true",
+                       help="admit shipped tests without running them. The "
+                            "plan asks for execution-tested conversations, so "
+                            "this measures a set nothing should train on")
+    build.add_argument("--timeout-s", type=float, default=30.0)
+    build.add_argument("--memory-mb", type=int, default=1024)
+    build.add_argument("--seed", type=int, default=0)
+    build.add_argument("--progress-every", type=int, default=20_000)
+    build.add_argument("--overwrite", action="store_true",
+                       help="replace a built set rather than refusing to write "
+                            "a second one beside it")
+    # A build's indexes and tokenizer are not optional: the first decides
+    # whether the set carries the benchmarks this phase is gated on, and the
+    # second is what the mixture is measured in. The probe's flags for skipping
+    # them exist to check a source's *shape*, and nothing should train on the
+    # result, so they are not offered here.
+    build.set_defaults(fn=_build, no_decontam=False)
+
     args = parser.parse_args(argv)
     return args.fn(args)
 
 
 if __name__ == "__main__":
-    raise SystemExit(_cli())
+    # `os._exit`, not `SystemExit`, for post.py's reason and this module's own
+    # recorded one: pyarrow's parquet reader keeps a worker thread alive behind
+    # a half-consumed streaming dataset, and finalizing the interpreter beside
+    # it aborts in `PyGILState_Release` with exit code -6 -- *after* the JSON
+    # and the shards are on disk. Everything durable is written by the time
+    # `_cli` returns, so the only thing that abort can still lose is the exit
+    # status, and the controller reads a phase's exit status to decide whether
+    # the work happened. Not inside `_cli`: the tests call that directly, and
+    # `os._exit` there would take pytest with it.
+    _code = _cli()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(_code)

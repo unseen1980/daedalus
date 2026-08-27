@@ -15,19 +15,25 @@ comes back wrong while every count looks plausible:
     bucket and is reported as unknown rather than as Python.
 """
 
+import json
+from pathlib import Path
+
 import pytest
 
 from daedalus.chatml import DEFAULT_MAX_ASSISTANT_CHARS
-from daedalus.code_sft import (ADMISSION_REASONS, DEFAULT_MAX_LEN,
-                               LANGUAGE_BUCKETS, OTHER_LANGUAGE,
+from daedalus.code_sft import (ADMISSION_REASONS, DEFAULT_CODE_SHARE,
+                               DEFAULT_MAX_LEN, HOLDOUT_FILE, LANGUAGE_BUCKETS,
+                               MANIFEST_FILE, OTHER_LANGUAGE,
                                RECORDED_ALTERNATIVES, SFT_HALVES, SFT_SOURCES,
-                               SYNTAX_CHECKERS, UNDECLARED_LICENSE,
+                               SYNTAX_CHECKERS, TRAIN_FILE, UNDECLARED_LICENSE,
                                UNKNOWN_LANGUAGE, CodeBlock, CodeSFTError,
-                               SFTSource, contamination_hit,
-                               dataset_license_verdict, language_of,
-                               normalize_tag, parse_markdown, parse_messages,
-                               probe_problems, probe_source, probe_sources,
-                               row_messages, share_report, shipped_test,
+                               SFTSource, ShareAccumulator, build_dataset,
+                               build_problems, contamination_hit,
+                               dataset_license_verdict, group_sources,
+                               half_shares, language_of, normalize_tag,
+                               parse_markdown, parse_messages, probe_problems,
+                               probe_source, probe_sources, row_messages,
+                               share_report, shipped_test, source_group_key,
                                vet_example)
 from daedalus.codeprep import CODE_LANGUAGE_SHARES
 from daedalus.data import ngram_set
@@ -779,3 +785,393 @@ def test_a_probe_passes_the_contamination_indexes_through_by_name():
     record = probe_source(CODE_SOURCE, rows=5, stream=stream_of(rows),
                           indexes={"code": ngrams}, n=6)
     assert record["report"]["refusals"]["contaminated"] == 1
+
+
+# -------------------------------------------------------------- the build ---
+#
+# The probe answers "would a build do what it says". These are the build, and
+# the cases worth pinning are the ones where it writes a *plausible* set that
+# is not the one its manifest describes: a mixture nobody chose because one
+# half ran short, a holdout the trainer can reach, a conversation funding both
+# halves, or an execution-tested share that was never executed.
+
+CLEAN_INDEX = {"code": index_for(
+    "a benchmark item that appears in no row of any fixture in this module")}
+
+
+def code_row(i: int, *, tested: bool = True) -> dict:
+    """One `self-oss-instruct`-shaped row: the test in the user turn."""
+
+    user = f"please write f{i}"
+    if tested:
+        user += "\n" + fenced("python", f"assert f{i}(2) == 4")
+    return {"source": "self-oss-instruct",
+            "messages": chat(user, fenced("python",
+                                          f"def f{i}(x):\n    return x * 2"))}
+
+
+def general_row(i: int) -> dict:
+    return {"source": "openhermes-50k",
+            "messages": chat(f"question {i}", f"answer number {i}")}
+
+
+def interleaved(code: int, general: int, *, tested: bool = True) -> list:
+    rows = []
+    for i in range(max(code, general)):
+        if i < code:
+            rows.append(code_row(i, tested=tested))
+        if i < general:
+            rows.append(general_row(i))
+    return rows
+
+
+def build(tmp_path, rows, **kwargs):
+    """`build_dataset` over a fixture stream, with the two live halves' shape."""
+
+    kwargs.setdefault("out_dir", tmp_path / "set")
+    kwargs.setdefault("tokenizer", WordTokenizer())
+    kwargs.setdefault("indexes", CLEAN_INDEX)
+    kwargs.setdefault("execute", passing)
+    kwargs.setdefault("holdout_examples", 2)
+    kwargs.setdefault("supervised_tokens", 1_000)
+    kwargs.setdefault("progress_every", 0)
+    kwargs.setdefault("log", lambda line: None)
+    return build_dataset([CODE_SOURCE, GENERAL_SOURCE],
+                         stream=stream_of(rows), **kwargs)
+
+
+def lines_of(path):
+    return [json.loads(line) for line in
+            Path(path).read_text().splitlines() if line]
+
+
+def test_a_build_writes_a_training_set_a_holdout_and_a_manifest(tmp_path):
+    manifest = build(tmp_path, interleaved(60, 60))
+    out = tmp_path / "set"
+    assert (out / MANIFEST_FILE).exists()
+
+    train = lines_of(out / TRAIN_FILE)
+    holdout = lines_of(out / HOLDOUT_FILE)
+    assert len(train) == manifest["train_examples"]
+    assert len(holdout) == manifest["holdout_examples"] == 4
+    assert manifest["train_supervised_tokens"] == \
+        sum(row["supervised_tokens"] for row in train)
+    assert {row["half"] for row in train} == {"code", "general"}
+
+
+def test_the_written_rows_are_the_shape_the_trainer_already_reads(tmp_path):
+    """`post.iter_chat_examples` reads `row["messages"]` off whatever it is
+    handed, so a built file is training data with no adapter between them. A
+    record that needed one is a second rendering of the conversations, which is
+    the reason the general half is read from the released model's own dataset."""
+
+    from post import iter_chat_examples
+
+    manifest = build(tmp_path, interleaved(40, 40))
+    rows = lines_of(tmp_path / "set" / TRAIN_FILE)
+    kept = list(iter_chat_examples(rows, max_assistant_chars=10 ** 9,
+                                   drop_cot=False))
+    assert len(kept) == manifest["train_examples"] > 0
+    assert all(m["role"] in {"user", "assistant"}
+               for messages in kept for m in messages)
+
+
+def test_the_holdout_is_taken_first_and_the_trainer_cannot_reach_it(tmp_path):
+    """Held out off the head of the same stream, so a held-out conversation is
+    one no epoch can reach -- `post.take_eval_pairs`' property. Any other route
+    relies on two reads of a streaming dataset agreeing about order."""
+
+    build(tmp_path, interleaved(40, 40), holdout_examples=5)
+    out = tmp_path / "set"
+    train = lines_of(out / TRAIN_FILE)
+    holdout = lines_of(out / HOLDOUT_FILE)
+
+    def key(row):
+        return json.dumps(row["messages"], sort_keys=True)
+
+    assert not {key(row) for row in holdout} & {key(row) for row in train}
+    for half in ("code", "general"):
+        assert sum(1 for row in holdout if row["half"] == half) == 5
+
+
+def test_the_holdout_does_not_spend_the_training_budget(tmp_path):
+    """Otherwise the set is short by however much was held out, and the
+    shortfall reads as a stream that ran out."""
+
+    plain = build(tmp_path / "a", interleaved(400, 400), holdout_examples=0)
+    held = build(tmp_path / "b", interleaved(400, 400), holdout_examples=5)
+    assert plain["problems"] == held["problems"] == []
+    assert held["holdout_examples"] == 10
+    assert held["train_supervised_tokens"] == plain["train_supervised_tokens"]
+
+
+def test_both_halves_of_one_dataset_are_served_by_a_single_pass(tmp_path):
+    """Two reads of a streaming dataset are two chances for a Hub-side change
+    between them to make the halves overlap. One pass makes the partition a
+    property of the rows this build saw."""
+
+    calls = []
+
+    def stream(source):
+        calls.append(source.key)
+        return interleaved(30, 30)
+
+    build_dataset([CODE_SOURCE, GENERAL_SOURCE], out_dir=tmp_path / "set",
+                  tokenizer=WordTokenizer(), indexes=CLEAN_INDEX,
+                  execute=passing, holdout_examples=1, supervised_tokens=500,
+                  stream=stream, progress_every=0, log=lambda line: None)
+    assert len(calls) == 1
+
+
+def test_sources_group_by_the_rows_they_read(tmp_path):
+    other = SFTSource(key="other", half="general", dataset="second",
+                      declared_license="mit", note="")
+    groups = group_sources([CODE_SOURCE, GENERAL_SOURCE, other])
+    assert len(groups) == 2
+    assert source_group_key(CODE_SOURCE) == source_group_key(GENERAL_SOURCE)
+
+
+def test_a_row_two_sources_claim_is_fatal_rather_than_assigned(tmp_path):
+    """Whichever half it was assigned to, the shares would then describe a
+    corpus nobody built -- and the count that would say so is the one a
+    best-effort assignment throws away."""
+
+    greedy = SFTSource(key="greedy", half="general", dataset="d",
+                       declared_license="mit", note="", source_field="source",
+                       keep_sources=("self-oss-instruct",))
+    manifest = build_dataset([CODE_SOURCE, greedy], out_dir=tmp_path / "set",
+                             tokenizer=WordTokenizer(), indexes=CLEAN_INDEX,
+                             execute=passing, holdout_examples=0,
+                             supervised_tokens=500,
+                             stream=stream_of(interleaved(10, 10)),
+                             progress_every=0, log=lambda line: None)
+    assert manifest["overlapping_rows"] == 10
+    assert any("more than one source" in problem
+               for problem in manifest["problems"])
+
+
+def test_a_short_half_trims_the_other_rather_than_shipping_a_new_mixture(tmp_path):
+    """The share is borrowed from a preregistered quantity and the budget is
+    this build's own choice, so the budget is what gives way. A correctly sized
+    set at a mixture nobody chose is the failure that would not announce
+    itself."""
+
+    manifest = build(tmp_path, interleaved(20, 400), code_share=0.5,
+                     supervised_tokens=10 ** 7, holdout_examples=0)
+    halves = manifest["halves"]
+    assert halves["code"]["trimmed"] is False
+    assert halves["general"]["trimmed"] is True
+    assert halves["general"]["supervised_tokens"] < \
+        halves["general"]["supervised_tokens_admitted"]
+    assert manifest["realized_code_share"] == pytest.approx(0.5, abs=0.1)
+    assert any("of 5,000,000 supervised tokens" in problem
+               for problem in manifest["problems"])
+
+
+def test_a_full_build_holds_the_share_it_was_asked_for(tmp_path):
+    manifest = build(tmp_path, interleaved(400, 400), code_share=0.65,
+                     supervised_tokens=2_000, holdout_examples=0)
+    assert manifest["problems"] == []
+    assert manifest["realized_code_share"] == pytest.approx(0.65, abs=0.05)
+    for block in manifest["halves"].values():
+        # The fill overshoots by up to one conversation and the trim then cuts
+        # both halves to exactly proportional, so it is the fill that answers
+        # "did this half's stream fund its share".
+        assert block["supervised_tokens_admitted"] >= block["budget"]
+
+
+def test_a_filled_half_stops_costing_the_pass(tmp_path):
+    """Vetting runs a sandboxed process per shipped test, so a half that has
+    met its budget must stop paying for rows it will not write. The count is
+    kept apart from every refusal: nothing was wrong with those rows."""
+
+    manifest = build(tmp_path, interleaved(400, 400), supervised_tokens=400,
+                     holdout_examples=0)
+    assert manifest["rows_offered"] < 800
+    after = {record["key"]: record["rows_after_budget"]
+             for record in manifest["sources"]}
+    assert sum(after.values()) > 0
+    for record in manifest["sources"]:
+        assert record["rows_kept"] == \
+            record["written_train"] + record["written_holdout"] + \
+            record["report"]["refused"]
+
+
+def test_the_shipped_tests_are_run_and_counted_as_execution_tested(tmp_path):
+    """"Syntax-checked *and* execution-tested" is a measured fraction, not an
+    assumption: the general half ships no tests at all."""
+
+    manifest = build(tmp_path, interleaved(30, 30), holdout_examples=0)
+    by_key = {record["key"]: record for record in manifest["sources"]}
+    code, general = by_key["code"], by_key["general"]
+    assert code["report"]["execution_tested"] == code["report"]["admitted"] > 0
+    assert code["report"]["execution_tested_share"] == 1.0
+    assert general["report"]["execution_tested"] == 0
+    assert all(row["execution_tested"] for row in
+               lines_of(tmp_path / "set" / TRAIN_FILE) if row["half"] == "code")
+
+
+def test_a_shipped_test_that_fails_keeps_the_conversation_out(tmp_path):
+    manifest = build(tmp_path, interleaved(30, 30), execute=failing,
+                     holdout_examples=0)
+    code = next(r for r in manifest["sources"] if r["key"] == "code")
+    assert code["report"]["refusals"]["execution_failed"] == 30
+    assert code["report"]["admitted"] == 0
+    assert any("refused every one" in problem for problem in manifest["problems"])
+
+
+def test_without_a_runner_the_tests_are_counted_but_never_run(tmp_path):
+    """`execution_tested` must never read as a measurement when nothing ran, so
+    what *could* have been executed is reported separately from what was."""
+
+    manifest = build(tmp_path, interleaved(30, 30), execute=None,
+                     holdout_examples=0)
+    code = next(r for r in manifest["sources"] if r["key"] == "code")
+    assert manifest["execution"]["enabled"] is False
+    assert code["executed"] is False
+    assert code["shipped_tests"] == 30
+    assert code["report"]["execution_tested"] == 0
+
+
+def test_the_training_file_is_shuffled_deterministically(tmp_path):
+    """A stream grouped by source writes a file grouped by half, and a bounded
+    shuffle buffer in the trainer cannot undo that -- the optimizer would see a
+    curriculum nobody designed. The seed is what makes two arms comparable."""
+
+    blocked = [code_row(i) for i in range(30)] + \
+        [general_row(i) for i in range(30)]
+    first = build(tmp_path / "a", blocked, holdout_examples=0, seed=0)
+    again = build(tmp_path / "b", blocked, holdout_examples=0, seed=0)
+    assert (tmp_path / "a" / "set" / TRAIN_FILE).read_bytes() == \
+        (tmp_path / "b" / "set" / TRAIN_FILE).read_bytes()
+
+    halves = [row["half"] for row in lines_of(tmp_path / "a" / "set" / TRAIN_FILE)]
+    assert halves != sorted(halves, key=["code", "general"].index)
+    assert first["train_examples"] == again["train_examples"]
+
+
+def test_a_different_seed_reorders_the_same_conversations(tmp_path):
+    rows = interleaved(30, 30)
+    build(tmp_path / "a", rows, holdout_examples=0, seed=0)
+    build(tmp_path / "b", rows, holdout_examples=0, seed=7)
+
+    def written(name):
+        return [json.dumps(row["messages"], sort_keys=True)
+                for row in lines_of(tmp_path / name / "set" / TRAIN_FILE)]
+
+    assert sorted(written("a")) == sorted(written("b"))
+    assert written("a") != written("b")
+
+
+def test_the_manifest_answers_the_problems_without_the_build(tmp_path):
+    """`build_problems` is re-askable of the artifact by a reader who did not
+    run the build -- `mixture_opt`'s rule for a rule that judges an artifact."""
+
+    manifest = build(tmp_path, interleaved(20, 400), code_share=0.5,
+                     supervised_tokens=10 ** 7, holdout_examples=0)
+    on_disk = json.loads((tmp_path / "set" / MANIFEST_FILE).read_text())
+    assert build_problems(on_disk) == manifest["problems"] != []
+
+
+def test_the_manifest_records_what_filtered_the_set(tmp_path):
+    provenance = {"code": {"path": "data/decontam/code.gz", "digest": "sha256:ab",
+                           "n": 13, "ngrams": 34286}}
+    manifest = build(tmp_path, interleaved(20, 20), holdout_examples=0,
+                     index_provenance=provenance)
+    assert manifest["decontam_indexes"] == ["code"]
+    assert manifest["decontam_provenance"] == provenance
+    assert manifest["tokenizer"]["vocab_size"] is None      # the fixture's
+
+
+def test_a_contaminated_conversation_never_reaches_the_file(tmp_path):
+    rows = interleaved(10, 10)
+    rows.append({"source": "openhermes-50k", "messages": chat("q", ITEM)})
+    manifest = build(tmp_path, rows, indexes={"code": index_for(ITEM)},
+                     holdout_examples=0)
+    general = next(r for r in manifest["sources"] if r["key"] == "general")
+    assert general["report"]["refusals"]["contaminated"] == 1
+    written = Path(tmp_path / "set" / TRAIN_FILE).read_text()
+    assert "has_close_elements" not in written
+
+
+# ------------------------------------------------------- the build refuses ---
+
+def test_a_build_without_a_tokenizer_is_refused(tmp_path):
+    """The mixture is measured in supervised tokens and `over_token_budget` is
+    the only place an example the encoder would silently drop gets a reason."""
+
+    with pytest.raises(CodeSFTError, match="tokenizer"):
+        build(tmp_path, interleaved(5, 5), tokenizer=None)
+
+
+def test_a_build_without_the_decontamination_indexes_is_refused(tmp_path):
+    with pytest.raises(CodeSFTError, match="decontamination"):
+        build(tmp_path, interleaved(5, 5), indexes={})
+
+
+def test_a_build_weighting_a_half_it_has_no_source_for_is_refused(tmp_path):
+    with pytest.raises(CodeSFTError, match="every half"):
+        build_dataset([CODE_SOURCE], out_dir=tmp_path / "set",
+                      tokenizer=WordTokenizer(), indexes=CLEAN_INDEX,
+                      stream=stream_of(interleaved(5, 5)), progress_every=0,
+                      log=lambda line: None)
+
+
+def test_a_degenerate_share_is_refused_rather_than_streamed_and_discarded():
+    for share in (0.0, 1.0, -0.2, 1.5):
+        with pytest.raises(CodeSFTError):
+            half_shares(share)
+    assert half_shares(0.65) == {"code": 0.65, "general": pytest.approx(0.35)}
+    assert half_shares()["code"] == DEFAULT_CODE_SHARE
+
+
+def test_a_build_refuses_to_write_a_second_set_beside_the_first(tmp_path):
+    build(tmp_path, interleaved(10, 10), holdout_examples=0)
+    with pytest.raises(CodeSFTError, match="already exists"):
+        build(tmp_path, interleaved(10, 10), holdout_examples=0)
+    manifest = build(tmp_path, interleaved(10, 10), holdout_examples=0,
+                     overwrite=True)
+    assert manifest["train_examples"] > 0
+
+
+def test_a_holdout_shorter_than_asked_for_is_a_problem(tmp_path):
+    """A gate scored on whatever the stream happened to yield first is scored
+    on a denominator nobody chose."""
+
+    manifest = build(tmp_path, interleaved(3, 3), holdout_examples=10)
+    assert any("held out" in problem for problem in manifest["problems"])
+
+
+def test_an_unreachable_source_is_recorded_rather_than_raising(tmp_path):
+    def boom(source):
+        raise OSError("404")
+
+    manifest = build_dataset([CODE_SOURCE, GENERAL_SOURCE],
+                             out_dir=tmp_path / "set",
+                             tokenizer=WordTokenizer(), indexes=CLEAN_INDEX,
+                             stream=boom, progress_every=0,
+                             log=lambda line: None)
+    assert all("OSError: 404" in record["error"]
+               for record in manifest["sources"])
+    assert any("did not resolve" in problem for problem in manifest["problems"])
+
+
+# ------------------------------------------------------ the shared counters ---
+
+def test_the_streaming_counters_are_the_batch_report_s_own():
+    """`share_report` is what every other test in this file pins, and a build
+    that counted separately would be free to disagree with the probe that
+    authorised it."""
+
+    verdicts = [
+        vet_example(chat("q", fenced("python", "def f():\n    return 1")),
+                    tokenizer=WordTokenizer()),
+        vet_example(chat("q", fenced("typescript", "const x = 1"))),
+        vet_example(chat("q", fenced("python", "def f(:"))),
+        vet_example(chat("q", fenced("python", "def f():\n    return 1")),
+                    test_code="assert f() == 1", execute=passing),
+    ]
+    accumulator = ShareAccumulator()
+    for verdict in verdicts:
+        assert accumulator.add(verdict) is verdict
+    assert accumulator.result() == share_report(verdicts)
