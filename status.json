@@ -4,10 +4,10 @@
     "user_action_required": true
   },
   "deadline": {
-    "elapsed_hours": 100.21,
-    "finalization_in_hours": 35.79,
+    "elapsed_hours": 100.3,
+    "finalization_in_hours": 35.7,
     "hard_hours": 144.0,
-    "remaining_hours": 43.79,
+    "remaining_hours": 43.7,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-28T14:57:16.283980Z",
+  "heartbeat_at": "2026-08-28T15:02:18.085281Z",
   "lanes": {
     "directive": {
       "details": {
