@@ -2,12 +2,12 @@
 
 > **Action required.** 3 repair continuations failed on phase phase8-branch-1b-scoring
 
-- Heartbeat: `2026-08-28T00:02:06.431099Z`
+- Heartbeat: `2026-08-28T00:07:09.039058Z`
 - Phase: `phase8-branch-1b-scoring`
 - Status: `blocked`
 - Source: `vast/daedalus-code-20260824` at `89826d93bfc5`
-- Elapsed: `85.29h` of `144.0h`
-- Finalization window opens in: `50.71h`
+- Elapsed: `85.38h` of `144.0h`
+- Finalization window opens in: `50.62h`
 - Deadline stage: `active`
 
 ## Lanes
