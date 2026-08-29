@@ -1,0 +1,22 @@
+{
+  "item_count": 1,
+  "item_digest": "0a2c1476798217414da38f93d2a78040",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 256,
+      "expected": "canyon",
+      "extracted": "Loading model... |\b-\b\\\b \b",
+      "id": "mqar-d256-0",
+      "needle_depth_frac": 0.0,
+      "prompt": "Below is a list of keys and their values. Read the list and then answer the queries at the end with the matching value.\nhollow: estuary\nmarble: eagle\nsaffron: lagoon\nfjord: junction\nalcove: island\nfennel: zenith\nindigo: canyon\ncobalt: valley\nnectar: warren\nember: yeoman\nThe wind moves through the tall pines and carries the salt air. There and back again along the same worn path by the wall. Dust settles on the shelf where the empty jars are kept. The grass is green and the sky above is a pale washed blue. The wind moves through the tall pines and carries the salt air. The bread cools on the sill while the kettle begins to sing. There and back again along the same worn path by the wall. A slow river runs past the mill and turns the old wheel. The sun rises over the hill and the long shadows retreat. A slow river runs past the mill and turns the old wheel. The wind moves through the tall pines and carries the salt air.\nQueries:\nmarble: eagle\nember: yeoman\ncobalt: valley\nindigo:",
+      "prompt_tokens": 247,
+      "query_accuracy": 0.0,
+      "response": "Loading model... |\b-\b\\\b \b\n\n\u2584\u2584 \u2584\u2584\n\u2588\u2588 \u2588\u2588\n\u2588\u2588 \u2588\u2588  \u2580\u2580\u2588\u2584 \u2588\u2588\u2588\u2584\u2588\u2588\u2588\u2584  \u2580\u2580\u2588\u2584    \u2584\u2588\u2588\u2588\u2588 \u2588\u2588\u2588\u2588\u2584 \u2588\u2588\u2588\u2588\u2584\n\u2588\u2588 \u2588\u2588 \u2584\u2588\u2580\u2588\u2588 \u2588\u2588 \u2588\u2588 \u2588\u2588 \u2584\u2588\u2580\u2588\u2588    \u2588\u2588    \u2588\u2588 \u2588\u2588 \u2588\u2588 \u2588\u2588\n\u2588\u2588 \u2588\u2588 \u2580\u2588\u2584\u2588\u2588 \u2588\u2588 \u2588\u2588 \u2588\u2588 \u2580\u2588\u2584\u2588\u2588 \u2588\u2588 \u2580\u2588\u2588\u2588\u2588 \u2588\u2588\u2588\u2588\u2580 \u2588\u2588\u2588\u2588\u2580\n                                    \u2588\u2588    \u2588\u2588\n                                    \u2580\u2580    \u2580\u2580\n\nbuild      : b1-7584430\nmodel      : /root/daedalus/gguf/hero-base-f16.gguf\nftype      : F16\nmodalities : text\n\navailable commands:\n  /exit or Ctrl+C     stop or exit\n  /regen              regenerate the last response\n  /clear              clear the chat history\n  /read <file>        add a text file\n  /glob <pattern>     add text files using globbing pattern\n\n\n\n> Below is a list of keys and their values. Read the list and then answer the queries at the end with the matching value.\nhollow: estuary\nmarble: eagle\nsaffron: lagoon\nfjord: junction\nalcove: island\nfennel: zenith\nindigo: canyon\ncobalt: valley\nnectar: warren\nember: yeoman\nThe wind moves through the tall pines and carries the salt air. There and back again along the same worn path by the wall. Dust settles on the shelf where the empty jars are kept. The grass is green and the sky above is a pale wa ... (truncated)\n\nThe wind moves through the tall pines and carries the salt air. There and back again along the same worn path by\n\n[ Prompt: 2057.6 t/s | Generation: 78.8 t/s ]\n\n\nExiting...",
+      "task": "mqar"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-mqar",
+  "schema": 1
+}

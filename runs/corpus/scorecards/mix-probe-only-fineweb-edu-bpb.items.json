@@ -1,0 +1,14 @@
+{
+  "item_count": 1,
+  "item_digest": "b875ee2f9a2babd9cf2d34d5f84552d0",
+  "items": [
+    {
+      "bpb": 1.2071895276244842,
+      "id": "fineweb-edu",
+      "tokens": 53588955
+    }
+  ],
+  "kind": "bpb",
+  "name": "mix-probe-only-fineweb-edu-bpb",
+  "schema": 1
+}

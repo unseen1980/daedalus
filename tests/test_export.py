@@ -220,6 +220,57 @@ def test_export_hf_model_roundtrip_matches_original_logits(tmp_path):
     assert torch.allclose(our_logits.float(), hf_logits.float(), atol=1e-4)
 
 
+def test_export_carries_a_qat_runs_master_weights_through_unchanged(tmp_path):
+    """The composition Phase 3 depends on, through the real export function.
+
+    `test_qat.py` proves `q4_0_qdq` is `llama-quantize`'s grid, and that fp16
+    storage does not move an already-on-grid weight. Neither says what
+    `export_hf_model` does with a checkpoint written *while QAT was active* --
+    and that is where the weights could be swapped for something else, because
+    under `parametrize` the module's `weight` attribute is the quantized view
+    and only `parametrizations.weight.original` is the trainable master.
+
+    Exporting the quantized view would not look wrong: it is on the grid, it
+    loads, and it converts. It would simply have thrown away the full-precision
+    master that the next recovery stage is supposed to continue from, and
+    silently re-quantized an already-quantized tensor.
+    """
+    from daedalus import qat
+    from daedalus.muon import build_optimizers
+    from train import save_checkpoint
+
+    cfg = PRESETS["tiny"]
+    torch.manual_seed(0)
+    model = Daedalus(cfg)
+    muon, adamw, _ = build_optimizers(model)
+
+    qat.enable_qat(model)
+    masters = {name: qat.master_weight(mod).detach().clone()
+               for name, mod, _ in qat.plan_qat(model)}
+    quantized_view = {name: dict(model.named_modules())[name].weight.detach().clone()
+                      for name in masters}
+    # The premise: the two really are different tensors here.
+    assert any(not torch.equal(masters[n], quantized_view[n]) for n in masters)
+
+    ckpt_path = save_checkpoint(str(tmp_path / "qat.pt"), model, muon, adamw,
+                                step=7, tokens_seen=1024, cfg=cfg)
+    out_dir = str(tmp_path / "hf")
+    export_hf_model(ckpt_path, "tiny", out_dir, dtype=torch.float32)
+
+    from safetensors.torch import load_file
+    exported = load_file(os.path.join(out_dir, "model.safetensors"))
+    hf_names = {"embed_tokens": "model.embed_tokens.weight"}
+
+    checked = 0
+    for name, master in masters.items():
+        hf_name = hf_names.get(name, f"model.{name}.weight")
+        if hf_name not in exported:
+            continue
+        assert torch.equal(exported[hf_name].float(), master.float()), hf_name
+        checked += 1
+    assert checked, "no QAT tensor was matched to an exported one"
+
+
 def test_export_hf_model_untied_head(tmp_path):
     """Same equivalence check, but for an untied-embeddings config -- a
     separate code path in to_hf_state_dict (no synthetic lm_head copy)."""
@@ -1100,3 +1151,64 @@ def test_the_written_config_declares_the_dtype_the_weights_are_in(tmp_path):
         f"Q4_0 grid through export")
     assert declared == actual, (
         f"config.json declares {declared!r} beside {actual!r} weights")
+
+
+# ------------------------------------------------ explicit tokenizer path ----
+
+def test_export_tokenizer_still_defaults_to_smollm2():
+    """Phase 4 added an override. Every shipped export must be unaffected by
+    it, because SmolLM2's pre-tokenizer hash is the one llama.cpp's converter
+    recognises and any other vocabulary makes conversion raise."""
+    import inspect
+
+    signature = inspect.signature(export_module.export_tokenizer)
+    assert signature.parameters["tokenizer"].default is None
+    assert signature.parameters["expected_vocab_size"].default is None
+    assert "tokenizer or SMOLLM2_TOKENIZER" in inspect.getsource(
+        export_module.export_tokenizer)
+
+
+def test_export_tokenizer_refuses_a_vocabulary_the_model_cannot_index(tmp_path):
+    """A 49,152-token tokenizer beside a 32,768-row embedding produces a
+    directory that converts, quantizes and loads -- and decodes the wrong token
+    for every id. The guard is the only thing between the override and that."""
+    with pytest.raises(ValueError, match="rows"):
+        export_module.export_tokenizer(str(tmp_path / "hf"),
+                                       expected_vocab_size=32768)
+
+
+def test_config_json_never_carries_the_tokenizer_field(tmp_path):
+    """`tokenizer` is a training-only knob. llama.cpp's converter reads
+    config.json by name and fingerprints the tokenizer from the files beside
+    it; an extra key there is a gratuitous difference from every `Lfm2Config`
+    the converter has seen."""
+    import json
+
+    from daedalus.config import PRESETS, tokenizer_probe_preset_name
+
+    probe = PRESETS[tokenizer_probe_preset_name(32768)]
+    assert "tokenizer" in vars(probe)
+    assert "tokenizer" not in probe.to_hf_dict()
+
+    ckpt = _tiny_checkpoint(tmp_path)
+    out = str(tmp_path / "hf")
+    export_hf_model(ckpt, "tiny", out)
+    assert "tokenizer" not in json.load(open(os.path.join(out, "config.json")))
+
+
+def test_the_model_card_names_a_non_default_vocabulary(tmp_path):
+    """A card claiming a byte-identical SmolLM2 tokenizer beside a 32,768-row
+    embedding would be false, and the card travels with the weights."""
+    from daedalus.config import PRESETS, tokenizer_probe_preset_name
+
+    name = tokenizer_probe_preset_name(32768)
+    PRESETS[name].tokenizer = "data/tokenizer-lab/tokenizers/v32768"
+    try:
+        out = tmp_path / "card"
+        out.mkdir()
+        export_module.write_model_card(str(out), name)
+        card = (out / "README.md").read_text()
+    finally:
+        PRESETS[name].tokenizer = None
+    assert "v32768" in card
+    assert "reused byte-identical" not in card.split("| tokenizer |")[1].split("\n")[0]

@@ -1,0 +1,113 @@
+{
+  "item_count": 8,
+  "item_digest": "b73405a898a64c1dc5d980bcaeddd1f7",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "nectar harbor kelp",
+      "extracted": "\"The sea is a sea of sea.\"",
+      "id": "copy-control-0",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nnectar harbor kelp\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "\"The sea is a sea of sea.\"\nThe phrase is:\n\"The sea is a sea of sea",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "juniper violet umber",
+      "extracted": "The word is:",
+      "id": "copy-control-1",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\njuniper violet umber\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "The word is:\nThe word is:\nThe word is:\nThe word is:\nThe word is",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "willow gable granite",
+      "extracted": "\"The stone is the most beautiful of all the stones in the world. It is the most beautiful of all the",
+      "id": "copy-control-2",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nwillow gable granite\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 0.0,
+      "response": "\"The stone is the most beautiful of all the stones in the world. It is the most beautiful of all the",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "granite esker dapple",
+      "extracted": "\"The sun is the sun, and the sun is the sun.\"",
+      "id": "copy-control-3",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\ngranite esker dapple\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "\"The sun is the sun, and the sun is the sun.\"\nThe phrase is:\n\"The sun",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "xenon esker lichen",
+      "extracted": "\"The most common species of lichen is the bivalve lichen, which is a very large, very large,",
+      "id": "copy-control-4",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nxenon esker lichen\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "\"The most common species of lichen is the bivalve lichen, which is a very large, very large,",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "amber gable prairie",
+      "extracted": "The word is:",
+      "id": "copy-control-5",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\namber gable prairie\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "The word is:\nThe word is:\nThe word is:\nThe word is:\nThe word is",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "hollow lantern xenon",
+      "extracted": "\"The sun is shining in the sky, and the sun is shining in the sky.\"",
+      "id": "copy-control-6",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nhollow lantern xenon\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 0.0,
+      "response": "\"The sun is shining in the sky, and the sun is shining in the sky.\"\nThe phrase is:",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "indigo gable fennel",
+      "extracted": "\"The sun is shining, and the sun is shining.\"",
+      "id": "copy-control-7",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nindigo gable fennel\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "\"The sun is shining, and the sun is shining.\"\nThe phrase is:\n\"The sun is shining",
+      "task": "copy-control"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-copy-control",
+  "schema": 1
+}

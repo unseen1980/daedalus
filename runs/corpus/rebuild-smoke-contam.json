@@ -1,0 +1,79 @@
+{
+  "per_source": [
+    {
+      "source": "everyday-conversations",
+      "source_tokens": 69438,
+      "eos_id": 0,
+      "windows": 2,
+      "tokens_scanned": 65536,
+      "tokens_excluded": 344,
+      "docs": 375,
+      "doc_tokens": 64815,
+      "stopped_early": null,
+      "examples": [],
+      "docs_filtered": 0,
+      "tokens_filtered": 0,
+      "docs_split_gap": 0,
+      "tokens_split_gap": 0,
+      "docs_limit_gap": 0,
+      "tokens_limit_gap": 0
+    }
+  ],
+  "totals": {
+    "corpus_tokens": 69438,
+    "docs": 375,
+    "doc_tokens": 64815,
+    "sampled_frac": 0.9334226216192862,
+    "docs_filtered": 0,
+    "token_rate_filtered": 0.0,
+    "doc_rate_filtered_upper95": 0.01014038584991722,
+    "docs_split_gap": 0,
+    "token_rate_split_gap": 0.0,
+    "doc_rate_split_gap_upper95": 0.01014038584991722,
+    "docs_limit_gap": 0,
+    "token_rate_limit_gap": 0.0,
+    "doc_rate_limit_gap_upper95": 0.01014038584991722
+  },
+  "coverage": {
+    "hellaswag": {
+      "indexed": 2000,
+      "total": 10042,
+      "build_split": null
+    },
+    "arc_easy": {
+      "indexed": 2000,
+      "total": 2376,
+      "build_split": "validation"
+    },
+    "piqa": {
+      "indexed": 1838,
+      "total": 1838,
+      "build_split": null
+    },
+    "openbookqa": {
+      "indexed": 500,
+      "total": 500,
+      "build_split": "validation"
+    },
+    "winogrande": {
+      "indexed": 1267,
+      "total": 1267,
+      "build_split": null
+    }
+  },
+  "index_sizes": {
+    "filtered": 183359,
+    "split_gap": 47549,
+    "limit_gap": 1157091
+  },
+  "params": {
+    "window": 32768,
+    "k": 120,
+    "n": 13,
+    "used_limit": 2000,
+    "build_splits": {
+      "arc_easy": "validation",
+      "openbookqa": "validation"
+    }
+  }
+}

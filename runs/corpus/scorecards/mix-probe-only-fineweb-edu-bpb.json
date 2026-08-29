@@ -1,0 +1,63 @@
+{
+  "created_at": "2026-08-26T11:21:40.837346Z",
+  "details": {
+    "arm": "only-fineweb-edu",
+    "basis": "all mass on fineweb-edu: the achievable-BPB bound that per-source excess loss is measured against",
+    "holdout_root": "data/holdout",
+    "is_baseline": false,
+    "phase": "phase7-mixture",
+    "run": "mix-probe-only-fineweb-edu",
+    "scored_role": "specialist",
+    "shape": "probe",
+    "sources_requested": [
+      "fineweb-edu"
+    ],
+    "tag": "probe",
+    "train_weights": {
+      "dclm-baseline": 0.0,
+      "fineweb-edu": 1.0,
+      "stack-edu-python": 0.0
+    },
+    "weighting": "equal",
+    "weights": null
+  },
+  "item_count": 1,
+  "item_digest": "b875ee2f9a2babd9cf2d34d5f84552d0",
+  "kind": "bpb",
+  "metrics": {
+    "bpb": 1.2071895276244842,
+    "bpb_equal_weight": 1.2071895276244842,
+    "bpb_fineweb-edu": 1.2071895276244842,
+    "bpb_token_weighted": 1.2071895276244842,
+    "n_sources": 1.0,
+    "tokens_fineweb-edu": 53588955.0
+  },
+  "name": "mix-probe-only-fineweb-edu-bpb",
+  "provenance": {
+    "artifact": {
+      "config": "tok-probe-49152",
+      "kind": "checkpoint",
+      "path": "runs/mix-probe-only-fineweb-edu/checkpoint.pt",
+      "revision": null,
+      "sha256": "9211b740686c7719d3495dadb501c1754cb8f24ab32d411f00042f0f1b4202c4"
+    },
+    "bpb_mode": "full",
+    "bpb_sample_batches": null,
+    "git_sha": "e0be618",
+    "runtime": {
+      "batch_size": 8,
+      "device": "cuda",
+      "seq_len": 1024
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<smollm2-default>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

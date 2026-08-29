@@ -222,6 +222,49 @@ def note_boot_resume(run_dir: str) -> int:
     return n
 
 
+def interrupted_marker(run_dir: str, cmd: List[str],
+                       halt_marker: Optional[str] = None) -> Optional[dict]:
+    """The marker left by a previous, now-dead launch of *this same command*.
+
+    `attempt > 1` is the wrong test for "has this run already started". It is
+    true for a *crash inside one supervisor* and false for the case that costs
+    more: the supervisor itself being killed -- by the session that launched it
+    ending, by a reboot, by an OOM -- which leaves an open marker beside a
+    checkpoint and no process to continue it. The next launch is attempt 1 of a
+    fresh supervisor, carries no `--resume`, and starts at step zero, then
+    overwrites the checkpoint it ignored on its first save. Phase 4 lost 60.3M
+    tokens and a 673MB checkpoint exactly there.
+
+    The marker is the evidence a launch already happened, which is what it
+    exists for, so the four conditions below are all the caller needs to prove:
+
+    - the marker is open (`mark_inflight_done` closes both endings, and neither
+      a completed run nor an exhausted one is a relaunch-to-continue);
+    - it records the same argv, because the checkpoint beside a marker belongs
+      to the command that wrote it and no other;
+    - its supervisor is *provably* gone. `None` -- an old marker without the
+      identity fields -- is not good enough: two trainers resuming one
+      checkpoint is worse than the restart this replaces. Same bar as
+      `scripts/boot_resume.py`, and for the same reason;
+    - no watchdog halt. A SIGKILLed supervisor never reaches
+      `mark_inflight_done`, so a diverged run can leave an open marker next to
+      its halt marker, and resuming that is the failure `halt_marker` exists to
+      prevent.
+    """
+    marker = read_inflight(run_dir)
+    if marker is None or marker.get("schema") != INFLIGHT_SCHEMA:
+        return None
+    if marker.get("completed") is True:
+        return None
+    if marker.get("cmd") != list(cmd):
+        return None
+    if supervisor_is_live(marker) is not False:
+        return None
+    if _read_halt(halt_marker or marker.get("halt_marker")) is not None:
+        return None
+    return marker
+
+
 def trainer_is_live(run_dir: str) -> bool:
     """Is a `train.py` for *this* run actually running right now?
 
@@ -305,6 +348,7 @@ def run_with_resume(cmd: List[str], ckpt_path: str, max_attempts: int = 10,
                     log: Optional[Callable] = None,
                     halt_marker: Optional[str] = None,
                     force_resume: bool = False,
+                    resume_interrupted: bool = True,
                     record_inflight: bool = True,
                     inflight_extra: Optional[dict] = None) -> dict:
     """Run `cmd`, restarting it with `--resume <ckpt_path>` if it dies.
@@ -339,6 +383,15 @@ def run_with_resume(cmd: List[str], ckpt_path: str, max_attempts: int = 10,
     `--resume` like every later one -- still only when the checkpoint actually
     exists, so the "no checkpoint yet" case is unchanged.
 
+    **`resume_interrupted` generalises that to every relaunch, which is why it
+    defaults on.** A reboot is not the only way to lose the supervisor: a
+    session ending kills the trainer it started just as dead, and then the
+    caller is an ordinary launcher with no idea a checkpoint is sitting there.
+    Making each caller remember to pass `force_resume` is how phase 4 lost an
+    arm, so the launcher decides for them, from the marker
+    (`interrupted_marker`, which carries the guards). Pass
+    `resume_interrupted=False` to genuinely start a run over.
+
     `runner`/`sleeper`/`log` are injectable so this is testable without
     spawning processes or waiting.
     """
@@ -347,11 +400,20 @@ def run_with_resume(cmd: List[str], ckpt_path: str, max_attempts: int = 10,
     log = log or (lambda m: print(m, flush=True))
 
     run_dir = os.path.dirname(os.path.abspath(ckpt_path))
+    # Read before the write below: `write_inflight` reopens the marker and
+    # stamps this process as its supervisor, erasing the two facts the decision
+    # rests on.
+    interrupted = (interrupted_marker(run_dir, cmd, halt_marker)
+                   if resume_interrupted else None)
     if record_inflight:
         write_inflight(run_dir, cmd, ckpt_path, extra=inflight_extra,
                        max_attempts=max_attempts, backoff_sec=backoff_sec,
                        max_backoff_sec=max_backoff_sec,
                        halt_marker=halt_marker)
+    if interrupted is not None and os.path.exists(ckpt_path):
+        log(f"[supervise] relaunching a run interrupted at "
+            f"{interrupted.get('updated_at')} (launched "
+            f"{interrupted.get('started_at')}); continuing from {ckpt_path}")
 
     returncodes: List[int] = []
     resumed = False
@@ -360,7 +422,9 @@ def run_with_resume(cmd: List[str], ckpt_path: str, max_attempts: int = 10,
         # Resume only from a checkpoint that exists. A first attempt that dies
         # before the 30-minute mark leaves none, and claiming a resume that
         # did not happen corrupts the record the writeup depends on.
-        this_resume = (attempt > 1 or force_resume) and os.path.exists(ckpt_path)
+        first_attempt_resumes = force_resume or interrupted is not None
+        this_resume = ((attempt > 1 or first_attempt_resumes)
+                       and os.path.exists(ckpt_path))
         if this_resume:
             this_cmd += ["--resume", ckpt_path]
             resumed = True

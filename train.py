@@ -34,8 +34,8 @@ import subprocess
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass
-from typing import Dict, List, Optional, Tuple
+from dataclasses import asdict, dataclass, replace as dataclass_replace
+from typing import Dict, List, Optional, Sequence, Tuple
 
 # Must run before `import torch` -- torch._inductor.config reads this env var
 # at import time to size its parallel compile-worker pool (one process per
@@ -51,7 +51,8 @@ from daedalus.config import PRESETS, DaedalusConfig
 from daedalus.model import Daedalus
 from daedalus import ckpt_uploader
 from daedalus import qat as qat_mod
-from daedalus.muon import build_optimizers, decay_start_step, momentum_warmup, wsd_lr
+from daedalus.muon import (build_optimizers, conv_proj_wd_schedule,
+                           decay_start_step, momentum_warmup, wsd_lr)
 from daedalus.wandb_logger import WandbLogger
 
 DEFAULT_COST_PER_HOUR = 0.449  # this box (RTX 5090 incl. storage); see COSTS.md
@@ -175,6 +176,24 @@ def load_checkpoint(path: str, model, muon=None, adamw=None,
 
 
 # ------------------------------------------------------------------ metrics ---
+
+def run_dir_for(args) -> str:
+    """Where a run writes, from its args alone.
+
+    Named because two sides have to agree on it and only one of them used to
+    know it. A supervised launcher hands `run_with_resume` a checkpoint path so
+    it can resume from it; if that path is not the one the `Trainer` writes, the
+    marker sits beside a file that never appears, every relaunch starts from
+    step 0, and nothing anywhere reports a problem. Resolving it in one place
+    lets a caller ask instead of assume.
+    """
+    return args.run_dir or os.path.join("runs", args.run_name)
+
+
+def checkpoint_path_for(args) -> str:
+    """The rolling checkpoint a run writes and resumes from."""
+    return os.path.join(run_dir_for(args), "checkpoint.pt")
+
 
 def append_metrics(run_dir: str, record: dict) -> str:
     os.makedirs(run_dir, exist_ok=True)
@@ -555,6 +574,45 @@ def mixture_preflight(data_root: str, total_run_tokens: int,
                              total_run_tokens, max_epochs)
 
 
+def parse_mixture_weights(pairs: Optional[Sequence[str]]
+                          ) -> Optional[Dict[str, float]]:
+    """`["fineweb-edu=0.7", ...]` as shares, or None when none were given.
+
+    The shares must sum to 1. `resolve_mixture` renormalizes anyway, so the
+    check buys nothing arithmetically -- it buys the one error renormalization
+    hides. A phase-7 arm is three or four shares typed on a command line, and a
+    dropped source or a mistyped digit produces a set that sums to 0.85 and is
+    then quietly rescaled into a mixture nobody chose, with the arm's own
+    artifact recording the weights it *asked* for. Requiring the sum makes that
+    a refusal at launch instead of a result at the end.
+    """
+    if not pairs:
+        return None
+    weights: Dict[str, float] = {}
+    for pair in pairs:
+        name, sep, raw = str(pair).partition("=")
+        name = name.strip()
+        if not sep or not name:
+            raise ValueError(f"expected NAME=FRACTION, got {pair!r}")
+        if name in weights:
+            raise ValueError(f"--mixture-weight {name!r} given twice")
+        try:
+            value = float(raw)
+        except ValueError:
+            raise ValueError(f"share for {name!r} is not a number: {raw!r}") from None
+        if value < 0 or not math.isfinite(value):
+            raise ValueError(f"share for {name!r} must be finite and >= 0, got {value}")
+        weights[name] = value
+    total = sum(weights.values())
+    if abs(total - 1.0) > 1e-6:
+        raise ValueError(
+            f"--mixture-weight shares sum to {total:.6f}, not 1.0. They are "
+            f"renormalized over whatever is on disk, so a set that does not sum "
+            f"to 1 is usually a source left out rather than a mixture asked for: "
+            f"{dict(sorted(weights.items()))}")
+    return weights
+
+
 class MixtureBatchSource:
     """Samples whole micro-batches from multiple per-source shard directories
     by mixture proportion, so `abl-arch`/`hero` can train on the real data
@@ -770,8 +828,32 @@ class TrainArgs:
     adam_lr: float = 3e-4
     # None = the shipped single-Muon-group split. See `build_optimizers`.
     conv_proj_wd: Optional[float] = None
+    # Phase 5's two varying arms. `conv_proj_wd_end=None` is a constant, which
+    # is what the shipped 0.1 and the weak-constant arm are, so leaving these
+    # alone reproduces the existing behaviour exactly.
+    conv_proj_wd_end: Optional[float] = None
+    conv_proj_wd_ramp_frac: float = 0.0
+    conv_proj_wd_hold_frac: float = 0.0
     warmup_steps: int = 300
     decay_frac: float = 0.45
+    # Config knobs a *run* may override without editing the preset. Both default
+    # to None meaning "whatever `PRESETS[config]` says", so every existing run
+    # keeps the shipped 1024-token loss chunk and no block checkpointing.
+    #
+    # They are per-run rather than per-preset because they are memory/throughput
+    # trades, not model definition: `to_hf_dict` already strips both, so two
+    # runs that differ only here export byte-identical configs. A QAT recovery
+    # run is the case that needs them -- the fake-quant parametrization adds a
+    # dequantized copy of every linear weight to the forward graph, so the
+    # activation headroom that fitted the original pretraining run no longer
+    # does at the same batch shape.
+    loss_chunk_size: Optional[int] = None
+    gradient_checkpointing: Optional[bool] = None
+    # Which tokenizer produced the ids in `--data-dir`/`--val-dir`. `None` means
+    # the preset's own value, which is `None` -- SmolLM2 -- for every shipped
+    # preset, so no existing run changes. It is stripped by `to_hf_dict` like
+    # the two above, so it does not reach the exported config either.
+    tokenizer: Optional[str] = None
     grad_clip: float = 1.0
     run_dir: Optional[str] = None
     ckpt_every_sec: float = 1800.0       # 30 min, per AGENT.md hero spec
@@ -810,6 +892,17 @@ class TrainArgs:
     init_from: Optional[str] = None
     tags: Optional[List[str]] = None
     max_source_epochs: float = 4.0   # see cap_weights_by_epochs
+    # Explicit per-source shares for a mixture root, or None for
+    # `dataprep.MIXTURE`'s blueprint. Phase 7 compares mixtures under equal
+    # compute, which needs the mixture to be an argument of the *run* rather
+    # than a constant of the corpus: every other way of varying it -- a second
+    # data root per arm, an edited MIXTURE, a patched loader -- also varies
+    # something that is supposed to be held.
+    #
+    # None, not the blueprint's shares, so every existing run resolves its
+    # mixture exactly where it did before and a mixture root that is missing a
+    # source keeps renormalizing over what is present.
+    mixture_weights: Optional[Dict[str, float]] = None
     # Held-out bits-per-byte during training (AGENT.md SS5.2 lists val_bpb as a
     # required metrics field). Without it a multi-day run has no generalization
     # signal at all -- watchdog.py can only see the training loss, which looks
@@ -831,6 +924,57 @@ class TrainArgs:
     hub_every_sec: float = 7200.0        # ~2 h weights-only rolling copy
     hub_poll_sec: float = 300.0          # uploader's own directory-poll cadence
     hub_uploader: bool = True            # spawn the out-of-band upload process
+    # Consecutive skipped updates before `fit` raises `NonFiniteStall` rather
+    # than spinning. A transient bad batch recovers in one or two steps; a run
+    # that has skipped this many in a row is not going to finish, and neither
+    # of fit()'s break conditions can fire while it keeps skipping.
+    max_consecutive_skips: int = 25
+
+    def __post_init__(self):
+        # A ramp without a group to ramp is the same silent no-op
+        # `build_optimizers` already refuses for `conv_proj_wd` itself: the run
+        # looks configured, trains the shipped schedule, and only the arm's
+        # result says otherwise -- by which point the GPU hours are spent.
+        if self.conv_proj_wd is None and (
+                self.conv_proj_wd_end is not None
+                or self.conv_proj_wd_ramp_frac
+                or self.conv_proj_wd_hold_frac):
+            raise ValueError(
+                "conv_proj_wd_end/ramp_frac/hold_frac need conv_proj_wd set: "
+                "without it there is no conv-projection group to schedule and "
+                "the ramp would silently do nothing")
+        if not 0.0 <= self.conv_proj_wd_hold_frac <= self.conv_proj_wd_ramp_frac <= 1.0:
+            raise ValueError(
+                f"conv-proj-wd ramp must satisfy 0 <= hold_frac "
+                f"({self.conv_proj_wd_hold_frac}) <= ramp_frac "
+                f"({self.conv_proj_wd_ramp_frac}) <= 1")
+        if self.conv_proj_wd_end is not None and self.conv_proj_wd_ramp_frac == 0.0:
+            raise ValueError(
+                "conv_proj_wd_end is set but conv_proj_wd_ramp_frac is 0, so "
+                "the decay would jump to the end value at step 0; pass a ramp "
+                "fraction, or drop --conv-proj-wd-end for a constant")
+
+
+class NonFiniteStall(RuntimeError):
+    """Every recent step was skipped, so the run cannot make progress.
+
+    `train_step` returns early on a non-finite loss *without* advancing `step`
+    or `tokens_seen` -- correct, because a skipped update trained nothing and
+    should not be billed against the budget. But `fit`'s two break conditions
+    are `step >= max_steps` and `tokens_seen >= total_tokens`, and neither can
+    ever be reached if every step is skipped. The loop then spins: it burns
+    GPU, appends an identical metrics row each time, and never ends.
+
+    Measured on the first Phase 3 smoke run, whose released-checkpoint weights
+    produced a NaN loss from step one (see `qat._safe_reciprocal`): 2,794
+    skipped updates and 0.18 GPU-hours before it was killed by hand. Nothing in
+    the process would have stopped it -- `--max-steps 3` was set.
+
+    Raising hands the decision to the supervisor, which is the component that
+    knows whether to retry, halt, or move to the next arm. `watchdog.py` would
+    also have caught this eventually, but only a supervised run has one, and
+    "eventually" is the wrong unit for a loop that cannot progress.
+    """
 
 
 class NoOpResume(RuntimeError):
@@ -857,14 +1001,45 @@ class NoOpResume(RuntimeError):
     """
 
 
+def _config_for(args: TrainArgs) -> DaedalusConfig:
+    """`PRESETS[args.config]` with this run's memory overrides applied.
+
+    Returns the preset object itself when nothing is overridden, so the common
+    case allocates nothing and `Trainer(...).cfg is PRESETS[name]` stays true
+    for every existing caller and test.
+    """
+    cfg = PRESETS[args.config]
+    overrides = {}
+    if args.loss_chunk_size is not None:
+        if args.loss_chunk_size < 0:
+            raise ValueError(
+                f"--loss-chunk-size must be >= 0 (0 disables chunking), "
+                f"got {args.loss_chunk_size}")
+        overrides["loss_chunk_size"] = args.loss_chunk_size
+    if args.gradient_checkpointing is not None:
+        overrides["gradient_checkpointing"] = bool(args.gradient_checkpointing)
+    # `None` keeps the preset's own value, which is `None` -- SmolLM2 -- for
+    # every shipped preset. Phase 4's probes pass the candidate vocabulary they
+    # were packed under, so `_validate` decodes the holdout with the tokenizer
+    # that produced its ids rather than with SmolLM2 regardless.
+    if args.tokenizer is not None:
+        overrides["tokenizer"] = args.tokenizer
+    return dataclass_replace(cfg, **overrides) if overrides else cfg
+
+
 class Trainer:
     def __init__(self, args: TrainArgs):
         self.args = args
-        self.run_dir = args.run_dir or os.path.join("runs", args.run_name)
-        self.ckpt_path = os.path.join(self.run_dir, "checkpoint.pt")
+        self.run_dir = run_dir_for(args)
+        self.ckpt_path = checkpoint_path_for(args)
 
         torch.manual_seed(args.seed)
-        self.cfg = PRESETS[args.config]
+        # `dataclasses.replace`, never mutation: `PRESETS` holds one shared
+        # `DaedalusConfig` instance per name, so assigning to `self.cfg.<field>`
+        # would rewrite the preset for every later `Trainer`, `eval.py` and
+        # `export.py` in the same process. The overrides below are exactly the
+        # fields `to_hf_dict` strips, so the exported config is unaffected.
+        self.cfg = _config_for(args)
         self.model = Daedalus(self.cfg).to(args.device)
         self.muon, self.adamw, self.opt_stats = build_optimizers(
             self.model, muon_lr=args.muon_lr, adam_lr=args.adam_lr,
@@ -875,6 +1050,17 @@ class Trainer:
         self.start_time = time.time()
         self._peak_mem_seen = 0.0
         self._tokenizer = None          # lazily loaded, only if val_dir is set
+        # Cumulative count of optimizer updates dropped because the loss was
+        # non-finite. A Phase 3 gate reads "no skipped non-finite updates", and
+        # the only previous evidence was a WARNING line in a log nobody keeps:
+        # every skip logged a `loss: nan` row indistinguishable from a row the
+        # metrics interval simply happened to land on. Carried in the durable
+        # record so the gate can be decided from `metrics.jsonl` alone.
+        self._skipped_updates = 0
+        # Skips since the last update that actually landed. Reset on any
+        # successful step, so an occasional bad batch never accumulates toward
+        # the stall limit -- only an inability to make progress does.
+        self._consecutive_skips = 0
 
         # `hub://owner/repo/path?rev=branch` is materialised to a local file
         # first, so a restore from the Hub takes exactly the same code path as
@@ -889,6 +1075,12 @@ class Trainer:
                                    map_location=args.device)
             self.step = info["step"]
             self.tokens_seen = info["tokens_seen"]
+            # Carry the skip count across the restart. Resetting it to 0 would
+            # let a run that skipped updates before a crash report a clean
+            # `skipped_updates: 0` afterwards, and the Phase 3 finiteness gate
+            # reads exactly that field.
+            self._skipped_updates = int(
+                (info.get("extra") or {}).get("skipped_updates", 0))
             self._resumed = True
             print(f"resumed from {args.resume}: step={self.step} "
                  f"tokens_seen={self.tokens_seen}")
@@ -936,8 +1128,30 @@ class Trainer:
                                  args.micro_batch, args.seq_start, args.seq_end,
                                  args.tok_start, args.tok_end)
 
+        is_mixture_root = bool(args.data_dir) and not os.path.exists(
+            os.path.join(args.data_dir, "manifest.json"))
+        if args.mixture_weights and not is_mixture_root:
+            # Refused rather than ignored. Every other batch source samples one
+            # corpus, so weights handed to one are a no-op -- and a no-op here
+            # is a phase-7 arm that reports itself as `only-stack-edu-python`,
+            # trains on whatever the single directory held, and produces a
+            # perfectly finite BPB for a mixture it never sampled. Same silent
+            # no-op TrainArgs.__post_init__ already refuses for a conv-proj
+            # weight-decay ramp with no group to ramp.
+            raise ValueError(
+                f"--mixture-weight was given but --data-dir "
+                f"{args.data_dir or '<none>'} is not a mixture root "
+                f"(a directory of per-source subdirectories, each with its own "
+                f"manifest.json). The weights would be silently ignored.")
         if args.data_dir:
-            if os.path.exists(os.path.join(args.data_dir, "manifest.json")):
+            # Before a sampler is built, because this is the last point where
+            # the answer is a refusal naming a directory rather than a loss
+            # curve that looks fine. Inert for a tree whose manifest predates
+            # the fingerprint, which is every corpus built so far.
+            from daedalus.data import assert_shards_vocab_size
+
+            assert_shards_vocab_size(args.data_dir, self.cfg.vocab_size)
+            if not is_mixture_root:
                 self.batch_source = ShardBatchSource(args.data_dir, args.micro_batch,
                                                      args.device, seed=args.seed)
             else:
@@ -947,6 +1161,7 @@ class Trainer:
                 # separate CLI flag for the single-source vs. mixture case.
                 self.batch_source = MixtureBatchSource(
                     args.data_dir, args.micro_batch, args.device, seed=args.seed,
+                    weights=args.mixture_weights,
                     total_run_tokens=args.total_tokens,
                     max_epochs=args.max_source_epochs)
         else:
@@ -1060,6 +1275,25 @@ class Trainer:
         return wsd_lr(self.step, total_steps, warmup=self.args.warmup_steps,
                      decay_frac=self.args.decay_frac)
 
+    def _conv_proj_wd(self, total_steps: int) -> Optional[float]:
+        """This step's conv-projection decay, or None when the group does not
+        exist.
+
+        Returning None rather than the shipped 0.1 matters: with
+        `--conv-proj-wd` unset there *is* no second Muon group, and writing a
+        decay into `param_groups[1]` would either raise or -- worse, if the
+        index ever moved -- retune the 76.9% of Muon's parameters this
+        experiment is supposed to hold fixed.
+        """
+        args = self.args
+        if getattr(args, "conv_proj_wd", None) is None:
+            return None
+        return conv_proj_wd_schedule(
+            self.step, total_steps, args.conv_proj_wd,
+            end=getattr(args, "conv_proj_wd_end", None),
+            ramp_frac=getattr(args, "conv_proj_wd_ramp_frac", 0.0),
+            hold_frac=getattr(args, "conv_proj_wd_hold_frac", 0.0))
+
     def _estimated_total_steps(self) -> int:
         return self.total_steps
 
@@ -1078,6 +1312,10 @@ class Trainer:
             g["momentum"] = momentum_warmup(self.step, warmup=args.warmup_steps)
         for g in self.adamw.param_groups:
             g["lr"] = args.adam_lr * mult
+        conv_wd = self._conv_proj_wd(total_steps)
+        if conv_wd is not None:
+            self.muon.param_groups[
+                self.opt_stats["conv_proj_group_index"]]["weight_decay"] = conv_wd
 
         self.muon.zero_grad(set_to_none=True)
         self.adamw.zero_grad(set_to_none=True)
@@ -1095,7 +1333,9 @@ class Trainer:
                                 dtype=torch.bfloat16, enabled=(args.device == "cuda")):
                 _, loss, _ = self.net(x, targets=y)
             if not torch.isfinite(loss):
-                print(f"WARNING: non-finite loss at step {self.step}, skipping update")
+                self._skipped_updates += 1
+                print(f"WARNING: non-finite loss at step {self.step}, skipping "
+                      f"update ({self._skipped_updates} skipped so far)")
                 self.muon.zero_grad(set_to_none=True)
                 self.adamw.zero_grad(set_to_none=True)
                 return {"step": self.step, "loss": float("nan"), "skipped": True,
@@ -1115,11 +1355,17 @@ class Trainer:
             self._peak_mem_seen = max(self._peak_mem_seen,
                                       torch.cuda.max_memory_allocated() / 1e9)
 
-        return {
+        metrics = {
             "step": self.step, "loss": loss_sum / accum, "skipped": False,
             "seq_len": seq_len, "accum": accum, "lr_mult": mult,
             "grad_norm": float(grad_norm),
         }
+        if conv_wd is not None:
+            # Logged because a schedule that silently failed to apply is
+            # indistinguishable from an arm that did not work, and phase 5
+            # decides between arms.
+            metrics["conv_proj_wd"] = conv_wd
+        return metrics
 
     def _elapsed_h(self) -> float:
         return (time.time() - self.start_time) / 3600
@@ -1164,10 +1410,28 @@ class Trainer:
             f"--init-from instead of --resume to fine-tune from its weights "
             f"at step 0.")
 
-    def _val_bpb(self) -> Optional[float]:
-        """Bounded held-out bits-per-byte, or None if validation is off / not
-        due / failed. Never raises: a broken holdout dir must not kill a
-        multi-day run any more than a W&B outage does."""
+    def _validate(self) -> Optional[dict]:
+        """`evaluate_bpb_mixture`'s whole result, or None if validation is off /
+        not due / failed. Never raises: a broken holdout dir must not kill a
+        multi-day run any more than a W&B outage does.
+
+        The result, not `["val_bpb"]` out of it. `evaluate_bpb_mixture` does a
+        full holdout pass **per source** and returns both the per-source figures
+        and the blend of them; the call site took the blend and dropped the rest
+        on the floor, at every eval interval, for the whole of every run so far.
+        Nothing was saved by discarding it -- the per-source passes are where the
+        cost is, and they ran either way.
+
+        What that cost bought matters from phase 8 on. A continued-pretraining
+        arm is gated on code BPB and general replay BPB read *independently* --
+        it has to improve one while holding the other -- and the blend is
+        precisely the one number that cannot answer that: a code gain and a
+        replay regression move it in opposite directions and it reports their
+        sum. Out-of-band scoring (`scripts/bpb_eval.py`) answers it on the
+        finished checkpoint, which is the right instrument for the gate itself;
+        this answers it *during* the run, so an arm whose replay is already past
+        the 1.5% bound says so at its first interval rather than after 1B tokens.
+        """
         args = self.args
         if not args.val_dir or self.step % args.val_every_steps != 0:
             return None
@@ -1176,7 +1440,13 @@ class Trainer:
             from eval import evaluate_bpb_mixture
             if self._tokenizer is None:
                 from daedalus.data import get_tokenizer
-                self._tokenizer = get_tokenizer()
+                # `cfg.tokenizer` (None for every shipped preset, so this is
+                # unchanged for them) rather than always SmolLM2. val_bpb
+                # converts nats-per-token through the *bytes those tokens stand
+                # for*, and the byte count comes from decoding them -- so a run
+                # over a 32,768-vocabulary holdout decoded with SmolLM2 reports
+                # bits per byte for a corpus that does not exist.
+                self._tokenizer = get_tokenizer(self.model.cfg.tokenizer)
             # self.model, not self.net: the compiled graph is specialized to the
             # training shapes and a different eval batch would force a recompile.
             #
@@ -1193,7 +1463,7 @@ class Trainer:
                 self._tokenizer, device=args.device,
                 batch_size=args.val_batch_size,
                 max_batches=args.val_batches,
-                weights=self._val_weights())["val_bpb"]
+                weights=self._val_weights())
         except Exception as e:
             print(f"WARNING: val_bpb failed at step {self.step} ({e}); continuing")
             return None
@@ -1223,11 +1493,15 @@ class Trainer:
             return False
         applied = qat_mod.enable_qat(self.model)
         self._qat_on = True
-        err = qat_mod.quantization_error(self.model)["qat_rel_rmse"]
+        err = qat_mod.quantization_error(self.model)
         print(f"QAT ON at step {self.step} ({self._progress():.1%} of the run): "
-              f"{len(applied)} tensors on the llama.cpp Q4_0/Q8_0 grid; "
-              f"pre-QAT relative RMSE {err:.4f}")
-        self.wandb.log({"qat_started_step": self.step, "qat_rel_rmse": err},
+              f"{len(applied)} tensors on the llama.cpp "
+              f"{qat_mod.grid_id()} grid; "
+              f"pre-QAT relative RMSE {err['qat_rel_rmse']:.4f}")
+        self.wandb.log({"qat_started_step": self.step,
+                        "qat_rel_rmse": err["qat_rel_rmse"],
+                        "qat_tensors": err["qat_tensors"],
+                        "qat_elements": err["qat_elements"]},
                        step=self.step)
         return True
 
@@ -1280,7 +1554,8 @@ class Trainer:
             if self._refuse_if_diverged("the rolling checkpoint"):
                 return
             save_checkpoint(self.ckpt_path, self.model, self.muon, self.adamw,
-                            self.step, self.tokens_seen, self.cfg)
+                            self.step, self.tokens_seen, self.cfg,
+                            extra={"skipped_updates": self._skipped_updates})
 
     # ------------------------------------------------------ Hub durability ---
 
@@ -1617,9 +1892,11 @@ class Trainer:
             now = time.time()
             window_tokens = self.tokens_seen - self._last_log_tokens
             window_sec = max(now - self._last_log_time, 1e-9)
+            validation = self._validate()
+            val_bpb = validation["val_bpb"] if validation else None
             record = {
                 "step": self.step, "tokens": self.tokens_seen,
-                "loss": stats["loss"], "val_bpb": self._val_bpb(),
+                "loss": stats["loss"], "val_bpb": val_bpb,
                 "lr": args.muon_lr * stats.get("lr_mult", 1.0),
                 "tok_per_sec": window_tokens / window_sec,
                 "elapsed_h": self._elapsed_h(),
@@ -1627,13 +1904,43 @@ class Trainer:
                 "grad_norm": stats.get("grad_norm"),
                 "peak_mem_GB": self._peak_mem_seen,
                 "qat_active": int(self._qat_on),
+                "skipped_updates": self._skipped_updates,
             }
+            if val_bpb is not None:
+                # Which forward produced `val_bpb`. `self.model` carries the
+                # fake-quant parametrizations while QAT is on, so val_bpb is
+                # measured *through the Q4_0 lattice* then and in fp32
+                # otherwise. The two are not comparable, and nothing in the
+                # number says which one it is -- a recovery run whose val_bpb
+                # sits above the pretraining run's is expected, not a
+                # regression. Recorded rather than inferred, because whoever
+                # reads metrics.jsonl later will not have `qat_frac` to hand.
+                record["val_forward"] = "quantized" if self._qat_on else "float"
+                record["val_grid"] = qat_mod.grid_id() if self._qat_on else None
+            per_source = (validation or {}).get("per_source_val_bpb") or {}
+            if per_source:
+                # BPB only. `per_source_val_bpb` also carries each source's
+                # holdout token count and its sampling weight, and both are
+                # constant for the whole run -- they are set by the corpus and
+                # by `MixtureBatchSource.probs`, neither of which moves after
+                # `resolve_mixture`. Writing them at every interval would repeat
+                # a constant a few thousand times down `metrics.jsonl` and
+                # through every heartbeat that renders the latest record. They
+                # are already on the W&B run config as `data_mixture`.
+                #
+                # Absent, not empty, for a single-directory `--val-dir`:
+                # `evaluate_bpb_mixture` returns `{}` there because there is
+                # genuinely one source, and an empty block in the record would
+                # read as a mixture whose sources all failed to score.
+                record["val_bpb_per_source"] = {
+                    name: row["val_bpb"] for name, row in sorted(per_source.items())}
             if self._qat_on:
                 # Should fall toward zero as the weights settle onto the grid --
                 # the direct evidence QAT is working. O(params), so only while
                 # it is actually on.
-                record["qat_rel_rmse"] = \
-                    qat_mod.quantization_error(self.model)["qat_rel_rmse"]
+                err = qat_mod.quantization_error(self.model)
+                record["qat_rel_rmse"] = err["qat_rel_rmse"]
+                record["qat_tensors"] = err["qat_tensors"]
             record.update(self._hub_health())
             self._last_log_tokens, self._last_log_time = self.tokens_seen, now
             self._last_metrics_step = self.step
@@ -1672,6 +1979,23 @@ class Trainer:
                     print(f"batch source exhausted at step {self.step}; "
                          f"finishing run")
                     break
+                if stats.get("skipped"):
+                    self._consecutive_skips += 1
+                    if self._consecutive_skips >= args.max_consecutive_skips:
+                        # Log the row first: the evidence for *why* the run
+                        # stopped has to outlive the exception.
+                        self.log_step(stats, force=True)
+                        raise NonFiniteStall(
+                            f"{self._consecutive_skips} consecutive non-finite "
+                            f"updates at step {self.step} "
+                            f"({self._skipped_updates} total). Neither "
+                            f"max_steps nor total_tokens can be reached while "
+                            f"every step is skipped, so this run cannot "
+                            f"progress. Check the input weights and the shard "
+                            f"token ids -- `scripts/recovery_preflight.py` "
+                            f"tells the two apart.")
+                else:
+                    self._consecutive_skips = 0
                 self._last_stats = stats
                 self.log_step(stats)
                 self.maybe_checkpoint()
@@ -1730,6 +2054,16 @@ def parse_args(argv=None) -> TrainArgs:
                         "Default None = shipped single-group behaviour. "
                         "Changes the optimizer state_dict layout, so it cannot "
                         "be applied to a run already in progress.")
+    p.add_argument("--conv-proj-wd-end", type=float, default=None,
+                   help="ramp --conv-proj-wd to this value instead of holding "
+                        "it constant. Default None = constant, the shipped "
+                        "behaviour. Requires --conv-proj-wd.")
+    p.add_argument("--conv-proj-wd-ramp-frac", type=float, default=0.0,
+                   help="fraction of the run by which --conv-proj-wd-end is "
+                        "reached (0.1 = by 10%% of steps)")
+    p.add_argument("--conv-proj-wd-hold-frac", type=float, default=0.0,
+                   help="fraction of the run to hold --conv-proj-wd before the "
+                        "ramp begins; must be <= --conv-proj-wd-ramp-frac")
     p.add_argument("--device", default=None,
                    help="cuda/cpu; defaults to cuda when available. Mainly so "
                         "the end-to-end subprocess resume test can pin cpu "
@@ -1756,6 +2090,47 @@ def parse_args(argv=None) -> TrainArgs:
                         "llama.cpp's exact Q4_0 grid (blueprint: 0.05 for hero). "
                         "Leave at 0 for sweep/abl-arch -- a quantized forward "
                         "would invalidate those comparisons.")
+    p.add_argument("--warmup-steps", type=int, default=None,
+                   help="linear LR warmup length in steps (default 300). A "
+                        "recovery run measured in hundreds of steps rather "
+                        "than hundreds of thousands would otherwise spend most "
+                        "of its budget still warming up.")
+    p.add_argument("--decay-frac", type=float, default=None,
+                   help="fraction of the run spent decaying LR to zero "
+                        "(default 0.45). Also moves the milestone checkpoint, "
+                        "which is written at the end of the stable phase.")
+    p.add_argument("--loss-chunk-size", type=int, default=None,
+                   help="tokens per chunk in the fused loss head (default: the "
+                        "config's 1024; 0 restores the single-shot path). "
+                        "Lower it to cut loss-head memory, which is what a "
+                        "QAT forward needs on top of the usual activations.")
+    p.add_argument("--mixture-weight", action="append", default=[],
+                   metavar="NAME=FRACTION",
+                   help="explicit share for one source under a mixture "
+                        "--data-dir; repeatable, and the shares must sum to 1. "
+                        "Without any, the blueprint mixture in "
+                        "daedalus.dataprep.MIXTURE is used, which is what every "
+                        "run before phase 7 did. A source given 0 stays on disk "
+                        "and is never drawn, which is how a single-source arm "
+                        "shares one data root with the mixture arms it is "
+                        "compared against.")
+    p.add_argument("--tokenizer", default=None,
+                   help="path or Hub name of the tokenizer that produced the "
+                        "ids in --data-dir/--val-dir (default: the config's, "
+                        "which is SmolLM2 for every shipped preset). Only "
+                        "val_bpb reads it, but it reads it to convert "
+                        "nats-per-token into bits per *byte*, so a holdout "
+                        "decoded with the wrong vocabulary reports a figure "
+                        "for a corpus that does not exist.")
+    p.add_argument("--gradient-checkpointing", dest="gradient_checkpointing",
+                   action="store_true", default=None,
+                   help="recompute block activations in backward instead of "
+                        "storing them: ~30%% slower steps for a large drop in "
+                        "activation memory. Default: the config's setting.")
+    p.add_argument("--no-gradient-checkpointing", dest="gradient_checkpointing",
+                   action="store_false",
+                   help="force block checkpointing off even if the config "
+                        "enables it.")
     p.add_argument("--ramp-frac", type=float, default=None,
                    help="fraction of the budget the batch/seq ramps span "
                         "(default 0.1). Only needed to *retarget* a run that is "
@@ -1776,6 +2151,9 @@ def parse_args(argv=None) -> TrainArgs:
                   wandb_enabled=not a.no_wandb,
                   muon_lr=a.muon_lr, adam_lr=a.adam_lr,
                   conv_proj_wd=a.conv_proj_wd,
+                  conv_proj_wd_end=a.conv_proj_wd_end,
+                  conv_proj_wd_ramp_frac=a.conv_proj_wd_ramp_frac,
+                  conv_proj_wd_hold_frac=a.conv_proj_wd_hold_frac,
                   tags=a.tags.split(",") if a.tags else None,
                   val_dir=a.val_dir, val_every_steps=a.val_every_steps,
                   qat_frac=a.qat_frac, hub_repo=a.hub_repo or None,
@@ -1789,6 +2167,16 @@ def parse_args(argv=None) -> TrainArgs:
         kwargs["metrics_every_steps"] = a.metrics_every_steps
     if a.ramp_frac is not None:
         kwargs["ramp_frac"] = a.ramp_frac
+    if a.warmup_steps is not None:
+        kwargs["warmup_steps"] = a.warmup_steps
+    if a.decay_frac is not None:
+        kwargs["decay_frac"] = a.decay_frac
+    # These two stay None when unset -- None *is* the "use the preset" value
+    # for them, unlike the flags above whose default lives on TrainArgs.
+    kwargs["loss_chunk_size"] = a.loss_chunk_size
+    kwargs["gradient_checkpointing"] = a.gradient_checkpointing
+    kwargs["tokenizer"] = a.tokenizer
+    kwargs["mixture_weights"] = parse_mixture_weights(a.mixture_weight)
     return TrainArgs(**kwargs)
 
 

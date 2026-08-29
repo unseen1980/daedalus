@@ -31,12 +31,205 @@ SMOLLM2_TOKENIZER = "HuggingFaceTB/SmolLM2-135M"
 DEFAULT_EOS_ID = 0
 
 
-def get_tokenizer(name: str = SMOLLM2_TOKENIZER):
-    """Load the SmolLM2 tokenizer byte-identical. Import is local so importing
-    this module (e.g. from train.py for `PackedTokenDataset`) doesn't require
-    `transformers` unless tokenization is actually used."""
+def get_tokenizer(name: Optional[str] = None):
+    """Load a tokenizer -- SmolLM2 byte-identical by default.
+
+    `name` accepts a Hub id or a local directory, so Phase 4's candidate
+    vocabularies can be packed and scored through this same pipeline. `None`
+    (the default, and what every existing caller passes) resolves to SmolLM2,
+    so no shipped run changes behaviour.
+
+    The explicit-path form exists because `vocab_size` is not a tokenizer.
+    Two shard directories built under different vocabularies are the same
+    dtype, the same shape and the same manifest schema; nothing about reading
+    the wrong one raises, it just embeds ids that mean something else. The
+    matching guard is `assert_manifest_tokenizer`.
+
+    Import is local so importing this module (e.g. from train.py for
+    `PackedTokenDataset`) doesn't require `transformers` unless tokenization is
+    actually used.
+    """
     from transformers import AutoTokenizer
-    return AutoTokenizer.from_pretrained(name)
+    return AutoTokenizer.from_pretrained(name or SMOLLM2_TOKENIZER)
+
+
+def tokenizer_fingerprint(tokenizer, name: Optional[str] = None) -> dict:
+    """What a manifest records about the tokenizer that produced its ids.
+
+    The vocabulary size alone is not enough -- two 32,768-token vocabularies
+    trained on different samples share it and agree on nothing else -- so the
+    fingerprint also carries the ids of the pinned specials and a digest of the
+    tokenization of a fixed probe string. That digest is the same trick
+    llama.cpp's converter uses to identify a pre-tokenizer, and it is cheap
+    enough to check before every pass over a shard directory.
+
+    A tokenizer that does not expose the full `PreTrainedTokenizer` surface --
+    the stand-ins several tests pack shards with, for instance -- yields a
+    `partial` fingerprint carrying only what it could answer. That is recorded
+    rather than faked, and `assert_manifest_tokenizer` compares only fields
+    both sides actually have, so a partial fingerprint degrades to the same
+    non-guard as a manifest written before this field existed.
+    """
+    import hashlib
+
+    probe = ("Daedalus tokenizer fingerprint probe\n\tdef f(x):\n"
+             "        return x ** 2  # 中文 🚀 ∀x∈ℝ\n")
+    fingerprint = {
+        "name": name or getattr(tokenizer, "name_or_path", None) or SMOLLM2_TOKENIZER,
+    }
+    try:
+        ids = tokenizer.encode(probe, add_special_tokens=False)
+        fingerprint["probe_digest"] = hashlib.sha256(
+            str(list(ids)).encode()).hexdigest()[:32]
+    except TypeError:
+        pass
+    for field, read in (("vocab_size", lambda: int(tokenizer.vocab_size)),
+                        ("eos_id",
+                         lambda: tokenizer.convert_tokens_to_ids("<|endoftext|>"))):
+        try:
+            fingerprint[field] = read()
+        except (AttributeError, TypeError, ValueError):
+            pass
+    if "probe_digest" not in fingerprint or "vocab_size" not in fingerprint:
+        fingerprint["partial"] = True
+    return fingerprint
+
+
+def shard_manifests(root: str) -> List[str]:
+    """Every `manifest.json` under `root`, for either shape a caller may pass.
+
+    A single source directory has its own; a mixture or holdout root has one per
+    subdirectory. Both are handed to `--data-dir` and `--holdout-root` and told
+    apart exactly this way by `train.py` and `scripts/bpb_eval.py`, so the
+    guards below ask the same question of the same set of files rather than each
+    re-deciding which shape it was given.
+    """
+    if not os.path.isdir(root):
+        return []
+    own = os.path.join(root, "manifest.json")
+    if os.path.exists(own):
+        return [own]
+    return sorted(os.path.join(root, child, "manifest.json")
+                  for child in os.listdir(root)
+                  if os.path.exists(os.path.join(root, child, "manifest.json")))
+
+
+def manifest_vocab_size(manifest: dict) -> Optional[int]:
+    """The vocabulary size a tree was packed under, or None if unrecorded.
+
+    None is the honest answer for every shard directory built before
+    `dataprep.source_provenance` carried a fingerprint, and callers treat it as
+    "unknown" rather than "matches" -- the same way `assert_manifest_tokenizer`
+    passes an unfingerprinted manifest through.
+    """
+    recorded = manifest.get("tokenizer")
+    if not isinstance(recorded, dict):
+        return None
+    value = recorded.get("vocab_size")
+    return int(value) if isinstance(value, int) else None
+
+
+def assert_shards_vocab_size(data_dir: str, vocab_size: int) -> None:
+    """Refuse a shard tree packed under a vocabulary this model cannot mean.
+
+    The counterpart of `assert_manifest_tokenizer` for the reader that has no
+    tokenizer to compare with. Training never loads one: it reads ids and an
+    embedding table, so the only thing it can check the shards against is how
+    many rows that table has -- which is exactly the comparison that catches the
+    failure. A 49,152-row model reading 32,768-vocabulary shards indexes every
+    id successfully and trains on text that means something else; the reverse
+    dies somewhere inside a kernel, hours in, on an index nobody can trace back
+    to the corpus. Neither says which shard directory was wrong.
+
+    Accepts both shapes `train.py` accepts -- a single source directory and a
+    mixture root of them -- because the mismatch is per-directory and a mixture
+    can be wrong in one source. A manifest with no fingerprint is passed
+    through, so every corpus built before the field existed keeps loading.
+
+    Every source under the root is checked, including one this run's weights
+    might not name. `resolve_mixture` reads whatever has a `manifest.json`, so a
+    tree of another vocabulary sitting in a mixture root is one weight away from
+    being sampled -- and the run that finds it is not necessarily the one that
+    put it there. Roots hold one vocabulary; phase 4 kept its four apart for
+    this reason, and the refusal says which directory broke that.
+    """
+    mismatched = []
+    for path in shard_manifests(data_dir):
+        try:
+            with open(path) as handle:
+                recorded = manifest_vocab_size(json.load(handle))
+        except (OSError, ValueError):
+            # Unreadable is not this function's failure to report: the loader
+            # opens the same file moments later and says so precisely.
+            continue
+        if recorded is not None and recorded != vocab_size:
+            mismatched.append((os.path.basename(os.path.dirname(path)), recorded))
+    if mismatched:
+        raise ValueError(
+            "shard vocabulary mismatch: "
+            + "; ".join(f"{name!r} was packed under a {recorded:,}-token "
+                        f"vocabulary" for name, recorded in mismatched)
+            + f", but this model has {vocab_size:,} embedding rows. Reading "
+            f"these ids under that embedding is not an error anything raises "
+            f"when the model is the larger of the two -- it trains, logs a "
+            f"loss and exports a model of a corpus it never saw. Point "
+            f"--data-dir at a tree packed under this vocabulary, or run the "
+            f"config that matches it.")
+
+
+def assert_manifest_tokenizer(manifest: dict, tokenizer, name: Optional[str] = None
+                              ) -> None:
+    """Refuse a shard directory that was packed under a different tokenizer.
+
+    Silent by default is the whole problem: `PackedTokenDataset` will happily
+    serve 32,768-vocabulary ids to a 49,152-row embedding, and the run trains,
+    logs a loss and exports. A manifest written before this field existed
+    carries no fingerprint and is passed through rather than refused, so older
+    corpora keep working.
+    """
+    recorded = manifest.get("tokenizer")
+    if not recorded:
+        return
+    current = tokenizer_fingerprint(tokenizer, name)
+    for field in ("vocab_size", "probe_digest"):
+        if field not in recorded or field not in current:
+            continue
+        if recorded[field] != current[field]:
+            raise ValueError(
+                f"shard tokenizer mismatch on {field!r}: shards were packed by "
+                f"{recorded.get('name')!r} ({recorded.get(field)!r}) but "
+                f"{current['name']!r} gives {current[field]!r}. Reading these "
+                f"ids under this tokenizer is not an error anything raises -- "
+                f"it silently trains on a different vocabulary.")
+
+
+def assert_shards_tokenizer(root: str, tokenizer, name: Optional[str] = None
+                            ) -> None:
+    """`assert_manifest_tokenizer` over every source under `root`.
+
+    For the reader that *does* hold a tokenizer -- `scripts/bpb_eval.py`, which
+    decodes the held-out ids to count the bytes that bits-per-byte is per. That
+    makes the tokenizer part of the measurement, not a label on it: decoding a
+    32,768-vocabulary holdout with SmolLM2 counts the wrong bytes and reports a
+    BPB for a corpus that does not exist, and every phase-4 through phase-8 gate
+    is decided on that number.
+
+    Checks the full fingerprint rather than the row count alone, because here
+    the stronger comparison is available: two vocabularies of the same size
+    trained on different samples share `vocab_size` and agree on nothing else,
+    and the probe digest separates them.
+    """
+    for path in shard_manifests(root):
+        try:
+            with open(path) as handle:
+                manifest = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        try:
+            assert_manifest_tokenizer(manifest, tokenizer, name)
+        except ValueError as exc:
+            raise ValueError(
+                f"{os.path.dirname(path)}: {exc}") from None
 
 
 # --------------------------------------------------------------- streaming ----
@@ -145,16 +338,54 @@ class ShardWriter:
 def tokenize_and_pack(tokenizer, documents: Iterable[str], out_dir: str,
                        eos_id: int = DEFAULT_EOS_ID,
                        shard_tokens: int = 100_000_000,
-                       manifest_extra: Optional[dict] = None) -> dict:
+                       manifest_extra: Optional[dict] = None,
+                       tokenizer_name: Optional[str] = None,
+                       batch_documents: Optional[int] = None) -> dict:
     """Stream-tokenize `documents` into fixed-size uint16 shards under
-    `out_dir`, EOS-separated dense packing. Writes and returns the manifest."""
+    `out_dir`, EOS-separated dense packing. Writes and returns the manifest.
+
+    The manifest records which tokenizer produced the ids (see
+    `tokenizer_fingerprint`). That was always worth recording and became
+    necessary in Phase 4, where four shard directories differing only in
+    vocabulary sit side by side.
+
+    `batch_documents` hands whole batches to the tokenizer instead of one
+    document per call. A Rust fast tokenizer releases the GIL and encodes a
+    batch across every core, while the one-at-a-time path is single-threaded
+    Python overhead per document -- measured at 4.9 MB/s here, which is 73
+    minutes to pack the five Phase 4 corpora and a bad reason to shorten an
+    experiment. `None` (the default) keeps the existing path exactly, so
+    `dataprep`'s streaming build -- whose memory profile is the reason
+    `ShardWriter` uses `array.array` at all -- is untouched. The two paths are
+    asserted to produce identical ids.
+    """
     writer = ShardWriter(out_dir, shard_tokens=shard_tokens)
     n_docs = 0
-    for text in documents:
-        writer.write(tokenize_document(tokenizer, text, eos_id))
-        n_docs += 1
+    if batch_documents:
+        batch: List[str] = []
+
+        def flush_batch() -> int:
+            if not batch:
+                return 0
+            for ids in tokenizer(batch)["input_ids"]:
+                writer.write(ids)
+                writer.write((eos_id,))
+            written = len(batch)
+            batch.clear()
+            return written
+
+        for text in documents:
+            batch.append(text)
+            if len(batch) >= batch_documents:
+                n_docs += flush_batch()
+        n_docs += flush_batch()
+    else:
+        for text in documents:
+            writer.write(tokenize_document(tokenizer, text, eos_id))
+            n_docs += 1
     writer.close()
-    extra = {"n_documents": n_docs, "eos_id": eos_id}
+    extra = {"n_documents": n_docs, "eos_id": eos_id,
+             "tokenizer": tokenizer_fingerprint(tokenizer, tokenizer_name)}
     if manifest_extra:
         extra.update(manifest_extra)
     writer.write_manifest(extra)

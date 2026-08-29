@@ -72,6 +72,7 @@ import json
 import multiprocessing
 import os
 import resource
+import subprocess
 import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field, replace
@@ -96,6 +97,7 @@ from daedalus.data import (
     get_tokenizer,
     is_contaminated,
     tokenize_document,
+    tokenizer_fingerprint,
     upload_shards,
 )
 
@@ -602,7 +604,12 @@ def _recover_source_stats(key: str, out_root: str) -> Optional[dict]:
                     # boundary instead of re-streaming from row 0.
                     "stream_state": m.get("stream_state"),
                     "n_seen": m.get("n_seen", 0), "n_kept": m.get("n_kept", 0),
-                    "n_too_short": m.get("n_too_short", 0)}
+                    "n_too_short": m.get("n_too_short", 0),
+                    # Only the three `DedupState` owns: `too_short` is recovered
+                    # one field up, and folding it back in here would seed the
+                    # next attempt with a count it goes on to make again.
+                    "drops": {name: m.get("drops", {}).get(name, 0)
+                              for name in _DEDUP_DROPS}}
         except (OSError, json.JSONDecodeError):
             pass  # truncated by the same crash -- fall through to scanning .bin files
     if not os.path.isdir(source_dir):
@@ -620,20 +627,197 @@ def _recover_source_stats(key: str, out_root: str) -> Optional[dict]:
     return {"key": key, "dataset": None, "tokens": total_tokens, "shards": shards}
 
 
-def _write_source_manifest(writer, spec: SourceSpec, stream_state, stats: dict) -> str:
+#: Why a document did not make it into the shards, in the order the checks run.
+#: `too_short` is counted by `run_source` and the other three by `DedupState`,
+#: which is the only reason they are separate numbers rather than one counter.
+DROP_REASONS = ("too_short", "exact_dup", "near_dup", "contaminated")
+
+#: Dedup's own names for the three it owns.
+_DEDUP_DROPS = ("exact_dup", "near_dup", "contaminated")
+
+_GIT_SHA: Optional[str] = None
+
+
+def builder_git_sha() -> str:
+    """The commit whose code built these shards, or `"unknown"`.
+
+    The filters are *code*: a `filter_fn` lambda, the length bound, the
+    normalization `exact_hash` applies, the near-dup signature. No field can
+    record a lambda, and a manifest that named its filters in prose would go
+    stale the first time one changed. What actually ties a manifest to the
+    filters that produced it is the revision of the tree that ran, so that is
+    what is recorded.
+
+    Never raises and never blocks a build: a corpus running from a tarball, or
+    from a worktree with no git at all, is a corpus with weaker provenance, not
+    a failed one. Cached because `checkpoint_every` writes this manifest every
+    50,000 documents and a fork per write is a real cost at corpus scale.
+    """
+    global _GIT_SHA
+    if _GIT_SHA is None:
+        try:
+            result = subprocess.run(["git", "rev-parse", "HEAD"],
+                                    capture_output=True, text=True, timeout=10)
+            _GIT_SHA = result.stdout.strip() or "unknown"
+        except Exception:                          # noqa: BLE001 - provenance
+            _GIT_SHA = "unknown"                   # must not bite the build
+    return _GIT_SHA
+
+
+#: How long a provenance lookup may hold up a corpus build before it is
+#: recorded as unresolved. Provenance that can stall a 40-hour run is a
+#: liability, and `requests` has no default timeout of its own.
+RELEASE_LOOKUP_TIMEOUT_SEC = 20.0
+
+_RELEASE_CACHE: Dict[tuple, dict] = {}
+
+
+def _utcnow_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def resolve_source_release(spec: SourceSpec, *, api=None,
+                           timeout: float = RELEASE_LOOKUP_TIMEOUT_SEC) -> dict:
+    """The dataset's resolved commit and license, asked of the Hub.
+
+    Two of the fields Phase 7 step 3 asks for cannot come from the spec at all.
+    The **license** lives on the dataset card, is the owner's to change, and is
+    the field a reader most needs before redistributing anything built from it
+    -- so it has to be read, not recalled; a license string written from memory
+    into a provenance artifact is worse than an absent one, because it will be
+    believed. The **resolved commit** is the single thing that makes an unpinned
+    source reproducible after the fact: `spec.revision` is `None` for eight of
+    the ten sources here, so what pinned them was the day they ran, and `sha` is
+    that day's answer written down.
+
+    Never raises and never blocks past `timeout`. A corpus built offline, behind
+    a gated repo, or through a rate-limited Hub is a corpus with weaker
+    provenance, not a failed one -- and a gated repo is precisely the case where
+    the license is both most interesting and least readable. A failure is
+    recorded as `resolved: false` with the error rather than omitted: an absent
+    field reads as an older manifest, a recorded failure reads as what it was.
+
+    `resolved_at` is stamped because a license is a claim about a moment. The
+    card can change after these shards are written, and a manifest that says
+    when it looked is honest about what it knows.
+    """
+    key = (spec.dataset, spec.revision)
+    if key in _RELEASE_CACHE:
+        return dict(_RELEASE_CACHE[key])
+    record = {"repo_id": spec.dataset, "requested_revision": spec.revision,
+              "resolved_at": _utcnow_iso()}
+    try:
+        if api is None:
+            from huggingface_hub import HfApi
+
+            api = HfApi()
+        info = api.dataset_info(spec.dataset, revision=spec.revision,
+                                timeout=timeout)
+        card = getattr(info, "card_data", None)
+        if card is None:
+            license_value = None
+        elif hasattr(card, "get"):
+            license_value = card.get("license")
+        else:
+            license_value = getattr(card, "license", None)
+        if not isinstance(license_value, (str, list, type(None))):
+            license_value = str(license_value)
+        record.update({
+            "resolved": True,
+            # The commit these shards were actually built from, whatever
+            # `requested_revision` did or did not ask for.
+            "sha": getattr(info, "sha", None),
+            "license": license_value,
+            "gated": getattr(info, "gated", None),
+        })
+    except Exception as e:                     # noqa: BLE001 - provenance must
+        record.update({"resolved": False,      # not bite the build
+                       "error": repr(e)})
+    _RELEASE_CACHE[key] = dict(record)
+    return record
+
+
+def source_provenance(spec: SourceSpec, *, min_chars: int,
+                      dedup: DedupState,
+                      release: Optional[dict] = None,
+                      tokenizer: Optional[dict] = None) -> dict:
+    """What it took to build this source, recorded beside the shards it built.
+
+    The corpus manifest already carries the dedup parameters and the frozen
+    decontamination index once, for the whole run. A *source* manifest that
+    does not carry its own is only reproducible while it sits next to that
+    file -- and these shard directories do not stay next to it. They are
+    uploaded to a private dataset repo one source at a time, hardlinked into
+    holdout splits, restricted to a subset by `--data-dir`, and read by four
+    later phases through `resolve_mixture`, which never opens the corpus
+    manifest at all. Phase 7's own acceptance is that every source and
+    transformation is reproducible from revision-pinned manifests, and "that
+    manifest, plus the other file it came with" is not that.
+
+    `source_revision` is `None` for most sources and that is a real answer, not
+    a missing one: the build took whatever the dataset's default branch pointed
+    at on the day it ran, so the source is pinned by nothing that this file
+    knows. `release` is what closes that -- see `resolve_source_release`, which
+    reads the commit the Hub actually served, and the license, at build time.
+    It is omitted rather than stubbed when absent, because a caller that never
+    looked and a lookup that failed are different facts and only the second one
+    has an error worth recording.
+
+    `tokenizer` is the same fingerprint `daedalus.data.tokenize_and_pack` writes,
+    and it belongs here for the reason the rest of this block does: the ids in a
+    shard file mean nothing without the vocabulary that produced them, and
+    `vocab_size` alone does not identify one -- two 32,768-token vocabularies
+    trained on different samples share it and agree on nothing else. Nothing
+    raises when a tree is read under the wrong tokenizer; it trains, logs a loss
+    and exports. `daedalus.data.assert_manifest_tokenizer` is the guard, and
+    until now the corpus manifests gave it nothing to check.
+    """
+    return {
+        "source_split": spec.split,
+        "source_revision": spec.revision,
+        "source_load_kwargs": dict(spec.load_kwargs),
+        **({"source_release": release} if release is not None else {}),
+        **({"tokenizer": tokenizer} if tokenizer is not None else {}),
+        "filters": {
+            "min_chars": min_chars,
+            # A lambda has no name worth recording, so what is recorded is
+            # whether one ran; `builder_git_sha` is what identifies which.
+            "row_filter": spec.filter_fn is not None,
+            "near_dup_group": spec.near_dup_group or spec.key,
+            "near_dup_threshold": dedup.threshold,
+            "near_dup_num_perm": dedup.num_perm,
+            "near_dup_reset_every": dedup.near_dup_reset_every,
+        },
+        "builder_git_sha": builder_git_sha(),
+    }
+
+
+def _write_source_manifest(writer, spec: SourceSpec, stream_state, stats: dict,
+                           provenance: Optional[dict] = None) -> str:
     """Write the per-source manifest, including the resume position.
 
     Durability: this file is the only record that survives a worker dying hard
     (an OS kill, a C-level malloc failure, a clean low-memory abort), so the
     resume position and counters live here, not just in the stats dict
     returned through the executor. See `_recover_source_stats`.
+
+    `drops` is written as one block because the question it answers is one
+    question -- of `n_seen` documents, why did `n_seen - n_kept` not make it --
+    and it was previously unanswerable: three of the four reasons landed in a
+    `DedupState` counter shared by every source a worker handled, and none of
+    them was written down. `n_too_short` stays at the top level as well, where
+    `_recover_source_stats` and the resume path have always read it.
     """
+    drops = stats.get("drops") or {}
     return writer.write_manifest({
         "source_dataset": spec.dataset, "source_config": spec.config,
         "source_key": spec.key, "eos_id": DEFAULT_EOS_ID,
         "stream_state": stream_state,
         "n_seen": stats["n_seen"], "n_kept": stats["n_kept"],
         "n_too_short": stats["n_too_short"],
+        "drops": {"too_short": stats["n_too_short"],
+                  **{name: int(drops.get(name, 0)) for name in _DEDUP_DROPS}},
+        **(provenance or {}),
     })
 
 
@@ -646,6 +830,8 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
                 rss_soft_limit_gb: Optional[float] = None,
                 resume_skip: int = 0, resume_seed: Optional[dict] = None,
                 resume_stream_state: Optional[dict] = None,
+                release: Optional[dict] = None,
+                tokenizer_name: Optional[str] = None,
                 log=print) -> dict:
     """`rss_soft_limit_gb` (issue #3's within-source respawn fix) is a second,
     *lower* threshold checked alongside the existing hard `rss_limit_gb` cap.
@@ -691,7 +877,32 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
     group = spec.near_dup_group or spec.key
     stats = {"key": spec.key, "dataset": spec.dataset, "config": spec.config,
              "n_seen": resume_seed.get("n_seen", 0), "n_kept": resume_seed.get("n_kept", 0),
-             "n_too_short": resume_seed.get("n_too_short", 0), "tokens": resume_seed.get("tokens", 0)}
+             "n_too_short": resume_seed.get("n_too_short", 0), "tokens": resume_seed.get("tokens", 0),
+             "drops": dict(resume_seed.get("drops") or {})}
+    # `DedupState` is shared by every source a worker handles, so its counters
+    # are the *worker's*. The difference from this snapshot is what this source
+    # dropped -- without it, source two of a group inherits source one's
+    # duplicates, and the last source in a worker reports the whole group's.
+    drops_before = dict(dedup.counters)
+    seeded_drops = dict(stats["drops"])
+
+    def fold_drops() -> None:
+        """This attempt's dedup drops, folded onto the ones already recorded.
+
+        Seeded from the resume state for the reason `n_kept` is: a source that
+        stopped and continued dropped both attempts' documents, and a manifest
+        counting only the last attempt would put the drops and the keeps on
+        different denominators.
+        """
+        stats["drops"] = {
+            name: int(seeded_drops.get(name, 0))
+                  + int(dedup.counters.get(name, 0)) - int(drops_before.get(name, 0))
+            for name in _DEDUP_DROPS}
+
+    provenance = source_provenance(spec, min_chars=min_chars, dedup=dedup,
+                                   release=release,
+                                   tokenizer=tokenizer_fingerprint(
+                                       tokenizer, tokenizer_name))
     prior_elapsed_s = resume_seed.get("elapsed_s", 0.0)
     t0 = time.time()
     incomplete = False
@@ -727,7 +938,9 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
                     # source started. Flush first so the manifest describes
                     # exactly what is on disk.
                     writer.flush_partial()
-                    _write_source_manifest(writer, spec, stream.state(), stats)
+                    fold_drops()
+                    _write_source_manifest(writer, spec, stream.state(), stats,
+                                           provenance)
                 if stats["n_seen"] % rss_check_every == 0:
                     _check_worker_rss(rss_limit_gb)
                     if rss_soft_limit_gb:
@@ -771,7 +984,9 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
     # this points at the first row not yet accounted for in `stats`.
     stream_state = stream.state()
     writer.close()
-    manifest_path = _write_source_manifest(writer, spec, stream_state, stats)
+    fold_drops()
+    manifest_path = _write_source_manifest(writer, spec, stream_state, stats,
+                                           provenance)
     stats.update(shards=writer.shards, manifest_path=manifest_path,
                  stream_state=stream_state,
                  elapsed_s=prior_elapsed_s + (time.time() - t0), token_budget=token_budget,
@@ -790,6 +1005,19 @@ def run_source(spec: SourceSpec, tokenizer, token_budget: int, out_dir: str,
 # via copy-on-write. See the module docstring's "Parallelism" section for why
 # this exists instead of passing `SourceSpec` objects through the pool's queue.
 _ACTIVE_MIXTURE_BY_KEY: Dict[str, SourceSpec] = {}
+
+#: Which vocabulary this run packs its ids under, set beside the mixture above
+#: and inherited by forked workers the same way. `None` is SmolLM2, so every
+#: build that has ever run keeps producing byte-identical shards.
+#:
+#: A module global rather than a `_run_group_worker` argument for the reason the
+#: mixture is one: the worker's parameters are the run's *shape*, and threading
+#: a second config value through the pool's queue, the respawn path and the
+#: crash-recovery path is three more places for a rebuild to silently fall back
+#: to the default vocabulary. Phase 7 step 9 wants shards under the selected V2
+#: tokenizer, and a rebuild that quietly used the old one would look exactly
+#: like a rebuild that worked.
+_ACTIVE_TOKENIZER_NAME: Optional[str] = None
 
 
 # RLIMIT_AS backstop for worker processes -- deliberately coarse, see
@@ -908,7 +1136,7 @@ def _run_group_worker(group_key: str, spec_keys: List[str], target_tokens: int, 
         # Scaled to this worker's resident budget -- a fixed cap here crashed
         # every group of attempt 8 uncatchably. See `worker_vmem_cap_gb`.
         _set_worker_memory_limit(worker_vmem_cap_gb(rss_limit_gb))
-        tokenizer = get_tokenizer()
+        tokenizer = get_tokenizer(_ACTIVE_TOKENIZER_NAME)
         dedup = DedupState()
     except Exception as e:
         print(f"FAILED group {group_key} setup: {e!r}; recording every source as failed")
@@ -968,7 +1196,13 @@ def _run_group_worker(group_key: str, spec_keys: List[str], target_tokens: int, 
                                 checkpoint_every=checkpoint_every,
                                 resume_skip=resume.get("resume_skip", 0),
                                 resume_seed=resume.get("resume_seed"),
-                                resume_stream_state=resume.get("stream_state"))
+                                resume_stream_state=resume.get("stream_state"),
+                                # Resolved here, in the worker that is about to
+                                # stream this dataset anyway, and cached per
+                                # (repo, revision) so a respawned source does
+                                # not ask twice.
+                                release=resolve_source_release(spec),
+                                tokenizer_name=_ACTIVE_TOKENIZER_NAME)
         except Exception as e:  # a broken source must not sink the whole run
             print(f"FAILED source {spec.key}: {e!r}; recording and continuing")
             stats = _recover_source_stats(spec.key, out_root)
@@ -1117,13 +1351,16 @@ def run_dataprep(target_tokens: int = 45_000_000_000, out_root: str = "data/shar
                   hf_token: Optional[str] = None, max_docs_per_source: Optional[int] = None,
                   shard_tokens: int = 100_000_000, resume: bool = True,
                   eval_task_limit: Optional[int] = 2000, skip_decontam: bool = False,
+                  eval_index_path: Optional[str] = None,
+                  eval_index_digest: Optional[str] = None,
                   mixture: Optional[List[SourceSpec]] = None, log=print,
                   max_workers: int = 4, per_worker_mem_limit_gb: Optional[float] = 4.0,
                   rss_soft_limit_gb: Optional[float] = None, rss_check_every: int = 5_000,
                   checkpoint_every: int = 50_000,
                   min_available_gb: float = 6.0, mem_poll_interval_s: float = 15.0,
                   wandb_enabled: bool = True, wandb_project: Optional[str] = None,
-                  wandb_entity: Optional[str] = None, run_name: Optional[str] = None) -> dict:
+                  wandb_entity: Optional[str] = None, run_name: Optional[str] = None,
+                  tokenizer_name: Optional[str] = None) -> dict:
     """Runs every `near_dup_group` in `mixture` (default `MIXTURE`) as its own
     process, up to `max_workers` concurrently -- see the module docstring's
     "Parallelism" section for why (a purely sequential run was measured at
@@ -1196,15 +1433,49 @@ def run_dataprep(target_tokens: int = 45_000_000_000, out_root: str = "data/shar
     see that module's docstring for why importing torch into this parent
     process before it forks workers is actively unsafe here) and degrades to
     offline the same way; never blocks or crashes the run."""
-    global _ACTIVE_MIXTURE_BY_KEY
+    global _ACTIVE_MIXTURE_BY_KEY, _ACTIVE_TOKENIZER_NAME
     mixture = mixture if mixture is not None else MIXTURE
     _ACTIVE_MIXTURE_BY_KEY = {s.key: s for s in mixture}
+    _ACTIVE_TOKENIZER_NAME = tokenizer_name
 
     eval_ngram_index = None
-    if not skip_decontam:
+    decontam_index_record = None
+    if not skip_decontam and eval_index_path:
+        # The frozen path. The index is an input the run is *given*, not one it
+        # derives, so what a source was filtered against survives the run in
+        # the manifest instead of depending on what `datasets` returned and
+        # what `TASK_SPLITS` said on the day -- which is the pair of facts the
+        # released corpus cannot recover. See daedalus/eval_index.py.
+        from daedalus.eval_index import (coverage_problems, load_index,
+                                         manifest_record)
+        log(f"loading frozen eval n-gram index from {eval_index_path} ...")
+        eval_ngram_index, provenance = load_index(eval_index_path,
+                                                  expect_digest=eval_index_digest)
+        problems = coverage_problems(provenance)
+        if problems:
+            raise ValueError(
+                f"{eval_index_path} does not cover what this model is scored "
+                f"on: {'; '.join(problems)}")
+        decontam_index_record = manifest_record(provenance, path=eval_index_path)
+        log(f"eval n-gram index: {len(eval_ngram_index):,} {provenance['n']}-grams "
+            f"over {sum(decontam_index_record['items'].values()):,} items "
+            f"({decontam_index_record['digest']})")
+    elif not skip_decontam:
         log("building eval n-gram decontamination index ...")
         eval_ngram_index = _build_eval_index(limit=eval_task_limit)
         log(f"eval n-gram index: {len(eval_ngram_index):,} 13-grams")
+        # Recorded as partial whenever a limit is in force, so a manifest
+        # written this way cannot be mistaken later for one built against the
+        # complete index. `--eval-task-limit 2000` is still the default, so
+        # this is what an unchanged caller gets.
+        decontam_index_record = {
+            "digest": None, "path": None, "n": 13,
+            "ngrams": len(eval_ngram_index),
+            "complete": eval_task_limit is None,
+            "limit": eval_task_limit,
+            "built": "in-process at run start; not frozen, not reproducible "
+                     "from this manifest",
+        }
 
     os.makedirs(out_root, exist_ok=True)
     os.makedirs(os.path.dirname(manifest_path) or ".", exist_ok=True)
@@ -1221,6 +1492,7 @@ def run_dataprep(target_tokens: int = 45_000_000_000, out_root: str = "data/shar
         },
         "decontam": ("8/13-gram overlap vs HellaSwag/ARC-Easy/PIQA/OpenBookQA/WinoGrande"
                      if not skip_decontam else "skipped (skip_decontam=True)"),
+        "decontam_index": decontam_index_record,
     }
     if resume and os.path.exists(manifest_path):
         with open(manifest_path) as f:
@@ -1245,6 +1517,13 @@ def run_dataprep(target_tokens: int = 45_000_000_000, out_root: str = "data/shar
         # on 2026-08-10 into thinking the corpus build had died.
         manifest.pop("aborted_low_memory", None)
         manifest.pop("aborted_reason", None)
+        # And the same argument one field further: the resumed file records the
+        # index the *previous* run filtered against. A resume that switches to
+        # a frozen index -- which is exactly how the phase-7 rebuild continues
+        # a corpus started under the old default -- would otherwise keep
+        # advertising the old one, reproducing the 334c86c ambiguity inside a
+        # single manifest.
+        manifest["decontam_index"] = decontam_index_record
 
     # A source that hit an error (e.g. an RSS-cap trip) only got a partial
     # share of its token budget -- see STATUS.md's malloc_trim incident,
@@ -1618,7 +1897,19 @@ def _cli():
     p.add_argument("--shard-tokens", type=int, default=100_000_000)
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--skip-decontam", action="store_true")
-    p.add_argument("--eval-task-limit", type=int, default=2000)
+    p.add_argument("--eval-task-limit", type=int, default=2000,
+                   help="per-task item cap for the in-process index. Ignored "
+                        "when --eval-index is given, which is the complete, "
+                        "frozen alternative.")
+    p.add_argument("--eval-index", default=None, metavar="PATH",
+                   help="filter against the frozen decontamination index at "
+                        "PATH (scripts/decontam_index.py build) instead of "
+                        "building a limited one at run start. The index's "
+                        "digest, item counts and splits are recorded in the "
+                        "manifest, so which eval items a source was filtered "
+                        "against stays answerable after the run.")
+    p.add_argument("--eval-index-digest", default=None, metavar="SHA256",
+                   help="refuse to start unless --eval-index hashes to this")
     p.add_argument("--max-workers", type=int, default=4,
                    help="concurrent source-group processes (see module docstring's Parallelism note "
                         "and run_dataprep's RAM discipline note -- ADDENDUM 2)")
@@ -1653,6 +1944,13 @@ def _cli():
                         "instead). This is how the corpus gets finished to specific "
                         "absolute per-source numbers rather than to global proportions -- "
                         "see build_budget_mixture and issue #4 section 4.2.")
+    p.add_argument("--tokenizer", default=None, metavar="NAME_OR_PATH",
+                   help="pack ids under this tokenizer (Hub id or local "
+                        "directory) instead of SmolLM2. Phase 7 step 9 builds "
+                        "shards under the selected V2 vocabulary this way; the "
+                        "fingerprint lands in every source manifest, so a tree "
+                        "read under the wrong vocabulary is refused rather "
+                        "than silently trained on.")
     p.add_argument("--run-name", default=None, help="W&B run name; defaults to 'dataprep'")
     p.add_argument("--wandb-project", default=None)
     p.add_argument("--wandb-entity", default=None)
@@ -1684,12 +1982,14 @@ def _cli():
         hf_repo=args.hf_repo, hf_token=hf_token, max_docs_per_source=args.max_docs_per_source,
         shard_tokens=args.shard_tokens, resume=not args.no_resume,
         eval_task_limit=args.eval_task_limit, skip_decontam=args.skip_decontam,
+        eval_index_path=args.eval_index, eval_index_digest=args.eval_index_digest,
         max_workers=args.max_workers, per_worker_mem_limit_gb=args.per_worker_mem_limit_gb or None,
         rss_soft_limit_gb=args.rss_soft_limit_gb, rss_check_every=args.rss_check_every,
         checkpoint_every=args.checkpoint_every,
         min_available_gb=args.min_available_gb, mem_poll_interval_s=args.mem_poll_interval_s,
         wandb_enabled=not args.no_wandb, wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity, run_name=args.run_name,
+        tokenizer_name=args.tokenizer,
     )
     print(json.dumps({k: v for k, v in manifest.items() if k != "sources"}, indent=2))
 

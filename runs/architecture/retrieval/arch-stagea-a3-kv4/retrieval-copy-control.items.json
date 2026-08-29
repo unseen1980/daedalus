@@ -1,0 +1,113 @@
+{
+  "item_count": 8,
+  "item_digest": "1fee4e95d63bd5f72f33121b7801d580",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "nectar harbor kelp",
+      "extracted": "a. The root of the tree is the root of the tree.",
+      "id": "copy-control-0",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nnectar harbor kelp\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "a. The root of the tree is the root of the tree.\nb. The root of the tree is",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "juniper violet umber",
+      "extracted": "\"I am a man, a man, a man, a man, a man, a man, a man",
+      "id": "copy-control-1",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\njuniper violet umber\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "\"I am a man, a man, a man, a man, a man, a man, a man",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "willow gable granite",
+      "extracted": "The word is a word that is used to describe the word.",
+      "id": "copy-control-2",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nwillow gable granite\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 0.0,
+      "response": "The word is a word that is used to describe the word.\nThe word is a word that is used to",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "granite esker dapple",
+      "extracted": "\"I am a man of the world, and I am a man of the world, and I am a man",
+      "id": "copy-control-3",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\ngranite esker dapple\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "\"I am a man of the world, and I am a man of the world, and I am a man",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "xenon esker lichen",
+      "extracted": "xenon esker tree",
+      "id": "copy-control-4",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nxenon esker lichen\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "xenon esker tree\nThe word is:\nxenon esker tree\nThe word is:",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "amber gable prairie",
+      "extracted": "The word is a word that is used to describe the tree.",
+      "id": "copy-control-5",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\namber gable prairie\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "The word is a word that is used to describe the tree.\nThe word is a word that is used to",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "hollow lantern xenon",
+      "extracted": "a. The word is a word, a word, a word, a word, a word, a word,",
+      "id": "copy-control-6",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nhollow lantern xenon\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 0.0,
+      "response": "a. The word is a word, a word, a word, a word, a word, a word,",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "indigo gable fennel",
+      "extracted": "\"The word is the word of God.\"",
+      "id": "copy-control-7",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nindigo gable fennel\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "\"The word is the word of God.\"\n\"The word of God is the word of God.\"\n\"",
+      "task": "copy-control"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-copy-control",
+  "schema": 1
+}

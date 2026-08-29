@@ -1,0 +1,51 @@
+{
+  "built_at": "2026-08-26T07:21:55Z",
+  "complete": false,
+  "digest": "sha256:ce885bdf38ebb8c74c37e92b62bc321ffd9ab9d40cc84bccbbbf06b9761c4ff1",
+  "limit": 2000,
+  "n": 13,
+  "ngrams": 214682,
+  "schema": 1,
+  "tasks": {
+    "arc_easy": {
+      "candidates": 7996,
+      "config": "ARC-Easy",
+      "items": 2000,
+      "repo": "allenai/ai2_arc",
+      "revision": null,
+      "split": "test"
+    },
+    "hellaswag": {
+      "candidates": 8000,
+      "config": null,
+      "items": 2000,
+      "repo": "Rowan/hellaswag",
+      "revision": null,
+      "split": "validation"
+    },
+    "openbookqa": {
+      "candidates": 2000,
+      "config": "main",
+      "items": 500,
+      "repo": "allenai/openbookqa",
+      "revision": null,
+      "split": "test"
+    },
+    "piqa": {
+      "candidates": 3676,
+      "config": null,
+      "items": 1838,
+      "repo": "ybisk/piqa",
+      "revision": null,
+      "split": "validation"
+    },
+    "winogrande": {
+      "candidates": 2534,
+      "config": "winogrande_xl",
+      "items": 1267,
+      "repo": "allenai/winogrande",
+      "revision": null,
+      "split": "validation"
+    }
+  }
+}

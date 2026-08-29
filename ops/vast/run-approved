@@ -1,0 +1,316 @@
+#!/bin/bash
+set -euo pipefail
+
+repo=${DAEDALUS_REPO:-/workspace/daedalus}
+runtime_env=${DAEDALUS_RUNTIME_ENV:-/root/.config/daedalus/runtime.env}
+venv_dir=${DAEDALUS_VENV:-/venv/main}
+
+if [[ -f ${runtime_env} ]]; then
+    source "${runtime_env}"
+fi
+
+cd "${repo}"
+command_name=${1:-}
+[[ -n ${command_name} ]] || { echo "missing approved command" >&2; exit 2; }
+shift
+
+current_branch() {
+    git branch --show-current
+}
+
+require_source_branch() {
+    local branch
+    branch=$(current_branch)
+    case "${branch}" in
+        vast/daedalus-improvements-20260824|vast/daedalus-code-20260824)
+            ;;
+        *)
+            echo "refusing branch ${branch}" >&2
+            exit 3
+            ;;
+    esac
+}
+
+validate_path() {
+    local path=$1
+    [[ ${path} != /* ]] || { echo "refusing absolute path" >&2; exit 4; }
+    [[ /${path}/ != *"/../"* ]] || { echo "refusing parent path" >&2; exit 4; }
+    case "${path}" in
+        .env|.env.*|*/.env|*/.env.*)
+            echo "refusing secret path" >&2
+            exit 4
+            ;;
+    esac
+}
+
+require_gh() {
+    command -v gh >/dev/null 2>&1 || { echo "gh not installed" >&2; exit 5; }
+}
+
+released_root=${DAEDALUS_RELEASED_ROOT:-/root/daedalus}
+
+# The released artifacts are the immutable baseline every Phase 3-8 gate is
+# measured against. They are *inputs* to evaluation -- pointing --gguf or
+# --checkpoint at them is the normal case -- so a blanket ban on the path would
+# be wrong. What must never happen is an evaluation writing its results back
+# into that tree, so only the output-carrying flags are checked.
+refuse_released_output() {
+    local previous="" argument value
+    for argument in "$@"; do
+        value=""
+        case "${argument}" in
+            --out=*|--out-dir=*|--per-item=*|--outfile=*)
+                value=${argument#*=}
+                ;;
+        esac
+        case "${previous}" in
+            --out|--out-dir|--per-item|--outfile)
+                value=${argument}
+                ;;
+        esac
+        if [[ -n ${value} && ( ${value} == "${released_root}" || ${value} == "${released_root}"/* ) ]]; then
+            echo "refusing to write into the released artifact tree ${released_root}" >&2
+            exit 6
+        fi
+        previous=${argument}
+    done
+}
+
+run_evaluation() {
+    local script=$1
+    shift
+    refuse_released_output "$@"
+    source "${venv_dir}/bin/activate"
+    export PYTHONPATH="${repo}${PYTHONPATH:+:${PYTHONPATH}}"
+    exec python "${script}" "$@"
+}
+
+require_log_path() {
+    local path=$1
+    case "${path}" in
+        /var/log/portal/*.log)
+            ;;
+        *.log|logs/*|runs/*/logs/*|runs/*/*.log|/var/log/portal/*.log)
+            validate_path "${path}"
+            ;;
+        *)
+            echo "refusing non-log path" >&2
+            exit 4
+            ;;
+    esac
+}
+
+case "${command_name}" in
+    status)
+        exec git status --short --branch
+        ;;
+    diff)
+        exec git diff -- "$@"
+        ;;
+    test)
+        source "${venv_dir}/bin/activate"
+        exec python -m pytest "$@"
+        ;;
+    format)
+        source "${venv_dir}/bin/activate"
+        exec python -m py_compile "$@"
+        ;;
+    phase)
+        source "${venv_dir}/bin/activate"
+        export PYTHONPATH="${repo}${PYTHONPATH:+:${PYTHONPATH}}"
+        exec python scripts/vast_program.py "$@"
+        ;;
+    reload-service)
+        # A control-plane service is a long-running process, so it keeps
+        # running the code it imported at start. Editing and committing
+        # `github_progress.py` changes what the *next* publisher does and
+        # nothing about the one publishing now -- which is how a heartbeat
+        # keeps omitting a field that has been in the state file for hours.
+        #
+        # Restricted to this program's own services by an explicit list.
+        # `supervisorctl` also drives caddy, the portal and the tunnel manager,
+        # which are the instance's management and auth surface: restarting one
+        # of those to reload a publisher would be a way to lose the box.
+        service=${1:-}
+        case "${service}" in
+            daedalus_progress|daedalus_session_keeper)
+                ;;
+            *)
+                echo "refusing to control service ${service:-<none>}" >&2
+                exit 4
+                ;;
+        esac
+        exec supervisorctl restart "${service}"
+        ;;
+    progress-once)
+        source "${venv_dir}/bin/activate"
+        progress_worktree=${DAEDALUS_PROGRESS_WORKTREE:-/workspace/daedalus-progress}
+        state_path=${DAEDALUS_STATE_PATH:-${repo}/runs/vast-program/state.json}
+        progress_branch=${DAEDALUS_PROGRESS_BRANCH:-vast/progress-20260824}
+        exec python scripts/github_progress.py \
+            --source-repo "${repo}" \
+            --progress-worktree "${progress_worktree}" \
+            --state "${state_path}" \
+            --branch "${progress_branch}" \
+            --once
+        ;;
+    eval-retrieval)
+        run_evaluation scripts/retrieval_eval.py "$@"
+        ;;
+    eval-quant)
+        run_evaluation scripts/gguf_eval.py "$@"
+        ;;
+    eval-code)
+        run_evaluation scripts/code_eval.py "$@"
+        ;;
+    eval-bpb)
+        run_evaluation scripts/bpb_eval.py "$@"
+        ;;
+    eval-tasks)
+        run_evaluation eval.py "$@"
+        ;;
+    hash)
+        [[ $# -gt 0 ]] || { echo "paths required" >&2; exit 2; }
+        for path in "$@"; do
+            validate_path "${path}"
+        done
+        exec sha256sum "$@"
+        ;;
+    safe-log)
+        path=${1:-}
+        [[ -n ${path} ]] || { echo "log path required" >&2; exit 2; }
+        require_log_path "${path}"
+        lines=${2:-120}
+        [[ ${lines} =~ ^[0-9]+$ ]] || { echo "line count must be numeric" >&2; exit 2; }
+        exec tail -n "${lines}" -- "${path}"
+        ;;
+    pr-draft)
+        require_source_branch
+        require_gh
+        title=${1:-}
+        base=${2:-main}
+        body=${3:-}
+        [[ -n ${title} ]] || { echo "title required" >&2; exit 2; }
+        branch=$(current_branch)
+        exec gh pr create --draft --base "${base}" --head "${branch}" --title "${title}" --body "${body}"
+        ;;
+    pr-find)
+        # `pr-edit` needs a number, and until now nothing an engineering
+        # session could reach knew one: the PR is opened by the controller, its
+        # URL lives on the progress branch, and `runs/vast-program/pr-body.md`
+        # carries the body without the number. Five sessions in a row wrote a
+        # current body they could not apply, and the alternative -- guessing a
+        # number -- is a write to somebody else's pull request.
+        #
+        # Read-only by construction: a GET against the pulls list, filtered to
+        # the branch this checkout is on, so it cannot open, close or retarget
+        # anything. Prints "<number> <state> <base> <url>" per match, nothing
+        # when there is none.
+        require_source_branch
+        require_gh
+        branch=$(current_branch)
+        exec gh api \
+            "repos/${GITHUB_REPOSITORY:-unseen1980/daedalus}/pulls?state=open&per_page=100" \
+            --jq ".[] | select(.head.ref == \"${branch}\") | \"\(.number) \(.state) \(.base.ref) \(.html_url)\""
+        ;;
+    pr-edit)
+        require_gh
+        number=${1:-}
+        body_file=${2:-}
+        [[ ${number} =~ ^[0-9]+$ ]] || { echo "PR number required" >&2; exit 2; }
+        [[ -n ${body_file} ]] || { echo "body file required" >&2; exit 2; }
+        validate_path "${body_file}"
+        # The pull-request edit subcommand resolves org fields and needs
+        # read:org; the REST endpoint
+        # updates the same body with the repo scope the run token actually has.
+        exec gh api -X PATCH \
+            "repos/${GITHUB_REPOSITORY:-unseen1980/daedalus}/pulls/${number}" \
+            -F "body=@${body_file}" --silent
+        ;;
+    branch)
+        # Phase 8 step 1 is a branch this wrapper could not make. Everything
+        # downstream already works from whichever source branch the checkout is
+        # on -- `commit-push` pushes `HEAD:` that branch, `pr-draft` opens from
+        # it -- so the only missing capability was getting there, and a session
+        # cannot run `git checkout` itself.
+        #
+        # Restricted to the two source branches by name, and the code branch is
+        # the only one this may *create*: the optimization branch exists and is
+        # what everything else is built on, so "create it" is never the right
+        # answer to it being missing. Created from wherever the checkout stands,
+        # which `require_source_branch` bounds to the optimization branch -- the
+        # plan's "create the code branch from the current tested SHA" -- and the
+        # printed SHA is the parent to record in the code run manifest.
+        target=${1:-}
+        case "${target}" in
+            vast/daedalus-improvements-20260824|vast/daedalus-code-20260824)
+                ;;
+            *)
+                echo "refusing branch ${target:-<none>}" >&2
+                exit 3
+                ;;
+        esac
+        if [[ $(current_branch) == "${target}" ]]; then
+            exec git rev-parse HEAD
+        fi
+        require_source_branch
+        # A modified tracked file follows the checkout onto the other branch,
+        # which is how work meant for one lands in a commit on the other. The
+        # untracked run artifacts every phase leaves are not checked: they are
+        # not committed by path-scoped commits, and demanding a clean tree here
+        # would mean never switching at all.
+        if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "refusing to switch with modified tracked files; commit them first" >&2
+            exit 3
+        fi
+        if git show-ref --verify --quiet "refs/heads/${target}"; then
+            git checkout -q "${target}"
+        elif git show-ref --verify --quiet "refs/remotes/origin/${target}"; then
+            # The branch is already on the remote and only this checkout has
+            # lost it. Continuing it is the only correct answer: branching from
+            # here instead would fork the code branch at whatever the
+            # optimization branch has reached, and nothing would say so until a
+            # push was rejected -- after the work was committed onto it.
+            # Start point, not `--track`: tracking additionally requires the
+            # remote's fetch refspec to be configured, which turns "continue the
+            # pushed branch" into a question about this checkout's config. The
+            # push refspec `commit-push` uses is explicit, so no upstream is
+            # needed for any of this to work.
+            git checkout -q -b "${target}" "origin/${target}"
+        else
+            [[ ${target} == vast/daedalus-code-20260824 ]] || {
+                echo "refusing to create ${target}" >&2
+                exit 3
+            }
+            git checkout -q -b "${target}"
+        fi
+        exec git rev-parse HEAD
+        ;;
+    commit-push)
+        require_source_branch
+        message=""
+        if [[ ${1:-} == "--message" && -n ${2:-} ]]; then
+            message=$2
+            shift 2
+        fi
+        [[ ${1:-} == "--" ]] || { echo "expected -- before paths" >&2; exit 2; }
+        shift
+        [[ -n ${message} && $# -gt 0 ]] || { echo "message and paths required" >&2; exit 2; }
+        for path in "$@"; do
+            validate_path "${path}"
+        done
+        git add -- "$@"
+        git diff --cached --check
+        if git diff --cached --quiet; then
+            echo "no staged changes"
+            exit 0
+        fi
+        git commit -m "${message}"
+        branch=$(current_branch)
+        exec git push origin "HEAD:refs/heads/${branch}"
+        ;;
+    *)
+        echo "unapproved command ${command_name}" >&2
+        exit 2
+        ;;
+esac

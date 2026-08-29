@@ -1,0 +1,107 @@
+{
+  "data": {
+    "failures": [],
+    "passed": true,
+    "sources": [
+      {
+        "in_vocab": true,
+        "max_id": 49151,
+        "min_id": 0,
+        "ok": true,
+        "shards": 1,
+        "source": "cosmopedia-v2",
+        "tokens": 100000000
+      },
+      {
+        "in_vocab": true,
+        "max_id": 49151,
+        "min_id": 0,
+        "ok": true,
+        "shards": 5,
+        "source": "dclm-baseline",
+        "tokens": 326426947
+      },
+      {
+        "in_vocab": true,
+        "max_id": 49138,
+        "min_id": 0,
+        "ok": true,
+        "shards": 1,
+        "source": "everyday-conversations",
+        "tokens": 403573
+      },
+      {
+        "in_vocab": true,
+        "max_id": 49151,
+        "min_id": 0,
+        "ok": true,
+        "shards": 1,
+        "source": "finemath-3plus",
+        "tokens": 100000000
+      },
+      {
+        "in_vocab": true,
+        "max_id": 49151,
+        "min_id": 0,
+        "ok": true,
+        "shards": 1,
+        "source": "finepdfs-edu",
+        "tokens": 100000000
+      },
+      {
+        "in_vocab": true,
+        "max_id": 49151,
+        "min_id": 0,
+        "ok": true,
+        "shards": 1,
+        "source": "finephrase",
+        "tokens": 100000000
+      },
+      {
+        "in_vocab": true,
+        "max_id": 49151,
+        "min_id": 0,
+        "ok": true,
+        "shards": 9,
+        "source": "fineweb-edu",
+        "tokens": 479185034
+      },
+      {
+        "in_vocab": true,
+        "max_id": 49151,
+        "min_id": 0,
+        "ok": true,
+        "shards": 1,
+        "source": "finewiki-en",
+        "tokens": 100000000
+      },
+      {
+        "in_vocab": true,
+        "max_id": 49151,
+        "min_id": 0,
+        "ok": true,
+        "shards": 1,
+        "source": "infiwebmath-3plus",
+        "tokens": 100000000
+      },
+      {
+        "in_vocab": true,
+        "max_id": 49151,
+        "min_id": 0,
+        "ok": true,
+        "shards": 2,
+        "source": "stack-edu-python",
+        "tokens": 200000000
+      }
+    ],
+    "vocab_size": 49152
+  },
+  "weights": {
+    "checkpoint": "/root/daedalus/final/hero/checkpoint.pt",
+    "non_finite_on_grid": [],
+    "non_finite_stored": [],
+    "passed": true,
+    "qat_rel_rmse": 0.034944668664785114,
+    "qat_tensors": 103.0
+  }
+}

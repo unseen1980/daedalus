@@ -1,0 +1,22 @@
+{
+  "item_count": 1,
+  "item_digest": "8dad835202d9eb23e424350ed7d37de0",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 256,
+      "expected": "69688",
+      "extracted": "1",
+      "id": "passkey-d256-0",
+      "needle_depth_frac": 0.0,
+      "prompt": "There is an important piece of information hidden somewhere in the text below. Read the text and remember the information. The pass key is 69688. Remember it. 69688 is the pass key. There and back again along the same worn path by the wall. The grass is green and the sky above is a pale washed blue. The bread cools on the sill while the kettle begins to sing. The sun rises over the hill and the long shadows retreat. Dust settles on the shelf where the empty jars are kept. Dust settles on the shelf where the empty jars are kept. The grass is green and the sky above is a pale washed blue. A slow river runs past the mill and turns the old wheel. The bread cools on the sill while the kettle begins to sing. Dust settles on the shelf where the empty jars are kept. Here we go again around the garden and back to the gate. The grass is green and the sky above is a pale washed blue. There and back again along the same worn path by the wall. Dust settles on the shelf where the empty jars are kept. Dust settles on the shelf where the empty jars are kept.\nWhat is the pass key? The pass key is",
+      "prompt_tokens": 252,
+      "query_accuracy": 0.0,
+      "response": "Loading model... |\b-\b\\\b \b\n\n\u2584\u2584 \u2584\u2584\n\u2588\u2588 \u2588\u2588\n\u2588\u2588 \u2588\u2588  \u2580\u2580\u2588\u2584 \u2588\u2588\u2588\u2584\u2588\u2588\u2588\u2584  \u2580\u2580\u2588\u2584    \u2584\u2588\u2588\u2588\u2588 \u2588\u2588\u2588\u2588\u2584 \u2588\u2588\u2588\u2588\u2584\n\u2588\u2588 \u2588\u2588 \u2584\u2588\u2580\u2588\u2588 \u2588\u2588 \u2588\u2588 \u2588\u2588 \u2584\u2588\u2580\u2588\u2588    \u2588\u2588    \u2588\u2588 \u2588\u2588 \u2588\u2588 \u2588\u2588\n\u2588\u2588 \u2588\u2588 \u2580\u2588\u2584\u2588\u2588 \u2588\u2588 \u2588\u2588 \u2588\u2588 \u2580\u2588\u2584\u2588\u2588 \u2588\u2588 \u2580\u2588\u2588\u2588\u2588 \u2588\u2588\u2588\u2588\u2580 \u2588\u2588\u2588\u2588\u2580\n                                    \u2588\u2588    \u2588\u2588\n                                    \u2580\u2580    \u2580\u2580\n\nbuild      : b1-7584430\nmodel      : /root/daedalus/gguf/hero-base-f16.gguf\nftype      : F16\nmodalities : text\n\navailable commands:\n  /exit or Ctrl+C     stop or exit\n  /regen              regenerate the last response\n  /clear              clear the chat history\n  /read <file>        add a text file\n  /glob <pattern>     add text files using globbing pattern\n\n\n\n> There is an important piece of information hidden somewhere in the text below. Read the text and remember the information. The pass key is 69688. Remember it. 69688 is the pass key. There and back again along the same worn path by the wall. The grass is green and the sky above is a pale washed blue. The bread cools on the sill while the kettle begins to sing. The sun rises over the hill and the long shadows retreat. Dust settles on the shelf where the empty jars are kept. Dust settles on the she ... (truncated)\nThere is an important piece of information hidden somewhere in the text below. Read the text and remember the information. The pass",
+      "task": "passkey"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-passkey",
+  "schema": 1
+}

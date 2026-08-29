@@ -546,7 +546,7 @@ def test_both_arms_get_the_holdout_as_val_dir(tmp_path, monkeypatch):
 def test_val_dir_is_the_holdout_and_not_the_training_root(tmp_path, monkeypatch):
     """The silent failure this guards: validating on the data being trained on
     reports a flattering, monotonic curve that is not a generalization signal
-    at all -- and `Trainer._val_bpb` swallows exceptions, so nothing would say
+    at all -- and `Trainer._validate` swallows exceptions, so nothing would say
     so. The directory must also exist by the time an arm starts, since
     train.py's only response to a bad holdout is `val_bpb: null`."""
     seen = _argv_of_each_arm(tmp_path, monkeypatch)

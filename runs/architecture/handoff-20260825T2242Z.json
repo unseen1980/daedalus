@@ -1,0 +1,23 @@
+{
+  "state_at_note": "TWO LANES ARE RUNNING. main = phase6-stageb-sweep, launched 22:39:57Z, four arms (control a8-kv4 then a3-kv4, a4-kv4, a6-kv4) at 159M x 251.7M tokens, ~8h, so around 06:40Z on 08-26. evidence = phase6-evidence-chain, launched 22:40:12Z, ~4h. Both are detached controllers holding their own lease; do not relaunch either. Read runs/vast-program/state.json as JSON and the two logs under runs/architecture/.",
+
+  "stage_a_result": "Committed as 1e387c3. Full-pass BPB on fineweb-edu from each final checkpoint. The curve is monotone in KV cost and NO arm beats the shipped ratio: control a8-kv4 = 1.2616, every other arm worse. All four arms inside the preregistered 0.5% floor carry four KV heads (a6-kv4 +0.07%, a4-kv4 +0.15%, a8-kv2 +0.44%, a3-kv4 +0.46%), so at this scale KV heads earn their bytes and attention layers are the cheaper thing to cut. Frontier advances a3-kv4, a4-kv4, a6-kv4; a8-kv2 clears the floor but a4-kv4 dominates it at the same 4,096 KV bytes. Every credited_bpb_delta_pct is positive, so no arm may be reported as beating the shipped ratio once its parameter surplus is paid for.",
+
+  "new_this_session": "scripts/architecture_evidence.py gained an `all` subcommand (044ffc8) that chains export -> retrieval -> decode in one phase. The three are one pipeline over one arm list on the CPU lane, and launched separately each needed a session to notice the previous one finished. Export gates the chain because both later passes measure the GGUFs it writes; retrieval does NOT gate decode, because they are different columns off the same artifacts. A conversion stock llama.cpp refuses is that arm's finding and the chain steps past it. It writes runs/architecture/evidence/evidence-stagea.json alongside the three per-pass artifacts, and exits non-zero if any stage did not measure.",
+
+  "next_1": "When the evidence lane finishes, run `python scripts/architecture_report.py --tag stagea recommend` and commit runs/architecture/stagea-recommendation.{json,md}. That is stage A's phase-6 deliverable: the five-column gate over the four measured arms. Expect `unproven` rather than `recommended` for any arm whose retrieval cells came back no-power -- read the per-cell notes before treating that as a result.",
+
+  "next_2": "Phase 7's corpus rebuild is the natural occupant of the evidence lane once it frees, while stage B still holds the GPU. It is CPU and disk work and does not contend.",
+
+  "next_3": "When stage B finishes (~06:40Z 08-26): `architecture_report.py --shape stage-b --tag stageb score --holdout-root data/holdout --device cuda` on the main lane, then `report`, then the evidence chain again with `--shape stage-b --tag stageb --arms-from-report stagea`, then `recommend --shape stage-b`. Stage B's own report must NOT be used to select stage B's arms -- advanced_selection refuses that -- and stage C takes at most two finalists.",
+
+  "stage_b_parameter_note": "At 768 wide the conv-block premium grows faster than the model, so the stage-B grid lands +/-2.2% about its midpoint against stage A's 1.5%. credited_bpb_delta_pct is therefore MORE load-bearing at stage B, not less. build_report already reads parameter_spread off arms_for(shape), so the stage-B table discounts with stage B's own spread.",
+
+  "deadline": "Program started 2026-08-24T10:44:35Z. At this note T+36.0h of 144h; finalization opens at T+136h = 2026-08-30T02:44Z. Stage B lands about T+44h, so phases 7 and 8 have the room the schedule assumes.",
+
+  "trap_1": "runs/vast-program/state.json is written with sorted keys, so `lanes` sorts before `status`: grepping for status and taking the first hit answers with a lane's status, not the program's. Parse it as JSON.",
+
+  "trap_2": "The running progress publisher imported github_progress.py before the lanes field existed, so STATUS.md keeps omitting lanes -- including a failed lane's action banner. `daedalus-approved reload-service daedalus_progress` fixes it, but only after `bash ops/vast/install_supervisor.sh` copies the new wrapper to /usr/local/bin, which is deliberately an operator step. Still outstanding.",
+
+  "commits": "044ffc8 evidence chain, 1e387c3 stage-A report and scorecards"
+}

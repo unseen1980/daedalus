@@ -1,0 +1,8 @@
+{
+  "bpb_protocol_rule": "the tiny-BPB clause is evaluated against the worse (larger) regression of the equal-bytes and equal-tokens protocols; both are recorded",
+  "incumbent_round_trip": "SmolLM2 is missing 21 of the 256 byte-level characters and cannot round-trip code points U+40000-U+FFFFF. Candidates are still held to the full round-trip precondition; the incumbent is measured and its failure recorded, because refusing to measure the reference would leave the phase with nothing to compare against.",
+  "matched_control": "a 49,152-token vocabulary trained on the same sample is measured alongside SmolLM2. The preregistered rule is evaluated against SmolLM2 exactly as written; the matched control is a diagnostic column that separates 'what does shrinking the vocabulary cost' from 'what does retraining on this corpus buy', which the incumbent comparison conflates.",
+  "phase": "phase4-tokenizer-lab",
+  "rule_digest": "4557ac1d70b0f27be7f86395370cd41d",
+  "schema": 1
+}

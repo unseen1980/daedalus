@@ -1,0 +1,74 @@
+{
+  "accepted": false,
+  "meets_improvement_gate": true,
+  "meets_stretch": true,
+  "meets_target": true,
+  "name": "qat-recovery-lr0.0002",
+  "observed": {
+    "chunks_better": 154,
+    "chunks_worse": 138,
+    "finiteness": {
+      "non_finite_rows": 0,
+      "passed": true,
+      "reason": "",
+      "skipped_updates": 0
+    },
+    "five_task_mean": 47.05015649128539,
+    "n_chunks": 292,
+    "name": "qat-recovery-lr0.0002",
+    "perplexity_fp16": 6.712599999999999,
+    "perplexity_q4_0": 6.7057,
+    "q4_penalty_pct": -0.10279176474091711,
+    "quant_comparison": "runs/qat-recovery/quant/lr0.0002/quant-comparison.json",
+    "retrieval": {
+      "retrieval-copy-control:d0": 1.0,
+      "retrieval-mqar:d1024": 0.87,
+      "retrieval-mqar:d2048": 0.81,
+      "retrieval-mqar:d256": 0.99,
+      "retrieval-mqar:d512": 0.94,
+      "retrieval-passkey:d1024": 0.83,
+      "retrieval-passkey:d2048": 0.88,
+      "retrieval-passkey:d256": 0.76,
+      "retrieval-passkey:d512": 0.81
+    },
+    "retrieval_scorecards": [
+      "runs/qat-recovery/retrieval/lr0.0002/retrieval-passkey.json",
+      "runs/qat-recovery/retrieval/lr0.0002/retrieval-mqar.json",
+      "runs/qat-recovery/retrieval/lr0.0002/retrieval-copy-control.json"
+    ],
+    "tasks_scorecard": "runs/qat-recovery/tasks/lr0.0002.json"
+  },
+  "penalty_reduction_frac": 1.0185589226348364,
+  "q4_penalty_pct": -0.10279176474091711,
+  "retention": {
+    "checks": [
+      {
+        "gate": "fp16-perplexity",
+        "limit_pct": 0.5,
+        "observed_pct": 1.4984501398654038,
+        "passed": false
+      },
+      {
+        "gate": "five-task-mean",
+        "limit_drop": 0.5,
+        "observed_drop": 0.32424942702724024,
+        "passed": true
+      },
+      {
+        "gate": "retrieval",
+        "limit_drop_points": 1.0,
+        "observed_drop_points": 6.999999999999995,
+        "passed": false,
+        "worst_depth": "retrieval-passkey:d256"
+      },
+      {
+        "gate": "finiteness",
+        "non_finite_rows": 0,
+        "passed": true,
+        "reason": "",
+        "skipped_updates": 0
+      }
+    ],
+    "passed": false
+  }
+}

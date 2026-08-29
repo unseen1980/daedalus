@@ -1,0 +1,139 @@
+{
+  "arms": [
+    {
+      "aggregate_bpb": 1.2485831928613356,
+      "arm": "baseline",
+      "basis": "dataprep.MIXTURE shares, renormalized over the sources present under the data root",
+      "checkpoint_sha256": "543f109368394b1abe330a3889d61666401cdf6f02143258b22ba31b7f3d161e",
+      "domain_shares": {
+        "code": 0.130435,
+        "web-edu": 0.543478,
+        "web-raw": 0.326087
+      },
+      "is_baseline": true,
+      "per_source_bpb": {
+        "dclm-baseline": 1.382766782546576,
+        "fineweb-edu": 1.2440818406167806,
+        "stack-edu-python": 0.9318798530005464
+      },
+      "run": "mix-probe-baseline",
+      "scorecard": "runs/corpus/scorecards/mix-probe-baseline-bpb.json",
+      "scorecard_bpb": 1.2485831928613356,
+      "weights": {
+        "dclm-baseline": 0.326087,
+        "fineweb-edu": 0.543478,
+        "stack-edu-python": 0.130435
+      }
+    },
+    {
+      "aggregate_bpb": 1.2475719462656183,
+      "arm": "quality-heavy",
+      "basis": "raw-web sources scaled to 0.45 of their blueprint share, the freed mass redistributed over the filtered sources in proportion to theirs",
+      "checkpoint_sha256": "0c7abd25adc753e44d5917d5125c5c62754408f1a2fec484a9099d6ca17a0050",
+      "domain_shares": {
+        "code": 0.165147,
+        "web-edu": 0.688114,
+        "web-raw": 0.146739
+      },
+      "is_baseline": false,
+      "per_source_bpb": {
+        "dclm-baseline": 1.4035317272584529,
+        "fineweb-edu": 1.2372891006624638,
+        "stack-edu-python": 0.900517683796676
+      },
+      "run": "mix-probe-quality-heavy",
+      "scorecard": "runs/corpus/scorecards/mix-probe-quality-heavy-bpb.json",
+      "scorecard_bpb": 1.2475719462656183,
+      "weights": {
+        "dclm-baseline": 0.146739,
+        "fineweb-edu": 0.688114,
+        "stack-edu-python": 0.165147
+      }
+    },
+    {
+      "aggregate_bpb": 1.2478688694683773,
+      "arm": "derived",
+      "basis": "blueprint shares tilted by exp(excess/0.1), clipped to 2x, then floored at 0.4 of each floored domain's blueprint share",
+      "checkpoint_sha256": "45cea76cad7d2303bd8cd5e6d4bac458abbe7129a001a2da754510089aeb7ba4",
+      "domain_shares": {
+        "code": 0.178207,
+        "web-edu": 0.536916,
+        "web-raw": 0.284877
+      },
+      "is_baseline": false,
+      "per_source_bpb": {
+        "dclm-baseline": 1.3899364596074446,
+        "fineweb-edu": 1.249023199533333,
+        "stack-edu-python": 0.8878901855167265
+      },
+      "run": "mix-probe-derived",
+      "scorecard": "runs/corpus/scorecards/mix-probe-derived-bpb.json",
+      "scorecard_bpb": 1.2478688694683773,
+      "weights": {
+        "dclm-baseline": 0.284877,
+        "fineweb-edu": 0.536916,
+        "stack-edu-python": 0.178207
+      }
+    }
+  ],
+  "created_at": "2026-08-26T13:42:40.573828Z",
+  "derived_arm": {
+    "artifact": "runs/corpus/mixture-derived-probe.json",
+    "created_at": "2026-08-26T11:32:00.190890Z",
+    "excess_score_saturation": {
+      "stack-edu-python": {
+        "bound": "upper",
+        "excess": 0.21257264002921095,
+        "ratio_cap": 2.0,
+        "score": 2.0,
+        "temperature": 0.1,
+        "uncapped_ratio": 8.37898177285401
+      }
+    }
+  },
+  "evaluation_weights": {
+    "dclm-baseline": 0.326087,
+    "fineweb-edu": 0.543478,
+    "stack-edu-python": 0.130435
+  },
+  "measured_on": {
+    "holdout_root": "/workspace/daedalus/data/holdout",
+    "seq_len": 1024
+  },
+  "phase": "phase7-mixture",
+  "selection": {
+    "admissible": [
+      "quality-heavy",
+      "derived"
+    ],
+    "baseline": "baseline",
+    "baseline_aggregate_bpb": 1.2485831928613356,
+    "floors": {
+      "code": 0.052173913043478265,
+      "web-raw": 0.13043478260869568
+    },
+    "max_source_regression": 0.05,
+    "min_aggregate_gain": 0.005,
+    "ranking": [
+      {
+        "aggregate_bpb": 1.2475719462656183,
+        "arm": "quality-heavy",
+        "relative_gain": 0.0008099152715645925
+      },
+      {
+        "aggregate_bpb": 1.2478688694683773,
+        "arm": "derived",
+        "relative_gain": 0.0005721071667810162
+      }
+    ],
+    "reason": "best admissible arm 'quality-heavy' gains 0.0810% of aggregate BPB, under the preregistered 0.5000%",
+    "refusals": [],
+    "selected": "baseline",
+    "verdict": "keep-baseline"
+  },
+  "stage": "candidates",
+  "tag": "probe",
+  "unrepresented_floored_domains": [
+    "math"
+  ]
+}

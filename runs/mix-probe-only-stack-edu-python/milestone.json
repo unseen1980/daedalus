@@ -1,0 +1,14 @@
+{
+  "revision": "mix-probe-only-stack-edu-python-stable-end-step305",
+  "step": 305,
+  "tokens_seen": 39976960,
+  "total_steps": 1526,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.02,
+  "adam_lr": 0.0003,
+  "config": "tok-probe-49152",
+  "repo": null,
+  "path_in_repo": "milestone/mix-probe-only-stack-edu-python/checkpoint.pt",
+  "created_at": 1787738586.3549094
+}

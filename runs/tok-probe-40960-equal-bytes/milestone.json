@@ -1,0 +1,14 @@
+{
+  "revision": "tok-probe-40960-equal-bytes-stable-end-step321",
+  "step": 321,
+  "tokens_seen": 42074112,
+  "total_steps": 1609,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.02,
+  "adam_lr": 0.0003,
+  "config": "tok-probe-40960",
+  "repo": null,
+  "path_in_repo": "milestone/tok-probe-40960-equal-bytes/checkpoint.pt",
+  "created_at": 1787612909.2221918
+}

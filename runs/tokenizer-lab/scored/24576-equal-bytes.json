@@ -1,0 +1,17 @@
+{
+  "bpb": 1.212637331028739,
+  "bpb_by_domain": {
+    "code": 0.9389486521091455,
+    "dialogue": NaN,
+    "general": 1.2337687297606785,
+    "math": 1.3727355626260043,
+    "technical": 1.214820802152805
+  },
+  "checkpoint": "runs/tok-probe-24576-equal-bytes/checkpoint.pt",
+  "label": "24576",
+  "protocol": "equal-bytes",
+  "run": "tok-probe-24576-equal-bytes",
+  "steps": 1679,
+  "tokens_seen": 220069888,
+  "vocab_size": 24576
+}

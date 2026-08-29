@@ -86,6 +86,89 @@ def dpo_loss(policy_chosen: torch.Tensor, policy_rejected: torch.Tensor,
     return loss, metrics
 
 
+def preference_metrics(model, pairs, *, pad_id: int = 0, micro_batch: int = 2,
+                       device: str = "cpu") -> dict:
+    """Does *this* model rank the chosen response above the rejected one?
+
+    Deliberately not the `accuracy` `dpo_loss` returns, and the difference is
+    what makes this a gate rather than a formality. That one is a *relative*
+    quantity -- `(pi_c - pi_r) - (ref_c - ref_r) > 0` -- measured on the pairs
+    the step just trained on. Against a reference that is a snapshot of the
+    policy taken at step 0 it begins at exactly 0.0, because the two models are
+    the same model and every margin is identically zero. So "did held-out
+    preference accuracy improve" is answered `yes` by any policy that moved at
+    all, in any direction, and phase 8's rule for keeping the DPO model instead
+    of the SFT one is decided by a number that cannot say no.
+
+    This is the absolute one: the fraction of pairs where the model itself puts
+    more probability on the chosen response than on the rejected one. One model,
+    no reference, so it can be read for the SFT model and the DPO model
+    separately and compared -- which is the comparison the gate is written as.
+
+    Two accuracies, because `sequence_logprob` is a sum and a sum is
+    length-sensitive: every additional token subtracts from it, so a shorter
+    response scores higher for being shorter. UltraFeedback's chosen responses
+    are typically the longer ones, so the sum-based accuracy can sit below 0.5
+    on a perfectly reasonable model. That bias is constant across before/after
+    on the same pairs and cancels in the delta, which is why `accuracy` stays
+    primary -- it is the quantity DPO actually optimises. `accuracy_len_norm`
+    divides each side by its own supervised-token count and is the control: a
+    gain in one and not the other is a length shift wearing a preference gain's
+    clothes.
+
+    `pairs` is consumed into a list, so a generator works and the *same* pairs
+    are scored for both models -- scoring two models on two draws from one
+    stream would compare them on different data.
+    """
+    from daedalus.chatml import pad_batch
+
+    pairs = list(pairs)
+    if not pairs:
+        return {"n": 0, "accuracy": None, "margin": None,
+                "accuracy_len_norm": None, "margin_len_norm": None}
+
+    step = max(micro_batch, 1)
+    sums = {"chosen": [], "rejected": []}
+    lengths = {"chosen": [], "rejected": []}
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            for start in range(0, len(pairs), step):
+                batch = pairs[start:start + step]
+                for side in ("chosen", "rejected"):
+                    ids, labels = pad_batch([p[side] for p in batch],
+                                            pad_id=pad_id)
+                    x = torch.tensor(ids, dtype=torch.long, device=device)
+                    y = torch.tensor(labels, dtype=torch.long, device=device)
+                    sums[side].append(sequence_logprob(model, x, y).cpu())
+                    # `[:, 1:]` to match the shift sequence_logprob scores over,
+                    # so the divisor counts exactly the positions the numerator
+                    # summed and not one more.
+                    lengths[side].append(
+                        (y[:, 1:] != IGNORE_INDEX).sum(dim=-1).cpu())
+    finally:
+        model.train(was_training)
+
+    chosen = torch.cat(sums["chosen"]).double()
+    rejected = torch.cat(sums["rejected"]).double()
+    # clamp(min=1): a pair with no supervised tokens on one side scores 0.0
+    # there either way, and dividing it by zero would make the whole batch's
+    # mean NaN rather than that one pair uninformative.
+    n_chosen = torch.cat(lengths["chosen"]).double().clamp(min=1.0)
+    n_rejected = torch.cat(lengths["rejected"]).double().clamp(min=1.0)
+
+    margin = chosen - rejected
+    margin_norm = chosen / n_chosen - rejected / n_rejected
+    return {
+        "n": len(pairs),
+        "accuracy": (margin > 0).double().mean().item(),
+        "margin": margin.mean().item(),
+        "accuracy_len_norm": (margin_norm > 0).double().mean().item(),
+        "margin_len_norm": margin_norm.mean().item(),
+    }
+
+
 def freeze_reference(model) -> None:
     """Put a model permanently in eval mode with grads off.
 

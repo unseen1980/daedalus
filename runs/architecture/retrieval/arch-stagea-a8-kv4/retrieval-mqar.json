@@ -1,0 +1,63 @@
+{
+  "created_at": "2026-08-26T05:53:10.594713Z",
+  "details": {},
+  "item_count": 200,
+  "item_digest": "bcd3d7c214017a513caf8a6ead9e9e9a",
+  "kind": "retrieval",
+  "metrics": {
+    "exact_match": 0.01,
+    "exact_match_d1024": 0.02,
+    "exact_match_d2048": 0.0,
+    "exact_match_d256": 0.02,
+    "exact_match_d512": 0.0,
+    "n": 200.0,
+    "n_d1024": 50.0,
+    "n_d2048": 50.0,
+    "n_d256": 50.0,
+    "n_d512": 50.0,
+    "query_accuracy": 0.01
+  },
+  "name": "retrieval-mqar",
+  "provenance": {
+    "artifact": {
+      "config": null,
+      "kind": "gguf-q4_0",
+      "path": "runs/architecture/evidence/arch-stagea-a8-kv4/model-q4_0.gguf",
+      "revision": null,
+      "sha256": "6e02e7c359d99d24837bce740c0d8e1c42ccd691484ed7c62083f94dfdbf9dbb"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "9deab69",
+    "runtime": {
+      "backend": "llama-cpp",
+      "chat_template": "{%- for message in messages -%}{{ message['content'] }}{%- endfor -%}",
+      "device": "cpu",
+      "llama_cli": "/opt/llama.cpp/build/bin/llama-cli",
+      "llama_cli_flags": [
+        "--top-k",
+        "-s",
+        "-t",
+        "-ngl",
+        "--no-warmup",
+        "-st",
+        "--single-turn",
+        "--no-display-prompt"
+      ],
+      "max_new_tokens": 24,
+      "raw_completion_via": "passthrough-template",
+      "template_mode": "raw-completion",
+      "threads": 8
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<none>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

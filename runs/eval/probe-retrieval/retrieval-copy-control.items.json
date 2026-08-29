@@ -1,0 +1,22 @@
+{
+  "item_count": 1,
+  "item_digest": "6452893cbfd85bb555625b05eec70df6",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "nectar harbor kelp",
+      "extracted": "Loading model... |\b-\b\\\b \b",
+      "id": "copy-control-0",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nnectar harbor kelp\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "Loading model... |\b-\b\\\b \b\n\n\u2584\u2584 \u2584\u2584\n\u2588\u2588 \u2588\u2588\n\u2588\u2588 \u2588\u2588  \u2580\u2580\u2588\u2584 \u2588\u2588\u2588\u2584\u2588\u2588\u2588\u2584  \u2580\u2580\u2588\u2584    \u2584\u2588\u2588\u2588\u2588 \u2588\u2588\u2588\u2588\u2584 \u2588\u2588\u2588\u2588\u2584\n\u2588\u2588 \u2588\u2588 \u2584\u2588\u2580\u2588\u2588 \u2588\u2588 \u2588\u2588 \u2588\u2588 \u2584\u2588\u2580\u2588\u2588    \u2588\u2588    \u2588\u2588 \u2588\u2588 \u2588\u2588 \u2588\u2588\n\u2588\u2588 \u2588\u2588 \u2580\u2588\u2584\u2588\u2588 \u2588\u2588 \u2588\u2588 \u2588\u2588 \u2580\u2588\u2584\u2588\u2588 \u2588\u2588 \u2580\u2588\u2588\u2588\u2588 \u2588\u2588\u2588\u2588\u2580 \u2588\u2588\u2588\u2588\u2580\n                                    \u2588\u2588    \u2588\u2588\n                                    \u2580\u2580    \u2580\u2580\n\nbuild      : b1-7584430\nmodel      : /root/daedalus/gguf/hero-base-f16.gguf\nftype      : F16\nmodalities : text\n\navailable commands:\n  /exit or Ctrl+C     stop or exit\n  /regen              regenerate the last response\n  /clear              clear the chat history\n  /read <file>        add a text file\n  /glob <pattern>     add text files using globbing pattern\n\n\n\n> Repeat the phrase below exactly.\nnectar harbor kelp\nThe phrase is:\n\nThe phrase is:cannibal\ncannibalassistant\n\nThe phrase is:cann\n\n[ Prompt: 735.7 t/s | Generation: 79.3 t/s ]\n\n\nExiting...",
+      "task": "copy-control"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-copy-control",
+  "schema": 1
+}

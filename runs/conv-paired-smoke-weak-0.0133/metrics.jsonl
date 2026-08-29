@@ -1,0 +1,1 @@
+{"step": 12, "tokens": 1572864, "loss": 10.708502888679504, "val_bpb": null, "lr": 0.0014666666666666667, "tok_per_sec": 29656.12216186394, "elapsed_h": 0.014732428656684027, "cost_usd": 0.006614860526323319, "grad_norm": 65.0035629272461, "peak_mem_GB": 14.086147584, "qat_active": 0, "skipped_updates": 0}

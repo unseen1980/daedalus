@@ -1,0 +1,108 @@
+{
+  "candidates": [
+    24576,
+    32768,
+    40960
+  ],
+  "comparison": {
+    "metric": "bits-per-byte",
+    "protocols": {
+      "equal-bytes": "every arm reads the same text; step counts differ because a better vocabulary needs fewer tokens for it",
+      "equal-tokens": "every arm takes the same steps on the same batch shape; bytes read differ because a larger vocabulary packs more into a token",
+      "why_both": "the two cannot hold at once and bias in opposite directions, so a candidate that wins under only one of them is reported as exactly that"
+    },
+    "refused": "per-token perplexity, which is not comparable across vocabularies and would make the largest vocabulary look best by construction"
+  },
+  "expected_winner": 32768,
+  "expected_winner_note": "stated before measuring so a result that matches it is not read as confirmation of anything; the measured gate decides",
+  "git_sha": "a13ca58",
+  "incumbent": {
+    "name": "HuggingFaceTB/SmolLM2-135M",
+    "vocab_size": 49152
+  },
+  "phase": "phase4-tokenizer-lab",
+  "probe": {
+    "adam_lr": 0.0003,
+    "batch_tokens": 262144,
+    "config": {
+      "24576": "tok-probe-24576",
+      "32768": "tok-probe-32768",
+      "40960": "tok-probe-40960",
+      "49152": "tok-probe-49152"
+    },
+    "muon_lr": 0.02,
+    "seed": 0,
+    "seq_len": 1024,
+    "tokens": 200000000
+  },
+  "rule": {
+    "digest": "4557ac1d70b0f27be7f86395370cd41d",
+    "text": "A candidate is selected only if no domain regresses bytes per token by more than 5%, code improves or ties, tiny-model BPB improves or stays within 0.5%, and projected embedding bytes fall materially.",
+    "thresholds": {
+      "max_code_fertility_regression_pct": 0.0,
+      "max_domain_fertility_regression_pct": 5.0,
+      "max_tiny_bpb_regression_pct": 0.5,
+      "min_embedding_byte_reduction_pct": 5.0
+    }
+  },
+  "sample": {
+    "code_language_shares": {
+      "c": 0.05,
+      "cpp": 0.05,
+      "go": 0.06,
+      "java": 0.05,
+      "javascript": 0.08,
+      "python": 0.55,
+      "rust": 0.08,
+      "shell": 0.02,
+      "sql": 0.02,
+      "typescript": 0.04
+    },
+    "domains": {
+      "code-c": "code",
+      "code-cpp": "code",
+      "code-go": "code",
+      "code-java": "code",
+      "code-javascript": "code",
+      "code-python": "code",
+      "code-rust": "code",
+      "code-shell": "code",
+      "code-sql": "code",
+      "code-typescript": "code",
+      "cosmopedia-v2": "general",
+      "dclm-baseline": "general",
+      "everyday-conversations": "dialogue",
+      "finemath-3plus": "math",
+      "finepdfs-edu": "technical",
+      "finephrase": "general",
+      "fineweb-edu": "general",
+      "finewiki-en": "general",
+      "infiwebmath-3plus": "math"
+    },
+    "shares": {
+      "code-c": 0.0045,
+      "code-cpp": 0.0045,
+      "code-go": 0.005399999999999999,
+      "code-java": 0.0045,
+      "code-javascript": 0.0072,
+      "code-python": 0.0495,
+      "code-rust": 0.0072,
+      "code-shell": 0.0018,
+      "code-sql": 0.0018,
+      "code-typescript": 0.0036,
+      "cosmopedia-v2": 0.05,
+      "dclm-baseline": 0.225,
+      "everyday-conversations": 0.02,
+      "finemath-3plus": 0.03,
+      "finepdfs-edu": 0.08,
+      "finephrase": 0.07,
+      "fineweb-edu": 0.375,
+      "finewiki-en": 0.03,
+      "infiwebmath-3plus": 0.03
+    },
+    "splits": "disjoint by sha256 of the document's bytes",
+    "target_bytes": 1400000000
+  },
+  "schema": 1,
+  "scope": "V2 only. A tokenizer cannot be transplanted into a trained model, so nothing here changes released V1 weights or Daedalus-Code."
+}

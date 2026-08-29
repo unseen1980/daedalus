@@ -1,0 +1,35 @@
+{
+  "item_count": 2,
+  "item_digest": "7871a11261e8aa3317277631832106c9",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 256,
+      "expected": "canyon",
+      "extracted": "The wind moves through the tall pines and carries the salt air. There and back again along the same worn path by",
+      "id": "mqar-d256-0",
+      "needle_depth_frac": 0.0,
+      "prompt": "Below is a list of keys and their values. Read the list and then answer the queries at the end with the matching value.\nhollow: estuary\nmarble: eagle\nsaffron: lagoon\nfjord: junction\nalcove: island\nfennel: zenith\nindigo: canyon\ncobalt: valley\nnectar: warren\nember: yeoman\nThe wind moves through the tall pines and carries the salt air. There and back again along the same worn path by the wall. Dust settles on the shelf where the empty jars are kept. The grass is green and the sky above is a pale washed blue. The wind moves through the tall pines and carries the salt air. The bread cools on the sill while the kettle begins to sing. There and back again along the same worn path by the wall. A slow river runs past the mill and turns the old wheel. The sun rises over the hill and the long shadows retreat. A slow river runs past the mill and turns the old wheel. The wind moves through the tall pines and carries the salt air.\nQueries:\nmarble: eagle\nember: yeoman\ncobalt: valley\nindigo:",
+      "prompt_tokens": 247,
+      "query_accuracy": 0.0,
+      "response": "The wind moves through the tall pines and carries the salt air. There and back again along the same worn path by",
+      "task": "mqar"
+    },
+    {
+      "correct": 0,
+      "depth": 512,
+      "expected": "narrows",
+      "extracted": "The wind moves through the tall pines and carries the salt air. The wind moves through the tall pines and carries the",
+      "id": "mqar-d512-0",
+      "needle_depth_frac": 0.0,
+      "prompt": "Below is a list of keys and their values. Read the list and then answer the queries at the end with the matching value.\nopal: tundra\nindigo: burrow\nkestrel: inlet\nkelp: jetty\nalcove: summit\nbirch: gorge\ndapple: beacon\ndune: cavern\nfennel: abbey\nember: moor\njasper: valley\nhollow: meadow\njuniper: island\nthicket: ledger\nviolet: anchor\nfjord: xystus\nzephyr: narrows\number: canyon\nxenon: lagoon\nmistral: falcon\ngranite: delve\nHere we go again around the garden and back to the gate. A slow river runs past the mill and turns the old wheel. The bread cools on the sill while the kettle begins to sing. The grass is green and the sky above is a pale washed blue. The grass is green and the sky above is a pale washed blue. There and back again along the same worn path by the wall. Dust settles on the shelf where the empty jars are kept. The sun rises over the hill and the long shadows retreat. The bread cools on the sill while the kettle begins to sing. The bread cools on the sill while the kettle begins to sing. The wind moves through the tall pines and carries the salt air. The bread cools on the sill while the kettle begins to sing. The wind moves through the tall pines and carries the salt air. The grass is green and the sky above is a pale washed blue. A slow river runs past the mill and turns the old wheel. Dust settles on the shelf where the empty jars are kept. There and back again along the same worn path by the wall. There and back again along the same worn path by the wall. A slow river runs past the mill and turns the old wheel. The bread cools on the sill while the kettle begins to sing. Dust settles on the shelf where the empty jars are kept. A slow river runs past the mill and turns the old wheel. The bread cools on the sill while the kettle begins to sing. Here we go again around the garden and back to the gate. The wind moves through the tall pines and carries the salt air. The wind moves through the tall pines and carries the salt air.\nQueries:\nkelp: jetty\nthicket: ledger\nfjord: xystus\nzephyr:",
+      "prompt_tokens": 509,
+      "query_accuracy": 0.0,
+      "response": "The wind moves through the tall pines and carries the salt air. The wind moves through the tall pines and carries the",
+      "task": "mqar"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-mqar",
+  "schema": 1
+}

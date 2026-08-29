@@ -1,0 +1,216 @@
+{
+  "addendum": {
+    "bpb_protocol_rule": "the tiny-BPB clause is evaluated against the worse (larger) regression of the equal-bytes and equal-tokens protocols; both are recorded",
+    "incumbent_round_trip": "SmolLM2 is missing 21 of the 256 byte-level characters and cannot round-trip code points U+40000-U+FFFFF. Candidates are still held to the full round-trip precondition; the incumbent is measured and its failure recorded, because refusing to measure the reference would leave the phase with nothing to compare against.",
+    "matched_control": "a 49,152-token vocabulary trained on the same sample is measured alongside SmolLM2. The preregistered rule is evaluated against SmolLM2 exactly as written; the matched control is a diagnostic column that separates 'what does shrinking the vocabulary cost' from 'what does retraining on this corpus buy', which the incumbent comparison conflates.",
+    "phase": "phase4-tokenizer-lab",
+    "rule_digest": "4557ac1d70b0f27be7f86395370cd41d",
+    "schema": 1
+  },
+  "candidates": [
+    {
+      "failed": [
+        "code-fertility"
+      ],
+      "selectable": false,
+      "vocab_size": 24576
+    },
+    {
+      "failed": [],
+      "selectable": true,
+      "vocab_size": 32768
+    },
+    {
+      "failed": [],
+      "selectable": true,
+      "vocab_size": 40960
+    }
+  ],
+  "clauses_by_candidate": {
+    "24576": [
+      {
+        "clause": "round-trip",
+        "detail": "arbitrary bytes reproduce exactly",
+        "passed": true
+      },
+      {
+        "clause": "domain-fertility",
+        "limit_pct": 5.0,
+        "passed": true,
+        "worst_domain": "general",
+        "worst_regression_pct": 1.3386824084392666
+      },
+      {
+        "clause": "code-fertility",
+        "limit_pct": 0.0,
+        "passed": false,
+        "regression_pct": 0.0878577407461908
+      },
+      {
+        "clause": "tiny-bpb",
+        "limit_pct": 0.5,
+        "passed": true,
+        "regression_pct": -0.43506778767383963
+      },
+      {
+        "bar_pct": 5.0,
+        "clause": "embedding-bytes",
+        "passed": true,
+        "reduction_pct": 50.0
+      }
+    ],
+    "32768": [
+      {
+        "clause": "round-trip",
+        "detail": "arbitrary bytes reproduce exactly",
+        "passed": true
+      },
+      {
+        "clause": "domain-fertility",
+        "limit_pct": 5.0,
+        "passed": true,
+        "worst_domain": "dialogue",
+        "worst_regression_pct": -0.7171081516171643
+      },
+      {
+        "clause": "code-fertility",
+        "limit_pct": 0.0,
+        "passed": true,
+        "regression_pct": -3.0401576255996514
+      },
+      {
+        "clause": "tiny-bpb",
+        "limit_pct": 0.5,
+        "passed": true,
+        "regression_pct": 0.037622770910901195
+      },
+      {
+        "bar_pct": 5.0,
+        "clause": "embedding-bytes",
+        "passed": true,
+        "reduction_pct": 33.333333333333336
+      }
+    ],
+    "40960": [
+      {
+        "clause": "round-trip",
+        "detail": "arbitrary bytes reproduce exactly",
+        "passed": true
+      },
+      {
+        "clause": "domain-fertility",
+        "limit_pct": 5.0,
+        "passed": true,
+        "worst_domain": "dialogue",
+        "worst_regression_pct": -1.7144546260715268
+      },
+      {
+        "clause": "code-fertility",
+        "limit_pct": 0.0,
+        "passed": true,
+        "regression_pct": -4.993553960956699
+      },
+      {
+        "clause": "tiny-bpb",
+        "limit_pct": 0.5,
+        "passed": true,
+        "regression_pct": 0.34379657571178024
+      },
+      {
+        "bar_pct": 5.0,
+        "clause": "embedding-bytes",
+        "passed": true,
+        "reduction_pct": 16.666666666666668
+      }
+    ]
+  },
+  "diagnostics": {
+    "24576": {
+      "fertility_vs_matched_control_pct": {
+        "code": 6.038116415233785,
+        "dialogue": 3.197004608294932,
+        "general": 5.333484571661407,
+        "math": 5.737376665280912,
+        "technical": 5.222227002839695
+      }
+    },
+    "32768": {
+      "fertility_vs_matched_control_pct": {
+        "code": 3.0963897235840943,
+        "dialogue": 1.6244694863164,
+        "general": 2.86965298507618,
+        "math": 2.772833041894417,
+        "technical": 2.8173301539472866
+      }
+    },
+    "40960": {
+      "fertility_vs_matched_control_pct": {
+        "code": 1.2593277318447675,
+        "dialogue": 0.6503103754064578,
+        "general": 1.1850108455137627,
+        "math": 1.283336595263669,
+        "technical": 1.2458447558184742
+      }
+    }
+  },
+  "measured": {
+    "24576": {
+      "domain_fertility_delta_pct": {
+        "code": 0.0878577407461908,
+        "dialogue": 0.8928571428571374,
+        "general": 1.3386824084392666,
+        "math": -8.481347709511702,
+        "technical": 0.7318647276482179
+      },
+      "embedding_q6_k_bytes": 15482880.0,
+      "incumbent_embedding_q6_k_bytes": 30965760.0,
+      "round_trip_passed": true,
+      "tiny_bpb_delta_pct": -0.43506778767383963,
+      "tiny_bpb_delta_pct_by_protocol": {
+        "equal-bytes": -0.43506778767383963,
+        "equal-tokens": -0.6348057794385498
+      },
+      "vocab_size": 24576
+    },
+    "32768": {
+      "domain_fertility_delta_pct": {
+        "code": -3.0401576255996514,
+        "dialogue": -0.7171081516171643,
+        "general": -1.2291196233173198,
+        "math": -11.893067819046934,
+        "technical": -1.7869708406770355
+      },
+      "embedding_q6_k_bytes": 20643840.0,
+      "incumbent_embedding_q6_k_bytes": 30965760.0,
+      "round_trip_passed": true,
+      "tiny_bpb_delta_pct": 0.037622770910901195,
+      "tiny_bpb_delta_pct_by_protocol": {
+        "equal-bytes": 0.037622770910901195,
+        "equal-tokens": -0.41232216010900125
+      },
+      "vocab_size": 32768
+    },
+    "40960": {
+      "domain_fertility_delta_pct": {
+        "code": -4.993553960956699,
+        "dialogue": -1.7144546260715268,
+        "general": -2.9848514405015303,
+        "math": -13.607242284203346,
+        "technical": -3.4329097580712062
+      },
+      "embedding_q6_k_bytes": 25804800.0,
+      "incumbent_embedding_q6_k_bytes": 30965760.0,
+      "round_trip_passed": true,
+      "tiny_bpb_delta_pct": 0.34379657571178024,
+      "tiny_bpb_delta_pct_by_protocol": {
+        "equal-bytes": 0.34379657571178024,
+        "equal-tokens": -0.282413875855842
+      },
+      "vocab_size": 40960
+    }
+  },
+  "negative_result": false,
+  "reason": "32768 cleared every clause and has the best tiny-model BPB among those that did",
+  "rule_digest": "4557ac1d70b0f27be7f86395370cd41d",
+  "selected": 32768
+}

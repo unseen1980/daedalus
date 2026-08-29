@@ -1,0 +1,42 @@
+{
+  "created_at": "2026-08-24T13:46:27.963120Z",
+  "details": {},
+  "item_count": 8,
+  "item_digest": "2cbf5c5dad0ef258b84b741fe3092996",
+  "kind": "retrieval",
+  "metrics": {
+    "exact_match": 1.0,
+    "exact_match_d0": 1.0,
+    "n": 8.0,
+    "n_d0": 8.0,
+    "query_accuracy": 1.0
+  },
+  "name": "retrieval-copy-control",
+  "provenance": {
+    "artifact": {
+      "config": null,
+      "kind": "checkpoint",
+      "path": "<none>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "8e44215",
+    "runtime": {
+      "backend": "oracle",
+      "device": "cpu",
+      "max_new_tokens": 24
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<none>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

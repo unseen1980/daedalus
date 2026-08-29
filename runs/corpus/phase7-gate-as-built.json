@@ -1,0 +1,409 @@
+{
+  "allocation": {
+    "capped_sources": [
+      "cosmopedia-v2",
+      "dclm-baseline",
+      "everyday-conversations",
+      "finemath-3plus",
+      "finepdfs-edu",
+      "finephrase",
+      "fineweb-edu",
+      "finewiki-en",
+      "infiwebmath-3plus",
+      "stack-edu-python"
+    ],
+    "l1_skew_pts": 0.0,
+    "max_epochs": 4.0,
+    "max_epochs_seen": 2968.484,
+    "most_repeated_source": "everyday-conversations",
+    "per_source": {
+      "cosmopedia-v2": {
+        "capped": true,
+        "effective_share": 0.05,
+        "epochs": 29.95,
+        "target_share": 0.05,
+        "tokens_on_disk": 100000000
+      },
+      "dclm-baseline": {
+        "capped": true,
+        "effective_share": 0.225,
+        "epochs": 41.288,
+        "target_share": 0.225,
+        "tokens_on_disk": 326426947
+      },
+      "everyday-conversations": {
+        "capped": true,
+        "effective_share": 0.02,
+        "epochs": 2968.484,
+        "target_share": 0.02,
+        "tokens_on_disk": 403573
+      },
+      "finemath-3plus": {
+        "capped": true,
+        "effective_share": 0.03,
+        "epochs": 17.97,
+        "target_share": 0.03,
+        "tokens_on_disk": 100000000
+      },
+      "finepdfs-edu": {
+        "capped": true,
+        "effective_share": 0.08,
+        "epochs": 47.92,
+        "target_share": 0.08,
+        "tokens_on_disk": 100000000
+      },
+      "finephrase": {
+        "capped": true,
+        "effective_share": 0.07,
+        "epochs": 41.93,
+        "target_share": 0.07,
+        "tokens_on_disk": 100000000
+      },
+      "fineweb-edu": {
+        "capped": true,
+        "effective_share": 0.375,
+        "epochs": 46.876,
+        "target_share": 0.375,
+        "tokens_on_disk": 479185034
+      },
+      "finewiki-en": {
+        "capped": true,
+        "effective_share": 0.03,
+        "epochs": 17.97,
+        "target_share": 0.03,
+        "tokens_on_disk": 100000000
+      },
+      "infiwebmath-3plus": {
+        "capped": true,
+        "effective_share": 0.03,
+        "epochs": 17.97,
+        "target_share": 0.03,
+        "tokens_on_disk": 100000000
+      },
+      "stack-edu-python": {
+        "capped": true,
+        "effective_share": 0.09,
+        "epochs": 26.955,
+        "target_share": 0.09,
+        "tokens_on_disk": 200000000
+      }
+    },
+    "supply_basis": {
+      "cosmopedia-v2": "total_tokens",
+      "dclm-baseline": "total_tokens",
+      "everyday-conversations": "total_tokens",
+      "finemath-3plus": "total_tokens",
+      "finepdfs-edu": "total_tokens",
+      "finephrase": "total_tokens",
+      "fineweb-edu": "total_tokens",
+      "finewiki-en": "total_tokens",
+      "infiwebmath-3plus": "total_tokens",
+      "stack-edu-python": "total_tokens"
+    },
+    "tokens_present_locally": {
+      "cosmopedia-v2": 100000000,
+      "dclm-baseline": 326426947,
+      "everyday-conversations": 403573,
+      "finemath-3plus": 100000000,
+      "finepdfs-edu": 100000000,
+      "finephrase": 100000000,
+      "fineweb-edu": 479185034,
+      "finewiki-en": 100000000,
+      "infiwebmath-3plus": 100000000,
+      "stack-edu-python": 200000000
+    },
+    "total_run_tokens": 59900000000,
+    "total_tokens_on_disk": 1606015554
+  },
+  "budget_tokens": 59900000000,
+  "created_at": "2026-08-26T11:43:23.017253Z",
+  "criteria": [
+    {
+      "criterion": "decontam-index-complete",
+      "detail": "",
+      "evidence": [
+        "runs/corpus/decontam-index.json"
+      ],
+      "observed": {
+        "arc_easy": {
+          "indexed": true,
+          "items": 2376,
+          "scored_split": "test",
+          "split": "test"
+        },
+        "complete": true,
+        "digest": "sha256:6f1278f0e468c5f29593e05f5287cfe8d5c5d19588095dd733db3bab488c08c6",
+        "hellaswag": {
+          "indexed": true,
+          "items": 10042,
+          "scored_split": "validation",
+          "split": "validation"
+        },
+        "limit": null,
+        "ngrams": 1371773,
+        "openbookqa": {
+          "indexed": true,
+          "items": 500,
+          "scored_split": "test",
+          "split": "test"
+        },
+        "piqa": {
+          "indexed": true,
+          "items": 1838,
+          "scored_split": "validation",
+          "split": "validation"
+        },
+        "winogrande": {
+          "indexed": true,
+          "items": 1267,
+          "scored_split": "validation",
+          "split": "validation"
+        }
+      },
+      "passed": true
+    },
+    {
+      "criterion": "corpus-contamination",
+      "detail": "1 document(s) hit the 'split_gap' index; 1 document(s) hit the 'limit_gap' index; the scan saw 'cosmopedia-v2' at 950,000,576 tokens and the corpus holds 100,000,000, so 850,000,576 were never scanned; the scan saw 'dclm-baseline' at 3,375,002,145 tokens and the corpus holds 326,426,947, so 3,048,575,198 were never scanned; the scan saw 'finemath-3plus' at 1,350,008,857 tokens and the corpus holds 100,000,000, so 1,250,008,857 were never scanned; the scan saw 'finepdfs-edu' at 1,200,001,535 tokens and the corpus holds 100,000,000, so 1,100,001,535 were never scanned; the scan saw 'finephrase' at 2,066,170,024 tokens and the corpus holds 100,000,000, so 1,966,170,024 were never scanned; the scan saw 'fineweb-edu' at 5,035,572,292 tokens and the corpus holds 479,185,034, so 4,556,387,258 were never scanned; the scan saw 'finewiki-en' at 450,005,019 tokens and the corpus holds 100,000,000, so 350,005,019 were never scanned; the scan saw 'infiwebmath-3plus' at 1,350,000,198 tokens and the corpus holds 100,000,000, so 1,250,000,198 were never scanned; the scan saw 'stack-edu-python' at 1,210,964,651 tokens and the corpus holds 200,000,000, so 1,010,964,651 were never scanned",
+      "evidence": [
+        "runs/preflight/contam-exposure.json"
+      ],
+      "observed": {
+        "corpus_tokens": 16988128870,
+        "doc_rate_filtered_upper95": 2.1960050981342178e-05,
+        "doc_rate_limit_gap_upper95": 3.238373527547139e-05,
+        "doc_rate_split_gap_upper95": 3.238373527547139e-05,
+        "docs_filtered": 0,
+        "docs_limit_gap": 1,
+        "docs_scanned": 174932,
+        "docs_split_gap": 1,
+        "sampled_frac": 0.013226496438745228,
+        "scan_source_tokens": {
+          "cosmopedia-v2": 950000576,
+          "dclm-baseline": 3375002145,
+          "everyday-conversations": 403573,
+          "finemath-3plus": 1350008857,
+          "finepdfs-edu": 1200001535,
+          "finephrase": 2066170024,
+          "fineweb-edu": 5035572292,
+          "finewiki-en": 450005019,
+          "infiwebmath-3plus": 1350000198,
+          "stack-edu-python": 1210964651
+        }
+      },
+      "passed": false
+    },
+    {
+      "criterion": "epoch-cap",
+      "detail": "everyday-conversations would be read 2.97e+03x; finepdfs-edu would be read 47.9x; fineweb-edu would be read 46.9x; finephrase would be read 41.9x; dclm-baseline would be read 41.3x; cosmopedia-v2 would be read 29.9x; stack-edu-python would be read 27x; finemath-3plus would be read 18x; finewiki-en would be read 18x; infiwebmath-3plus would be read 18x",
+      "evidence": [
+        "data/shards/cosmopedia-v2/manifest.json",
+        "data/shards/dclm-baseline/manifest.json",
+        "data/shards/everyday-conversations/manifest.json",
+        "data/shards/finemath-3plus/manifest.json",
+        "data/shards/finepdfs-edu/manifest.json",
+        "data/shards/finephrase/manifest.json",
+        "data/shards/fineweb-edu/manifest.json",
+        "data/shards/finewiki-en/manifest.json",
+        "data/shards/infiwebmath-3plus/manifest.json",
+        "data/shards/stack-edu-python/manifest.json"
+      ],
+      "observed": {
+        "budget_tokens": 59900000000,
+        "capped_sources": [
+          "cosmopedia-v2",
+          "dclm-baseline",
+          "everyday-conversations",
+          "finemath-3plus",
+          "finepdfs-edu",
+          "finephrase",
+          "fineweb-edu",
+          "finewiki-en",
+          "infiwebmath-3plus",
+          "stack-edu-python"
+        ],
+        "epochs": {
+          "cosmopedia-v2": 29.95,
+          "dclm-baseline": 41.288,
+          "everyday-conversations": 2968.484,
+          "finemath-3plus": 17.97,
+          "finepdfs-edu": 47.92,
+          "finephrase": 41.93,
+          "fineweb-edu": 46.876,
+          "finewiki-en": 17.97,
+          "infiwebmath-3plus": 17.97,
+          "stack-edu-python": 26.955
+        },
+        "max_epochs": 4.0,
+        "max_epochs_seen": 2968.484,
+        "most_repeated_source": "everyday-conversations"
+      },
+      "passed": false
+    },
+    {
+      "criterion": "mixture-skew",
+      "detail": "every source is over the 4-epoch limit, so the target shares were kept unchanged and the skew reads 0.0 by construction rather than by measurement",
+      "evidence": [
+        "data/shards/cosmopedia-v2/manifest.json",
+        "data/shards/dclm-baseline/manifest.json",
+        "data/shards/everyday-conversations/manifest.json",
+        "data/shards/finemath-3plus/manifest.json",
+        "data/shards/finepdfs-edu/manifest.json",
+        "data/shards/finephrase/manifest.json",
+        "data/shards/fineweb-edu/manifest.json",
+        "data/shards/finewiki-en/manifest.json",
+        "data/shards/infiwebmath-3plus/manifest.json",
+        "data/shards/stack-edu-python/manifest.json"
+      ],
+      "observed": {
+        "all_capped_fallback": true,
+        "effective_shares": {
+          "cosmopedia-v2": 0.05,
+          "dclm-baseline": 0.225,
+          "everyday-conversations": 0.02,
+          "finemath-3plus": 0.03,
+          "finepdfs-edu": 0.08,
+          "finephrase": 0.07,
+          "fineweb-edu": 0.375,
+          "finewiki-en": 0.03,
+          "infiwebmath-3plus": 0.03,
+          "stack-edu-python": 0.09
+        },
+        "l1_skew_pts": 0.0,
+        "max_epochs_seen": 2968.484,
+        "max_skew_pts": 5.0,
+        "target_shares": {
+          "cosmopedia-v2": 0.05,
+          "dclm-baseline": 0.225,
+          "everyday-conversations": 0.02,
+          "finemath-3plus": 0.03,
+          "finepdfs-edu": 0.08,
+          "finephrase": 0.07,
+          "fineweb-edu": 0.375,
+          "finewiki-en": 0.03,
+          "infiwebmath-3plus": 0.03,
+          "stack-edu-python": 0.09
+        }
+      },
+      "passed": false
+    },
+    {
+      "criterion": "manifest-provenance",
+      "detail": "cosmopedia-v2: no source_revision and no resolved commit, no filters block, no builder_git_sha; dclm-baseline: no source_revision and no resolved commit, no filters block, no builder_git_sha; everyday-conversations: no source_revision and no resolved commit, no filters block, no builder_git_sha; finemath-3plus: no source_revision and no resolved commit, no filters block, no builder_git_sha; finepdfs-edu: no source_revision and no resolved commit, no filters block, no builder_git_sha; finephrase: no source_revision and no resolved commit, no filters block, no builder_git_sha; fineweb-edu: no source_revision and no resolved commit, no filters block, no builder_git_sha; finewiki-en: no source_revision and no resolved commit, no filters block, no builder_git_sha; infiwebmath-3plus: no source_revision and no resolved commit, no filters block, no builder_git_sha; stack-edu-python: no source_revision and no resolved commit, no filters block, no builder_git_sha",
+      "evidence": [
+        "data/shards/cosmopedia-v2/manifest.json",
+        "data/shards/dclm-baseline/manifest.json",
+        "data/shards/everyday-conversations/manifest.json",
+        "data/shards/finemath-3plus/manifest.json",
+        "data/shards/finepdfs-edu/manifest.json",
+        "data/shards/finephrase/manifest.json",
+        "data/shards/fineweb-edu/manifest.json",
+        "data/shards/finewiki-en/manifest.json",
+        "data/shards/infiwebmath-3plus/manifest.json",
+        "data/shards/stack-edu-python/manifest.json"
+      ],
+      "observed": {
+        "cosmopedia-v2": {
+          "builder_git_sha": null,
+          "has_filters": false,
+          "license": null,
+          "readable": true,
+          "resolved_commit": null,
+          "source_revision": null
+        },
+        "dclm-baseline": {
+          "builder_git_sha": null,
+          "has_filters": false,
+          "license": null,
+          "readable": true,
+          "resolved_commit": null,
+          "source_revision": null
+        },
+        "everyday-conversations": {
+          "builder_git_sha": null,
+          "has_filters": false,
+          "license": null,
+          "readable": true,
+          "resolved_commit": null,
+          "source_revision": null
+        },
+        "finemath-3plus": {
+          "builder_git_sha": null,
+          "has_filters": false,
+          "license": null,
+          "readable": true,
+          "resolved_commit": null,
+          "source_revision": null
+        },
+        "finepdfs-edu": {
+          "builder_git_sha": null,
+          "has_filters": false,
+          "license": null,
+          "readable": true,
+          "resolved_commit": null,
+          "source_revision": null
+        },
+        "finephrase": {
+          "builder_git_sha": null,
+          "has_filters": false,
+          "license": null,
+          "readable": true,
+          "resolved_commit": null,
+          "source_revision": null
+        },
+        "fineweb-edu": {
+          "builder_git_sha": null,
+          "has_filters": false,
+          "license": null,
+          "readable": true,
+          "resolved_commit": null,
+          "source_revision": null
+        },
+        "finewiki-en": {
+          "builder_git_sha": null,
+          "has_filters": false,
+          "license": null,
+          "readable": true,
+          "resolved_commit": null,
+          "source_revision": null
+        },
+        "infiwebmath-3plus": {
+          "builder_git_sha": null,
+          "has_filters": false,
+          "license": null,
+          "readable": true,
+          "resolved_commit": null,
+          "source_revision": null
+        },
+        "stack-edu-python": {
+          "builder_git_sha": null,
+          "has_filters": false,
+          "license": null,
+          "readable": true,
+          "resolved_commit": null,
+          "source_revision": null
+        }
+      },
+      "passed": false
+    }
+  ],
+  "dropped_sources": [],
+  "gate": "phase7-corpus",
+  "passed": false,
+  "schema": 1,
+  "shards_root": "data/shards",
+  "sources": [
+    "cosmopedia-v2",
+    "dclm-baseline",
+    "everyday-conversations",
+    "finemath-3plus",
+    "finepdfs-edu",
+    "finephrase",
+    "fineweb-edu",
+    "finewiki-en",
+    "infiwebmath-3plus",
+    "stack-edu-python"
+  ],
+  "supply": "local",
+  "weights_source": "daedalus.dataprep.MIXTURE"
+}

@@ -1,0 +1,113 @@
+{
+  "item_count": 8,
+  "item_digest": "477a8a02a064d75fed151f6d7fabf961",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "nectar harbor kelp",
+      "extracted": "nutrients are the most common form of algae in the world. They are found in the water, and are found",
+      "id": "copy-control-0",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nnectar harbor kelp\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "nutrients are the most common form of algae in the world. They are found in the water, and are found",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "juniper violet umber",
+      "extracted": "- \"I have a red red red red red red red red red red red red red red red red red red",
+      "id": "copy-control-1",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\njuniper violet umber\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "- \"I have a red red red red red red red red red red red red red red red red red red",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "willow gable granite",
+      "extracted": "\"The stone is a stone, a stone, a stone, a stone, a stone, a stone, a",
+      "id": "copy-control-2",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nwillow gable granite\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 0.0,
+      "response": "\"The stone is a stone, a stone, a stone, a stone, a stone, a stone, a",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "granite esker dapple",
+      "extracted": "- \"I am a man of the same name, and I am a man of the same name, and I",
+      "id": "copy-control-3",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\ngranite esker dapple\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "- \"I am a man of the same name, and I am a man of the same name, and I",
+      "task": "copy-control"
+    },
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "xenon esker lichen",
+      "extracted": "xenon esker lichen",
+      "id": "copy-control-4",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nxenon esker lichen\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 1.0,
+      "response": "xenon esker lichen\nThe phrase is:\nxenon esker lichen\nThe phrase is:",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "amber gable prairie",
+      "extracted": "- \"a tree of the tree of the tree of the tree of the tree of the tree of the tree of",
+      "id": "copy-control-5",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\namber gable prairie\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "- \"a tree of the tree of the tree of the tree of the tree of the tree of the tree of",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "hollow lantern xenon",
+      "extracted": "hump-doo-doo-doo-doo-doo-doo-doo",
+      "id": "copy-control-6",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nhollow lantern xenon\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 0.0,
+      "response": "hump-doo-doo-doo-doo-doo-doo-doo",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "indigo gable fennel",
+      "extracted": "a. the person who is in the same place as the person who is in the same place.",
+      "id": "copy-control-7",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nindigo gable fennel\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "a. the person who is in the same place as the person who is in the same place.\nb.",
+      "task": "copy-control"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-copy-control",
+  "schema": 1
+}

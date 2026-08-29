@@ -1,0 +1,28 @@
+{
+  "candidates": [
+    {
+      "accepted": false,
+      "name": "qat-recovery-lr0.0002",
+      "penalty_reduction_frac": 1.0185589226348364,
+      "q4_penalty_pct": -0.10279176474091711
+    },
+    {
+      "accepted": false,
+      "name": "qat-recovery-lr0.0005",
+      "penalty_reduction_frac": 1.0433635850737635,
+      "q4_penalty_pct": -0.24017662678641472
+    },
+    {
+      "accepted": false,
+      "name": "qat-recovery-lr0.001",
+      "penalty_reduction_frac": 1.0673318941649634,
+      "q4_penalty_pct": -0.3729292028823772
+    }
+  ],
+  "escalation": {
+    "escalate": false,
+    "reason": "no 100M probe passed both the improvement and retention gates; reporting the negative result rather than escalating"
+  },
+  "winner": null,
+  "winner_penalty_pct": null
+}

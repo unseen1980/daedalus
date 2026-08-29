@@ -1,0 +1,14 @@
+{
+  "item_count": 1,
+  "item_digest": "f8cb850d571cbcc2875a54c0ab7015e1",
+  "items": [
+    {
+      "bpb": 1.0946384807981915,
+      "id": "fineweb-edu",
+      "tokens": 53588955
+    }
+  ],
+  "kind": "bpb",
+  "name": "arch-stageb-a6-kv4-bpb",
+  "schema": 1
+}

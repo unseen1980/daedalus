@@ -14,6 +14,7 @@ on a box without llama.cpp built.
 """
 import ctypes
 import glob
+import json
 import math
 import os
 
@@ -63,8 +64,25 @@ def test_q4_0_matches_scalar_c_reference():
 # ------------------------------------------------- real llama.cpp check ---
 
 def _find_libggml():
-    for pat in ("/tmp/llama.cpp/build/bin/libggml-base.so",
+    """The real `libggml-base.so`, wherever this box built llama.cpp.
+
+    These four tests are the ones that certify our Q4_0 grid *is*
+    llama.cpp's -- the single claim QAT rests on. They skip when the library
+    is absent, which is correct on a laptop and dangerous on a box that has
+    llama.cpp and simply keeps it somewhere the list did not name: the suite
+    then reports green having never checked the grid at all. That is what
+    happened here. llama.cpp lives at `/opt/llama.cpp` on the Vast image
+    (`gguf_eval.py` and the approved wrapper both point there), which no
+    pattern matched, so every grid test silently skipped through Phase 2 and
+    into the Phase 3 fix that changed the quantizer.
+    """
+    override = os.environ.get("DAEDALUS_LIBGGML")
+    if override and os.path.exists(override):
+        return override
+    for pat in ("/opt/llama.cpp/build/bin/libggml-base.so",
+                "/tmp/llama.cpp/build/bin/libggml-base.so",
                 "vendor/llama.cpp/build/bin/libggml-base.so",
+                "/opt/llama.cpp/build/**/libggml-base.so",
                 "/tmp/llama.cpp/build/**/libggml-base.so"):
         hits = glob.glob(pat, recursive=True)
         if hits:
@@ -328,6 +346,101 @@ def test_quantization_error_reads_the_master_weight_not_the_quantized_view():
     assert on == pytest.approx(off, rel=1e-6)
 
 
+def test_a_near_dead_block_quantizes_finitely():
+    """The released checkpoint's own failure, reduced to one block.
+
+    `_safe_reciprocal` guards `d == 0`, which is where a *fully* dead channel
+    lands. A channel on its way there passes through a window where the block
+    absmax is denormal-small but not zero: `d = absmax / -8` is representable,
+    `1/d` is not, and it overflows fp32 to inf. Every element of the block that
+    is exactly zero then computes `0 * inf = NaN`, `floor(NaN + 8.5)` stays
+    NaN, and the whole tensor is poisoned.
+
+    Measured on `/root/daedalus/final/hero/checkpoint.pt`: 1,418 NaNs in
+    `layers.1.feed_forward.w1`, 1,674 in `layers.1.feed_forward.w3`, 3 in
+    `layers.13.feed_forward.w1` -- with every stored weight finite. A recovery
+    run on that checkpoint produced a NaN loss on its first step.
+    """
+    block = torch.zeros(1, qat.QK4_0)
+    block[0, 0] = 1e-40          # denormal: 1/(1e-40/8) overflows fp32
+    out = qat.q4_0_qdq(block)
+    assert torch.isfinite(out).all(), "a near-dead block poisoned the tensor"
+    # It is dead, so it quantizes to zero -- the same answer llama.cpp reaches
+    # under flush-to-zero, where `d` denormal makes `d ? 1/d : 0` take the
+    # zero branch.
+    assert torch.equal(out, torch.zeros_like(out))
+
+
+def test_the_near_dead_guard_does_not_disturb_ordinary_blocks():
+    """The bit-exactness certified against real llama-quantize output is the
+    reason this fix has to be surgical: it may only change blocks whose
+    reciprocal was not representable in the first place."""
+    torch.manual_seed(3)
+    w = (torch.randn(16, qat.QK4_0 * 4) * 0.02).float()
+    reference = w.clone()
+    out = qat.q4_0_qdq(w)
+    assert torch.isfinite(out).all()
+    # Recomputing by hand with the unguarded reciprocal must agree exactly.
+    x = reference.reshape(16, -1, qat.QK4_0)
+    signed_absmax = torch.gather(x, -1, x.abs().argmax(dim=-1, keepdim=True))
+    d = signed_absmax / -8.0
+    expected = (torch.clamp(torch.floor(x * (1.0 / d) + 8.5), 0, 15) - 8.0) \
+        * d.half().float()
+    assert torch.equal(out, expected.reshape(reference.shape))
+
+
+def test_a_fully_dead_block_still_quantizes_to_zero():
+    """The case the original guard was written for, kept under test."""
+    out = qat.q4_0_qdq(torch.zeros(1, qat.QK4_0))
+    assert torch.isfinite(out).all()
+    assert torch.equal(out, torch.zeros_like(out))
+
+
+def test_a_near_dead_block_does_not_poison_the_gradient():
+    """The reason the guard masks before dividing rather than after: a
+    `where` whose unselected branch is inf multiplies inf by a zero mask in
+    backward, and `clip_grad_norm_` then scales every parameter in the model
+    by a NaN total norm."""
+    w = torch.zeros(2, qat.QK4_0, requires_grad=True)
+    with torch.no_grad():
+        w[0, 0] = 1e-40
+        w[1, 0] = 0.02
+    fake = qat.FakeQuant("q4_0")
+    fake(w).sum().backward()
+    assert torch.isfinite(w.grad).all()
+
+
+def test_quantization_error_counts_tensors_and_elements_separately():
+    """`qat_tensors` used to hold the *element* count under a name that says
+    tensors. The two answer different questions: a coverage regression -- a
+    module class the plan stopped matching, or a tie that collapsed two
+    entries into one -- moves the tensor count while barely touching the
+    element count."""
+    m = _tiny_model()
+    err = qat.quantization_error(m)
+    planned = qat.plan_qat(m)
+    assert err["qat_tensors"] == float(len(planned))
+    assert err["qat_elements"] == float(
+        sum(qat.master_weight(mod).numel() for _, mod, _ in planned))
+    # The distinction is only worth logging if the numbers actually differ.
+    assert err["qat_tensors"] < err["qat_elements"]
+
+
+def test_the_tensor_count_matches_what_enabling_qat_registers():
+    """The logged count is evidence of coverage, so it must equal the number
+    of modules that really ended up on the grid."""
+    m = _tiny_model()
+    applied = qat.enable_qat(m)
+    assert qat.quantization_error(m)["qat_tensors"] == float(len(applied))
+
+
+def test_grid_id_names_both_lattices():
+    """Logged beside every quantized number so a Q4_0-forward figure can never
+    be read as an fp32 one."""
+    assert qat.grid_id() == "q4_0/q8_0"
+    assert qat.grid_id("q4_0", None) == "q4_0"
+
+
 # ------------------------------------------------------------ schedule ---
 
 @pytest.mark.parametrize("progress,frac,expected", [
@@ -438,6 +551,133 @@ def test_trainer_leaves_qat_off_by_default(tmp_path):
         t.train_step()
     assert not t._qat_on
     assert not qat.is_qat_active(t.model)
+
+
+def _recovery_args(tmp_path, **overrides):
+    """Phase 3's shape: QAT on from the very first step, not in a tail."""
+    import train as train_mod
+    kwargs = dict(
+        run_name="recovery", config="tiny", max_steps=4, micro_batch=2,
+        seq_start=16, seq_end=16, tok_start=32, tok_end=64, compile=False,
+        device="cpu", wandb_enabled=False, qat_frac=1.0,
+        metrics_every_steps=1, log_every_steps=10 ** 9,
+        run_dir=str(tmp_path / "run"), ckpt_every_sec=1e9, push_every_sec=1e9,
+    )
+    kwargs.update(overrides)
+    return train_mod.TrainArgs(**kwargs)
+
+
+def test_qat_frac_one_puts_the_first_step_on_the_grid(tmp_path):
+    """Phase 3 recovers a *finished* model, so there is no tail to wait for:
+    `qat_frac=1.0` has to mean "quantized from step 0". Training the opening
+    steps in fp32 would spend part of a small budget moving weights the grid
+    then has to move back."""
+    import train as train_mod
+    t = train_mod.Trainer(_recovery_args(tmp_path))
+    assert not t._qat_on
+    assert t.maybe_enable_qat() is True
+    assert t._qat_on and qat.is_qat_active(t.model)
+    assert t.step == 0, "QAT engaged only after the first update"
+    assert math.isfinite(t.train_step()["loss"])
+
+
+def test_metrics_say_which_forward_produced_val_bpb(tmp_path):
+    """A recovery run's val_bpb is measured *through* the Q4_0 lattice, and
+    nothing in the number says so. Without the identifier a reader compares it
+    against the pretraining run's fp32 figure and reads the lattice cost as a
+    regression."""
+    import train as train_mod
+    t = train_mod.Trainer(_recovery_args(tmp_path))
+    t._validate = lambda: {"val_bpb": 1.234, "per_source_val_bpb": {}}
+    t.maybe_enable_qat()
+    t.log_step(t.train_step(), force=True)
+
+    row = json.loads((tmp_path / "run" / "metrics.jsonl").read_text()
+                     .strip().splitlines()[-1])
+    assert row["val_bpb"] == 1.234
+    assert row["val_forward"] == "quantized"
+    assert row["val_grid"] == qat.grid_id()
+    assert row["qat_active"] == 1
+    assert row["qat_tensors"] == float(len(qat.plan_qat(t.model)))
+    assert row["qat_rel_rmse"] > 0
+
+
+def test_a_float_run_labels_its_validation_float(tmp_path):
+    import train as train_mod
+    t = train_mod.Trainer(_recovery_args(tmp_path, qat_frac=0.0))
+    t._validate = lambda: {"val_bpb": 1.234, "per_source_val_bpb": {}}
+    t.maybe_enable_qat()
+    t.log_step(t.train_step(), force=True)
+
+    row = json.loads((tmp_path / "run" / "metrics.jsonl").read_text()
+                     .strip().splitlines()[-1])
+    assert row["val_forward"] == "float"
+    assert row["val_grid"] is None
+    assert "qat_rel_rmse" not in row
+
+
+def test_no_validation_means_no_validation_identifier(tmp_path):
+    """An absent val_bpb must not carry a forward label, or a reader would
+    take `val_forward: quantized` with `val_bpb: null` for a failed
+    measurement on the grid rather than for validation being switched off."""
+    import train as train_mod
+    t = train_mod.Trainer(_recovery_args(tmp_path))
+    t.maybe_enable_qat()
+    t.log_step(t.train_step(), force=True)
+
+    row = json.loads((tmp_path / "run" / "metrics.jsonl").read_text()
+                     .strip().splitlines()[-1])
+    assert row["val_bpb"] is None
+    assert "val_forward" not in row and "val_grid" not in row
+
+
+def test_a_checkpoint_written_under_qat_holds_masters_that_reproduce_the_grid(
+        tmp_path):
+    """The end-to-end claim Phase 3 rests on: what a recovery run *ships* is
+    the lattice it *trained* against.
+
+    The checkpoint stores float master weights, not the quantized view -- so
+    re-quantizing those masters must land exactly where the fake-quant forward
+    was already sitting. If it did not, QAT would be optimizing one lattice
+    and `llama-quantize` would snap the export to another.
+    """
+    import train as train_mod
+    t = train_mod.Trainer(_recovery_args(tmp_path, max_steps=2))
+    t.maybe_enable_qat()
+    t.train_step()
+    t.train_step()
+
+    # What the forward pass is currently using, per parametrized module, and
+    # the grid each one is on. The kind comes from `plan_qat` rather than from
+    # a name test rewritten here: a second copy of that rule could disagree
+    # with the real one and the test would still pass.
+    kinds = {name: kind for name, _, kind in qat.plan_qat(t.model)}
+    quantized_view = {
+        name: mod.weight.detach().clone()
+        for name, mod in t.model.named_modules()
+        if parametrize.is_parametrized(mod, "weight")
+    }
+    assert quantized_view, "no module ended up parametrized"
+    assert set(quantized_view) == set(kinds)
+
+    ckpt = tmp_path / "recovery.pt"
+    train_mod.save_checkpoint(str(ckpt), t.model, t.muon, t.adamw, t.step,
+                              t.tokens_seen, t.cfg)
+    payload = torch.load(str(ckpt), map_location="cpu", weights_only=False)
+    assert not any("parametrizations" in k for k in payload["model"])
+
+    # Reload into a plain model, exactly as export.py does.
+    plain = train_mod.Daedalus(t.cfg)
+    plain.load_state_dict(payload["model"])
+    reloaded = dict(plain.named_modules())
+
+    for name, on_the_grid in quantized_view.items():
+        master = reloaded[name].weight.detach()
+        # The master is *not* the quantized view: it kept full precision.
+        assert not torch.equal(master, on_the_grid)
+        # ... but it re-quantizes onto exactly the same lattice, bit for bit.
+        requantized = qat._QDQ[kinds[name]](master)
+        assert torch.equal(requantized, on_the_grid), name
 
 
 def test_qat_frac_reaches_train_args_from_the_cli():

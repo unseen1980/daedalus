@@ -38,6 +38,7 @@ from train import (
     grad_accum_steps,
     load_checkpoint,
     parse_args,
+    parse_mixture_weights,
     ramp_progress,
     resolve_wandb_run_id,
     save_checkpoint,
@@ -713,6 +714,133 @@ def test_mixture_batch_source_rebuilds_on_seq_len_change(tmp_path):
     assert x16.shape == (2, 16)
 
 
+# ------------------------------------------------------- explicit mixtures ---
+# Added for phase 7. Comparing mixtures under equal compute needs the mixture to
+# be an argument of the run; every other way of varying it also varies something
+# that is supposed to be held. These pin the two ways that goes wrong: a set of
+# shares that is quietly renormalized into a mixture nobody asked for, and a set
+# handed to a batch source that cannot use it.
+
+def test_mixture_weights_are_parsed_into_shares():
+    assert parse_mixture_weights(
+        ["fineweb-edu=0.6", "dclm-baseline=0.3", "stack-edu-python=0.1"]
+    ) == pytest.approx({"fineweb-edu": 0.6, "dclm-baseline": 0.3,
+                        "stack-edu-python": 0.1})
+
+
+def test_no_mixture_weights_stays_none_so_the_blueprint_is_unchanged():
+    """None, not the blueprint's shares: every run before phase 7 resolves its
+    mixture exactly where it did, including the renormalization over whatever
+    sources are actually on disk."""
+    assert parse_mixture_weights([]) is None
+    assert parse_mixture_weights(None) is None
+
+
+def test_shares_that_do_not_sum_to_one_are_refused():
+    """The one error renormalization hides. A dropped source leaves a set that
+    sums to 0.85 and is rescaled into a mixture nobody chose, while the arm's
+    artifact records the weights it asked for."""
+    with pytest.raises(ValueError, match="sum to 0.850000"):
+        parse_mixture_weights(["fineweb-edu=0.6", "dclm-baseline=0.25"])
+
+
+def test_a_zero_share_is_allowed_so_a_specialist_can_share_one_data_root():
+    """A single-source arm is a weight of 1.0 and the rest at 0, not a different
+    --data-dir; that keeps every arm on one root, one holdout and one set of
+    shards."""
+    weights = parse_mixture_weights(
+        ["fineweb-edu=1.0", "dclm-baseline=0", "stack-edu-python=0"])
+    assert weights == pytest.approx({"fineweb-edu": 1.0, "dclm-baseline": 0.0,
+                                     "stack-edu-python": 0.0})
+
+
+@pytest.mark.parametrize("pairs", [
+    ["fineweb-edu"],                                   # no '='
+    ["=0.5", "fineweb-edu=0.5"],                       # no name
+    ["fineweb-edu=x", "dclm-baseline=1"],              # not a number
+    ["fineweb-edu=-0.5", "dclm-baseline=1.5"],         # negative share
+    ["fineweb-edu=0.5", "fineweb-edu=0.5"],            # named twice
+])
+def test_malformed_mixture_weights_are_refused(pairs):
+    with pytest.raises(ValueError):
+        parse_mixture_weights(pairs)
+
+
+def test_parse_args_threads_mixture_weights_onto_train_args():
+    args = parse_args(["--data-dir", "d", "--mixture-weight", "fineweb-edu=0.75",
+                       "--mixture-weight", "stack-edu-python=0.25"])
+    assert args.mixture_weights == pytest.approx({"fineweb-edu": 0.75,
+                                                  "stack-edu-python": 0.25})
+
+
+def test_trainer_samples_the_explicit_mixture_rather_than_the_blueprint(tmp_path):
+    data_root = tmp_path / "data"
+    _write_source(data_root, "fineweb-edu", n_tokens=500, shard_tokens=200)
+    _write_source(data_root, "stack-edu-python", n_tokens=500, shard_tokens=200)
+    args = _tiny_args(tmp_path / "run", max_steps=2, data_dir=str(data_root),
+                      mixture_weights={"fineweb-edu": 0.25,
+                                       "stack-edu-python": 0.75})
+    trainer = Trainer(args)
+    probs = dict(zip(trainer.batch_source.names, trainer.batch_source.probs))
+    assert probs == pytest.approx({"fineweb-edu": 0.25, "stack-edu-python": 0.75})
+
+
+def test_mixture_weights_on_a_single_source_dir_are_refused_not_ignored(tmp_path):
+    """A no-op here is a phase-7 arm that reports itself as one mixture, trains
+    on whatever the single directory held, and produces a perfectly finite BPB
+    for a mixture it never sampled."""
+    single = tmp_path / "one-source"
+    _write_source(tmp_path, "one-source", n_tokens=500, shard_tokens=200)
+    args = _tiny_args(tmp_path / "run", max_steps=2, data_dir=str(single),
+                      mixture_weights={"fineweb-edu": 1.0})
+    with pytest.raises(ValueError, match="not a mixture root"):
+        Trainer(args)
+
+
+def test_mixture_weights_without_a_data_dir_are_refused(tmp_path):
+    args = _tiny_args(tmp_path / "run", max_steps=2, data_dir=None,
+                      mixture_weights={"fineweb-edu": 1.0})
+    with pytest.raises(ValueError, match="not a mixture root"):
+        Trainer(args)
+
+
+def test_trainer_refuses_shards_packed_under_another_vocabulary(tmp_path):
+    """`tiny` has a 512-row embedding. Shards packed under a larger vocabulary
+    would index into it only where the ids happen to be small enough, and the
+    run reports a loss either way -- so the refusal has to happen before the
+    sampler, where the answer can still name a directory."""
+    data_dir = _write_source(tmp_path, "packed-elsewhere", n_tokens=500,
+                             shard_tokens=200)
+    manifest_path = os.path.join(data_dir, "manifest.json")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    manifest["tokenizer"] = {"name": "fake/tok-32768", "vocab_size": 32768,
+                             "probe_digest": "0" * 32}
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f)
+
+    args = _tiny_args(tmp_path / "run", max_steps=2, data_dir=data_dir)
+    with pytest.raises(ValueError, match="shard vocabulary mismatch"):
+        Trainer(args)
+
+
+def test_trainer_reads_a_tree_that_records_its_own_vocabulary(tmp_path):
+    """The other half: a rebuilt tree that says what it was packed under, and
+    agrees, loads exactly as an unfingerprinted one does."""
+    data_dir = _write_source(tmp_path, "rebuilt", n_tokens=500, shard_tokens=200)
+    manifest_path = os.path.join(data_dir, "manifest.json")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    manifest["tokenizer"] = {"name": "fake/tok-512", "vocab_size": 512,
+                             "probe_digest": "0" * 32}
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f)
+
+    trainer = Trainer(_tiny_args(tmp_path / "run", max_steps=2,
+                                 data_dir=data_dir))
+    assert trainer.cfg.vocab_size == 512
+
+
 def test_trainer_auto_detects_mixture_root(tmp_path):
     """Trainer.data_dir with no manifest.json directly inside it, but
     subdirectories that each have one, is treated as a mixture root rather
@@ -1148,7 +1276,7 @@ def _mixture_val_shards(tmp_path, names=("source-a", "source-b"), n_tokens=4096)
 def test_val_bpb_reads_a_mixture_holdout_root(tmp_path, monkeypatch, capsys):
     """`hero.py` carves a per-source holdout and passes the *root* as
     --val-dir. `evaluate_bpb` opens `<dir>/manifest.json`, which a mixture root
-    does not have, so it raised FileNotFoundError -- and `_val_bpb` swallows
+    does not have, so it raised FileNotFoundError -- and `_validate` swallows
     every exception by design. The four-day run would have logged
     `val_bpb: null` at every interval behind a WARNING, with no val curve at
     all and nothing for the watchdog to act on."""
@@ -1175,6 +1303,79 @@ def test_val_bpb_reads_a_mixture_holdout_root(tmp_path, monkeypatch, capsys):
     for r in records:
         assert r["val_bpb"] is not None and math.isfinite(r["val_bpb"])
         assert r["val_bpb"] > 0
+
+
+def test_metrics_carry_per_source_val_bpb_not_only_the_blend(tmp_path, monkeypatch):
+    """Phase 8 gates a continued-pretraining arm on code BPB and general replay
+    BPB read *independently* -- improve one, hold the other -- and the blend is
+    the one number that cannot answer that: a code gain and a replay regression
+    move it in opposite directions and it reports their sum.
+
+    `evaluate_bpb_mixture` has always done a full holdout pass per source and
+    returned both; the call site took `["val_bpb"]` and dropped the rest, so the
+    per-source cost was paid at every interval of every run and the figures were
+    never written down. This asserts they reach `metrics.jsonl`, keyed by source,
+    beside the blend rather than instead of it."""
+    val_dir = _mixture_val_shards(tmp_path, names=("code-py", "general-replay"))
+    args = _tiny_args(tmp_path / "run", max_steps=1, seq_len=16, micro_batch=2)
+    args.val_dir = val_dir
+    args.val_every_steps = 1
+    args.val_batches = 1
+    args.val_batch_size = 2
+    args.seq_end = 16
+    args.metrics_every_steps = 1
+
+    t = Trainer(args)
+    t._tokenizer = _ByteTokenizer()
+    monkeypatch.setattr("daedalus.data.get_tokenizer", lambda *a, **k: _ByteTokenizer())
+    t.batch_source = FixedBatchSource(
+        [torch.randint(0, t.cfg.vocab_size, (2, 16))])
+    t.fit()
+
+    row = json.loads((tmp_path / "run" / "metrics.jsonl").read_text()
+                     .strip().splitlines()[-1])
+    per_source = row["val_bpb_per_source"]
+    assert set(per_source) == {"code-py", "general-replay"}
+    for name, bpb in per_source.items():
+        assert isinstance(bpb, float) and math.isfinite(bpb) and bpb > 0, name
+    # Beside the blend, not instead of it: the aggregate is what the watchdog
+    # and every existing reader of this file still key on.
+    assert row["val_bpb"] is not None and math.isfinite(row["val_bpb"])
+    # The blend is a convex combination of the parts, so it cannot sit outside
+    # their range -- the check that the two numbers describe one measurement.
+    assert min(per_source.values()) - 1e-9 <= row["val_bpb"] <= max(
+        per_source.values()) + 1e-9
+
+
+def test_a_single_directory_holdout_carries_no_per_source_block(tmp_path, monkeypatch):
+    """One source is not a mixture of one. `evaluate_bpb_mixture` returns `{}`
+    for a `--val-dir` with its own manifest.json, and an empty block in the
+    record would read as a mixture whose sources all failed to score."""
+    val_dir = tmp_path / "flat"
+    writer = ShardWriter(str(val_dir), shard_tokens=4096)
+    writer.write(list(torch.randint(0, PRESETS["tiny"].vocab_size, (4096,)).tolist()))
+    writer.close()
+    writer.write_manifest({"eos_id": 0})
+
+    args = _tiny_args(tmp_path / "run", max_steps=1, seq_len=16, micro_batch=2)
+    args.val_dir = str(val_dir)
+    args.val_every_steps = 1
+    args.val_batches = 1
+    args.val_batch_size = 2
+    args.seq_end = 16
+    args.metrics_every_steps = 1
+
+    t = Trainer(args)
+    t._tokenizer = _ByteTokenizer()
+    monkeypatch.setattr("daedalus.data.get_tokenizer", lambda *a, **k: _ByteTokenizer())
+    t.batch_source = FixedBatchSource(
+        [torch.randint(0, t.cfg.vocab_size, (2, 16))])
+    t.fit()
+
+    row = json.loads((tmp_path / "run" / "metrics.jsonl").read_text()
+                     .strip().splitlines()[-1])
+    assert row["val_bpb"] is not None and math.isfinite(row["val_bpb"])
+    assert "val_bpb_per_source" not in row
 
 
 def test_val_weights_come_from_the_sampler_not_the_holdout(tmp_path):
@@ -2848,3 +3049,206 @@ def test_the_push_carries_its_stall_guard_and_cannot_wait_on_a_prompt(
     # The push inherits the rest of the environment -- dropping it would strip
     # PATH and the credential helper's own configuration.
     assert push["kwargs"]["env"].get("PATH") == os.environ.get("PATH")
+
+
+# --------------------------------------------------------------------------
+# Phase 3 recovery knobs: schedule and memory flags on the CLI, and the
+# durable record a finiteness gate is decided from.
+# --------------------------------------------------------------------------
+
+def test_schedule_flags_default_to_the_shipped_values():
+    """Absent flags must not change any run that is already scheduled."""
+    a = train_module.parse_args(["--run-name", "x"])
+    assert a.warmup_steps == 300
+    assert a.decay_frac == 0.45
+    assert a.loss_chunk_size is None
+    assert a.gradient_checkpointing is None
+
+
+def test_schedule_flags_reach_train_args_from_the_cli():
+    a = train_module.parse_args([
+        "--run-name", "x", "--warmup-steps", "40", "--decay-frac", "0.9",
+        "--loss-chunk-size", "256", "--gradient-checkpointing",
+    ])
+    assert a.warmup_steps == 40
+    assert a.decay_frac == 0.9
+    assert a.loss_chunk_size == 256
+    assert a.gradient_checkpointing is True
+
+
+def test_gradient_checkpointing_can_be_forced_off_from_the_cli():
+    """`--no-...` must be distinguishable from "unset", or a config that turns
+    checkpointing on could never be overridden from the command line."""
+    a = train_module.parse_args(["--run-name", "x", "--no-gradient-checkpointing"])
+    assert a.gradient_checkpointing is False
+
+
+def test_warmup_and_decay_flags_actually_move_the_schedule(tmp_path):
+    """The flags exist to reshape a short run's LR curve, so assert on the
+    curve rather than on the field they were stored in."""
+    args = _tiny_args(tmp_path / "run", max_steps=100, warmup_steps=10,
+                      decay_frac=0.5)
+    t = Trainer(args)
+    # Warmup is 10 steps, not 300: by step 10 the multiplier is at its ceiling
+    # instead of the 3% a 300-step warmup would still be at.
+    t.step = 10
+    assert t._lr_multiplier(100) == pytest.approx(1.0)
+    # Decay starts halfway, and the milestone tracks it.
+    t.step = 50
+    assert t._lr_multiplier(100) == pytest.approx(1.0)
+    t.step = 75
+    assert t._lr_multiplier(100) == pytest.approx(0.5)
+    assert t.milestone_step == 50
+
+
+def test_config_overrides_do_not_mutate_the_shared_preset(tmp_path):
+    """`PRESETS` holds one instance per name. Mutating it would silently
+    reconfigure every later Trainer, eval and export in the process."""
+    before = (PRESETS["tiny"].loss_chunk_size,
+              PRESETS["tiny"].gradient_checkpointing)
+    args = _tiny_args(tmp_path / "run", max_steps=1, loss_chunk_size=64,
+                      gradient_checkpointing=True)
+    t = Trainer(args)
+    assert t.cfg.loss_chunk_size == 64
+    assert t.cfg.gradient_checkpointing is True
+    assert (PRESETS["tiny"].loss_chunk_size,
+            PRESETS["tiny"].gradient_checkpointing) == before
+    assert t.cfg is not PRESETS["tiny"]
+
+
+def test_an_unoverridden_run_still_gets_the_preset_object(tmp_path):
+    args = _tiny_args(tmp_path / "run", max_steps=1)
+    assert Trainer(args).cfg is PRESETS["tiny"]
+
+
+def test_a_negative_loss_chunk_size_is_refused_rather_than_silently_odd(tmp_path):
+    args = _tiny_args(tmp_path / "run", max_steps=1, loss_chunk_size=-1)
+    with pytest.raises(ValueError, match="loss-chunk-size"):
+        Trainer(args)
+
+
+def test_gradient_checkpointing_still_trains_the_same_model(tmp_path):
+    """The flag is a memory trade, not a model change: same seed, same data,
+    same loss. If recomputation drifted from the stored activations the
+    recovery run would be optimizing something other than what it exports."""
+    plain = Trainer(_tiny_args(tmp_path / "a", max_steps=2))
+    plain.fit()
+    ckpt = Trainer(_tiny_args(tmp_path / "b", max_steps=2,
+                              gradient_checkpointing=True))
+    ckpt.fit()
+    a = [json.loads(l)["loss"] for l in
+         (tmp_path / "a" / "metrics.jsonl").read_text().strip().splitlines()]
+    b = [json.loads(l)["loss"] for l in
+         (tmp_path / "b" / "metrics.jsonl").read_text().strip().splitlines()]
+    assert a == pytest.approx(b, rel=1e-5)
+
+
+def test_metrics_carry_the_skipped_update_count_every_row(tmp_path):
+    """The finiteness gate is decided from metrics.jsonl, so the count has to
+    be in every row -- not only the rows where a skip happened."""
+    args = _tiny_args(tmp_path / "run", max_steps=3)
+    Trainer(args).fit()
+    rows = [json.loads(l) for l in
+            (tmp_path / "run" / "metrics.jsonl").read_text().strip().splitlines()]
+    assert [r["skipped_updates"] for r in rows] == [0, 0, 0]
+
+
+def test_a_non_finite_loss_increments_the_recorded_skip_count(tmp_path):
+    """Previously a skip left only a WARNING on stdout and a `loss: nan` row
+    indistinguishable from an ordinary interval row."""
+    args = _tiny_args(tmp_path / "run", max_steps=2)
+    t = Trainer(args)
+    real_net = t.net
+
+    def poisoned(x, targets=None, **kw):
+        return None, torch.tensor(float("nan")), None
+
+    t.net = poisoned
+    stats = t.train_step()
+    assert stats["skipped"] is True
+    assert t._skipped_updates == 1
+    # ... and the step did not advance, so the budget is unchanged.
+    assert t.step == 0
+
+    t.net = real_net
+    t.log_step(stats, force=True)
+    row = json.loads((tmp_path / "run" / "metrics.jsonl").read_text()
+                     .strip().splitlines()[-1])
+    assert row["skipped_updates"] == 1
+
+
+def test_a_run_that_skips_every_step_stops_instead_of_spinning(tmp_path):
+    """`train_step` does not advance step or tokens_seen when it skips, and
+    both of fit()'s break conditions are thresholds on those two. A run whose
+    every step is non-finite therefore loops forever.
+
+    Measured on the first Phase 3 smoke run: 2,794 skipped updates and 0.18
+    GPU-hours with `--max-steps 3` set, killed by hand.
+    """
+    args = _tiny_args(tmp_path / "run", max_steps=3, max_consecutive_skips=5)
+    t = Trainer(args)
+    t.net = lambda x, targets=None, **kw: (None, torch.tensor(float("nan")), None)
+
+    with pytest.raises(train_module.NonFiniteStall, match="cannot"):
+        t.fit()
+
+    assert t.step == 0, "a skipped step must not be billed against the budget"
+    assert t._skipped_updates == 5
+
+    # The evidence for why it stopped outlives the exception: the durable
+    # record shows the count climbing rather than a single ambiguous nan row.
+    # It stops one short of the in-memory total because every skip leaves
+    # `step` at 0, so log_step's same-step dedup suppresses the forced final
+    # row -- the run never reached a *new* step to write.
+    rows = [json.loads(l) for l in
+            (tmp_path / "run" / "metrics.jsonl").read_text().strip().splitlines()]
+    assert [r["skipped_updates"] for r in rows] == [1, 2, 3, 4]
+    assert all(math.isnan(r["loss"]) for r in rows)
+
+
+def test_an_occasional_skip_does_not_trip_the_stall_guard(tmp_path):
+    """The guard counts *consecutive* skips: a transient bad batch must not
+    accumulate toward it across an otherwise healthy run."""
+    args = _tiny_args(tmp_path / "run", max_steps=6, max_consecutive_skips=3)
+    t = Trainer(args)
+    real_net = t.net
+    calls = {"n": 0}
+
+    def flaky(x, targets=None, **kw):
+        calls["n"] += 1
+        if calls["n"] % 2 == 1:            # every other step is poisoned
+            return None, torch.tensor(float("nan")), None
+        return real_net(x, targets=targets, **kw)
+
+    t.net = flaky
+    t.fit()                                 # must not raise
+
+    assert t.step == 6
+    assert t._skipped_updates == 6
+    assert t._consecutive_skips == 0
+
+
+def test_the_skip_count_survives_a_crash_resume(tmp_path):
+    """A resumed run that reset the count to zero would report a clean gate
+    for a run that had already skipped updates."""
+    args = _tiny_args(tmp_path / "run", max_steps=1)
+    first = Trainer(args)
+    first._skipped_updates = 3
+    first.fit()
+
+    second = Trainer(_tiny_args(tmp_path / "run", max_steps=2,
+                                resume=str(tmp_path / "run" / "checkpoint.pt")))
+    assert second._skipped_updates == 3
+
+
+def test_a_fresh_init_from_run_starts_its_skip_count_at_zero(tmp_path):
+    """`--init-from` is a new run. Inheriting the donor's skip count would
+    charge a recovery probe for the pretraining run's history."""
+    args = _tiny_args(tmp_path / "donor", max_steps=1)
+    donor = Trainer(args)
+    donor._skipped_updates = 5
+    donor.fit()
+
+    probe = Trainer(_tiny_args(tmp_path / "probe", max_steps=1,
+                               init_from=str(tmp_path / "donor" / "checkpoint.pt")))
+    assert probe._skipped_updates == 0

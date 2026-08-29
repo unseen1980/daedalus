@@ -1,0 +1,14 @@
+{
+  "item_count": 1,
+  "item_digest": "7c00aa2e4810b56ace1e164753b7ccd9",
+  "items": [
+    {
+      "bpb": 1.358170203266988,
+      "id": "dclm-baseline",
+      "tokens": 66572481
+    }
+  ],
+  "kind": "bpb",
+  "name": "mix-probe-only-dclm-baseline-bpb",
+  "schema": 1
+}

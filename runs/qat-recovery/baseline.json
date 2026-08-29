@@ -1,0 +1,26 @@
+{
+  "five_task_mean": 47.37440591831263,
+  "perplexity_fp16": 6.613500000000001,
+  "perplexity_q4_0": 6.9798,
+  "q4_penalty_pct": 5.53867090043092,
+  "retrieval": {
+    "retrieval-copy-control:d0": 1.0,
+    "retrieval-mqar:d1024": 0.91,
+    "retrieval-mqar:d2048": 0.86,
+    "retrieval-mqar:d256": 0.99,
+    "retrieval-mqar:d512": 0.96,
+    "retrieval-passkey:d1024": 0.86,
+    "retrieval-passkey:d2048": 0.88,
+    "retrieval-passkey:d256": 0.83,
+    "retrieval-passkey:d512": 0.81
+  },
+  "sources": {
+    "quant_comparison": "runs/eval/quant-base/quant-comparison.json",
+    "retrieval": [
+      "runs/eval/retrieval-base-n100/retrieval-passkey.json",
+      "runs/eval/retrieval-base-n100/retrieval-mqar.json",
+      "runs/eval/retrieval-base-n100/retrieval-copy-control.json"
+    ],
+    "tasks": "runs/eval/baseline-hero-tasks.json"
+  }
+}

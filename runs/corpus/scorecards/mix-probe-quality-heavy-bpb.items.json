@@ -1,0 +1,24 @@
+{
+  "item_count": 3,
+  "item_digest": "5c58f8afa743661424f47d16d7351b9f",
+  "items": [
+    {
+      "bpb": 1.4035317272584529,
+      "id": "dclm-baseline",
+      "tokens": 66572481
+    },
+    {
+      "bpb": 1.2372891006624638,
+      "id": "fineweb-edu",
+      "tokens": 53588955
+    },
+    {
+      "bpb": 0.900517683796676,
+      "id": "stack-edu-python",
+      "tokens": 100000000
+    }
+  ],
+  "kind": "bpb",
+  "name": "mix-probe-quality-heavy-bpb",
+  "schema": 1
+}

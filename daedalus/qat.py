@@ -106,8 +106,16 @@ def _blocks(w: Tensor, qk: int) -> Tuple[Tensor, Tuple[int, ...]]:
     return w.reshape(*w.shape[:-1], w.shape[-1] // qk, qk), w.shape
 
 
+# The smallest `|d|` whose reciprocal is still a finite fp32 number. Below
+# this, `1/d` overflows to inf -- and inf is not a harmless placeholder here,
+# because every *exactly zero* element of the same block then computes
+# `0 * inf = NaN`.
+_MIN_INVERTIBLE_SCALE = 1.0 / torch.finfo(torch.float32).max
+
+
 def _safe_reciprocal(d: Tensor) -> Tensor:
-    """`1/d`, or 0 where `d == 0`, **without poisoning the gradient**.
+    """`1/d` where that is representable, 0 elsewhere, **without poisoning the
+    gradient**.
 
     llama.cpp writes this as `const float id = d ? 1.0f/d : 0.0f;` and the
     obvious transcription is `torch.where(d != 0, 1.0 / d, 0)`. That is correct
@@ -123,13 +131,30 @@ def _safe_reciprocal(d: Tensor) -> Tensor:
     step ~118,252. So this would have fired ~5 days and ~$55 into a 6-day run, at
     95% completion, and taken the whole run with it.
 
-    Masking `d` first means the division never sees a zero, so there is no `inf`
-    to multiply by zero. The forward result is bit-identical: where `d != 0` the
-    mask is a no-op, and where `d == 0` the answer is 0 either way.
+    **`d == 0` is not the whole of that story, which cost Phase 3 its first
+    smoke run.** A channel on its way to zero passes through a window where the
+    block absmax is denormal-small but not zero. There `d` is representable and
+    `1/d` is not: it overflows fp32 to inf, and the block's exactly-zero
+    elements -- of which a dying channel has many -- compute `0 * inf = NaN`.
+    `floor(NaN + 8.5)` stays NaN and `clamp` propagates it, so one such block
+    poisons the tensor. Measured on the released checkpoint: three FFN tensors,
+    3,095 NaNs between them, with every stored weight finite.
+
+    So the mask is "is the reciprocal representable", not "is `d` nonzero",
+    which subsumes the original condition. It matches the C reference wherever
+    the C reference is defined: for a denormal `d` under the flush-to-zero mode
+    these kernels run in, `d ? 1.0f/d : 0.0f` takes the zero branch too. And it
+    cannot move any lattice that matters -- a block reaching this branch has an
+    absmax below 2.4e-38, so `fp16(d)` is 0 and the block dequantizes to zero
+    whichever way `q` lands.
+
+    Masking `d` before the division rather than after is what keeps the
+    gradient clean: the division never sees a value it cannot invert, so there
+    is no inf for `where`'s backward to multiply by zero.
     """
-    nonzero = d != 0
-    return torch.where(nonzero, 1.0 / torch.where(nonzero, d, torch.ones_like(d)),
-                       torch.zeros_like(d))
+    invertible = d.abs() > _MIN_INVERTIBLE_SCALE
+    safe_d = torch.where(invertible, d, torch.ones_like(d))
+    return torch.where(invertible, 1.0 / safe_d, torch.zeros_like(d))
 
 
 def q4_0_qdq(w: Tensor) -> Tensor:
@@ -298,25 +323,46 @@ def qat_active_at(progress: float, qat_frac: float) -> bool:
     return progress >= (1.0 - min(qat_frac, 1.0))
 
 
+def grid_id(linear_kind: str = "q4_0",
+            embed_kind: Optional[str] = "q8_0") -> str:
+    """A short, stable name for the lattice a quantized forward is running on.
+
+    Logged beside every quantized number so it can never be compared against a
+    float one by accident. Phase 3 runs QAT from step 0, so *every* validation
+    figure a recovery run produces is on this grid rather than in fp32 -- a
+    distinction that is invisible in the number itself and changes what the
+    number means.
+    """
+    return linear_kind if embed_kind is None else f"{linear_kind}/{embed_kind}"
+
+
 def quantization_error(model: nn.Module, linear_kind: str = "q4_0",
                        embed_kind: Optional[str] = "q8_0") -> Dict[str, float]:
     """Mean relative error the ship-format grid would inflict right now.
 
-    Logged during the QAT phase: it should fall toward zero as the weights
-    settle onto the grid, which is the direct evidence QAT is doing its job.
-    Cheap enough to call every few hundred steps.
+    Logged during the QAT phase: `qat_rel_rmse` should fall toward zero as the
+    weights settle onto the grid, which is the direct evidence QAT is doing its
+    job. Cheap enough to call every few hundred steps.
+
+    `qat_tensors` counts *tensors* on the grid and `qat_elements` counts the
+    weights inside them. Both are reported because they answer different
+    questions: a coverage regression (a plan that stopped matching some module
+    class, or a tie that collapsed two entries into one) moves the tensor count
+    while barely touching the element count.
     """
-    total_sq, total_ref, n = 0.0, 0.0, 0
+    total_sq, total_ref, elements, tensors = 0.0, 0.0, 0, 0
     with torch.no_grad():
         for _, mod, kind in plan_qat(model, linear_kind, embed_kind):
             w = master_weight(mod).detach().float()
             err = (_QDQ[kind](w) - w)
             total_sq += float(err.pow(2).sum())
             total_ref += float(w.pow(2).sum())
-            n += w.numel()
+            elements += w.numel()
+            tensors += 1
     return {
         "qat_rel_rmse": (total_sq / total_ref) ** 0.5 if total_ref > 0 else 0.0,
-        "qat_tensors": float(n),
+        "qat_tensors": float(tensors),
+        "qat_elements": float(elements),
     }
 
 

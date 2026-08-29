@@ -1,0 +1,124 @@
+{
+  "created_at": "2026-08-24T14:20:54.550052Z",
+  "criteria": [
+    {
+      "criterion": "synthetic-controls",
+      "detail": "",
+      "evidence": [
+        "runs/eval/retrieval-control/retrieval-passkey.json",
+        "runs/eval/retrieval-control/retrieval-mqar.json",
+        "runs/eval/retrieval-control/retrieval-copy-control.json"
+      ],
+      "observed": {
+        "retrieval-copy-control": 1.0,
+        "retrieval-mqar": 1.0,
+        "retrieval-passkey": 1.0
+      },
+      "passed": true
+    },
+    {
+      "criterion": "determinism",
+      "detail": "",
+      "evidence": [
+        "runs/eval/retrieval-base-torch/retrieval-passkey.json",
+        "runs/eval/retrieval-base-torch-repeat/retrieval-passkey.json",
+        "runs/eval/retrieval-base-torch/retrieval-mqar.json",
+        "runs/eval/retrieval-base-torch-repeat/retrieval-mqar.json",
+        "runs/eval/retrieval-base-torch/retrieval-copy-control.json",
+        "runs/eval/retrieval-base-torch-repeat/retrieval-copy-control.json"
+      ],
+      "observed": {
+        "retrieval-copy-control": {
+          "fingerprint": [
+            "ca0f0847828119e7a56e0dca943a2958",
+            "ca0f0847828119e7a56e0dca943a2958"
+          ],
+          "item_count": [
+            8,
+            8
+          ],
+          "item_digest": [
+            "50fd196d45dab0f046606ca646321a39",
+            "50fd196d45dab0f046606ca646321a39"
+          ]
+        },
+        "retrieval-mqar": {
+          "fingerprint": [
+            "e0e36f30bf826dd56dc24fd71a34c67b",
+            "e0e36f30bf826dd56dc24fd71a34c67b"
+          ],
+          "item_count": [
+            40,
+            40
+          ],
+          "item_digest": [
+            "090e02f87834a583a48d978265ce6baf",
+            "090e02f87834a583a48d978265ce6baf"
+          ]
+        },
+        "retrieval-passkey": {
+          "fingerprint": [
+            "1f284f3ed7ef8621c8e3980a1bee6817",
+            "1f284f3ed7ef8621c8e3980a1bee6817"
+          ],
+          "item_count": [
+            40,
+            40
+          ],
+          "item_digest": [
+            "90bd2cc7e441769fc09f59b36e91d3f9",
+            "90bd2cc7e441769fc09f59b36e91d3f9"
+          ]
+        }
+      },
+      "passed": true
+    },
+    {
+      "criterion": "paired-quant-identity",
+      "detail": "",
+      "evidence": [
+        "runs/eval/quant-base/perplexity-fp16.json",
+        "runs/eval/quant-base/perplexity-quantized.json"
+      ],
+      "observed": {
+        "artifact_kind": [
+          "gguf-f16",
+          "gguf-q4_0"
+        ],
+        "ids_in_same_order": true,
+        "item_count": [
+          292,
+          292
+        ],
+        "item_digest": [
+          "3e49e756fd9cf95d0bb9be6e9fb33bff",
+          "ef72df13b71a41ebb66133a5f4569009"
+        ],
+        "n": 292
+      },
+      "passed": true
+    },
+    {
+      "criterion": "code-sandbox",
+      "detail": "",
+      "evidence": [
+        "scripts/code_eval.py"
+      ],
+      "observed": {
+        "network_client": "process_blocked",
+        "os_system": "process_blocked",
+        "outside_write": "exception",
+        "privilege_drop": [
+          65534,
+          65534
+        ],
+        "raw_socket": "network_blocked",
+        "secret_read": "exception"
+      },
+      "passed": true
+    }
+  ],
+  "gate": "phase2-evaluation",
+  "passed": true,
+  "schema": 1
+}

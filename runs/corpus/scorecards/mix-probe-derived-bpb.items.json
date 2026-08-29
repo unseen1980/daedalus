@@ -1,0 +1,24 @@
+{
+  "item_count": 3,
+  "item_digest": "4c8e85bc11a31c8d985ce47e12a91e13",
+  "items": [
+    {
+      "bpb": 1.3899364596074446,
+      "id": "dclm-baseline",
+      "tokens": 66572481
+    },
+    {
+      "bpb": 1.249023199533333,
+      "id": "fineweb-edu",
+      "tokens": 53588955
+    },
+    {
+      "bpb": 0.8878901855167265,
+      "id": "stack-edu-python",
+      "tokens": 100000000
+    }
+  ],
+  "kind": "bpb",
+  "name": "mix-probe-derived-bpb",
+  "schema": 1
+}

@@ -1,0 +1,14 @@
+{
+  "item_count": 1,
+  "item_digest": "218ed124d6d3816ad1e295ac94ef8ebc",
+  "items": [
+    {
+      "bpb": 0.7193072129713355,
+      "id": "stack-edu-python",
+      "tokens": 100000000
+    }
+  ],
+  "kind": "bpb",
+  "name": "mix-probe-only-stack-edu-python-bpb",
+  "schema": 1
+}

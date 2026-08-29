@@ -1,0 +1,8 @@
+{
+  "fp16_ppl": 6.7305,
+  "q4_0_ppl": 6.7054,
+  "delta_pct": 0.37292920288240283,
+  "passes_threshold": true,
+  "fp16_gguf": "runs/qat-recovery/export/lr0.001/model-f16.gguf",
+  "q4_0_gguf": "runs/qat-recovery/export/lr0.001/model-q4_0.gguf"
+}

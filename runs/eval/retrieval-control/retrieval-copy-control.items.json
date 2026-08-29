@@ -1,0 +1,113 @@
+{
+  "item_count": 8,
+  "item_digest": "2cbf5c5dad0ef258b84b741fe3092996",
+  "items": [
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "nectar harbor kelp",
+      "extracted": "nectar harbor kelp",
+      "id": "copy-control-0",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nnectar harbor kelp\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 1.0,
+      "response": "nectar harbor kelp",
+      "task": "copy-control"
+    },
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "juniper violet umber",
+      "extracted": "juniper violet umber",
+      "id": "copy-control-1",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\njuniper violet umber\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 1.0,
+      "response": "juniper violet umber",
+      "task": "copy-control"
+    },
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "willow gable granite",
+      "extracted": "willow gable granite",
+      "id": "copy-control-2",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nwillow gable granite\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 1.0,
+      "response": "willow gable granite",
+      "task": "copy-control"
+    },
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "granite esker dapple",
+      "extracted": "granite esker dapple",
+      "id": "copy-control-3",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\ngranite esker dapple\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 1.0,
+      "response": "granite esker dapple",
+      "task": "copy-control"
+    },
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "xenon esker lichen",
+      "extracted": "xenon esker lichen",
+      "id": "copy-control-4",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nxenon esker lichen\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 1.0,
+      "response": "xenon esker lichen",
+      "task": "copy-control"
+    },
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "amber gable prairie",
+      "extracted": "amber gable prairie",
+      "id": "copy-control-5",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\namber gable prairie\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 1.0,
+      "response": "amber gable prairie",
+      "task": "copy-control"
+    },
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "hollow lantern xenon",
+      "extracted": "hollow lantern xenon",
+      "id": "copy-control-6",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nhollow lantern xenon\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 1.0,
+      "response": "hollow lantern xenon",
+      "task": "copy-control"
+    },
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "indigo gable fennel",
+      "extracted": "indigo gable fennel",
+      "id": "copy-control-7",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nindigo gable fennel\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 1.0,
+      "response": "indigo gable fennel",
+      "task": "copy-control"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-copy-control",
+  "schema": 1
+}

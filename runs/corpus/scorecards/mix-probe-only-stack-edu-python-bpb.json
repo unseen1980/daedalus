@@ -1,0 +1,63 @@
+{
+  "created_at": "2026-08-26T11:31:52.244828Z",
+  "details": {
+    "arm": "only-stack-edu-python",
+    "basis": "all mass on stack-edu-python: the achievable-BPB bound that per-source excess loss is measured against",
+    "holdout_root": "data/holdout",
+    "is_baseline": false,
+    "phase": "phase7-mixture",
+    "run": "mix-probe-only-stack-edu-python",
+    "scored_role": "specialist",
+    "shape": "probe",
+    "sources_requested": [
+      "stack-edu-python"
+    ],
+    "tag": "probe",
+    "train_weights": {
+      "dclm-baseline": 0.0,
+      "fineweb-edu": 0.0,
+      "stack-edu-python": 1.0
+    },
+    "weighting": "equal",
+    "weights": null
+  },
+  "item_count": 1,
+  "item_digest": "218ed124d6d3816ad1e295ac94ef8ebc",
+  "kind": "bpb",
+  "metrics": {
+    "bpb": 0.7193072129713355,
+    "bpb_equal_weight": 0.7193072129713355,
+    "bpb_stack-edu-python": 0.7193072129713355,
+    "bpb_token_weighted": 0.7193072129713355,
+    "n_sources": 1.0,
+    "tokens_stack-edu-python": 100000000.0
+  },
+  "name": "mix-probe-only-stack-edu-python-bpb",
+  "provenance": {
+    "artifact": {
+      "config": "tok-probe-49152",
+      "kind": "checkpoint",
+      "path": "runs/mix-probe-only-stack-edu-python/checkpoint.pt",
+      "revision": null,
+      "sha256": "712d61c8c6c1acb52494e5a2d1bdbd38f2b944c8009a353f56ad5cffd4841fbf"
+    },
+    "bpb_mode": "full",
+    "bpb_sample_batches": null,
+    "git_sha": "76716d4",
+    "runtime": {
+      "batch_size": 8,
+      "device": "cuda",
+      "seq_len": 1024
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<smollm2-default>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

@@ -1,0 +1,113 @@
+{
+  "item_count": 8,
+  "item_digest": "77bb97ad842781cbb8c6d64d40fe9545",
+  "items": [
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "nectar harbor kelp",
+      "extracted": "\u201cThe sun is shining on the earth, and the sun is shining on the earth.\u201d",
+      "id": "copy-control-0",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nnectar harbor kelp\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "\u201cThe sun is shining on the earth, and the sun is shining on the earth.\u201d\n\u201cThe sun is",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "juniper violet umber",
+      "extracted": "The sun is shining, the sun is shining, the sun is shining, the sun is shining, the sun is",
+      "id": "copy-control-1",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\njuniper violet umber\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "The sun is shining, the sun is shining, the sun is shining, the sun is shining, the sun is",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "willow gable granite",
+      "extracted": "The granite is a granite, a rock, a rock, a rock, a rock, a rock, a rock",
+      "id": "copy-control-2",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nwillow gable granite\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 0.0,
+      "response": "The granite is a granite, a rock, a rock, a rock, a rock, a rock, a rock",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "granite esker dapple",
+      "extracted": "- a plant that is not a plant, but a plant that is not a plant.",
+      "id": "copy-control-3",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\ngranite esker dapple\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "- a plant that is not a plant, but a plant that is not a plant.\n- a plant that",
+      "task": "copy-control"
+    },
+    {
+      "correct": 1,
+      "depth": 0,
+      "expected": "xenon esker lichen",
+      "extracted": "xenon esker lichen",
+      "id": "copy-control-4",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nxenon esker lichen\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 1.0,
+      "response": "xenon esker lichen\nThe phrase is:\nxenon esker lichen\nThe phrase is:",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "amber gable prairie",
+      "extracted": "The word \"hall gable prairie\" is a word used to describe a prairie that is not a prairie. It",
+      "id": "copy-control-5",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\namber gable prairie\nThe phrase is:",
+      "prompt_tokens": 16,
+      "query_accuracy": 0.0,
+      "response": "The word \"hall gable prairie\" is a word used to describe a prairie that is not a prairie. It",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "hollow lantern xenon",
+      "extracted": "The word is used to describe a variety of materials that are used to create a light.",
+      "id": "copy-control-6",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nhollow lantern xenon\nThe phrase is:",
+      "prompt_tokens": 17,
+      "query_accuracy": 0.0,
+      "response": "The word is used to describe a variety of materials that are used to create a light.\nThe term is also",
+      "task": "copy-control"
+    },
+    {
+      "correct": 0,
+      "depth": 0,
+      "expected": "indigo gable fennel",
+      "extracted": "- \"The sun is shining on the earth.\"",
+      "id": "copy-control-7",
+      "needle_depth_frac": 1.0,
+      "prompt": "Repeat the phrase below exactly.\nindigo gable fennel\nThe phrase is:",
+      "prompt_tokens": 18,
+      "query_accuracy": 0.0,
+      "response": "- \"The sun is shining on the earth.\"\n- \"The sun is shining on the earth.\"\n-",
+      "task": "copy-control"
+    }
+  ],
+  "kind": "retrieval",
+  "name": "retrieval-copy-control",
+  "schema": 1
+}

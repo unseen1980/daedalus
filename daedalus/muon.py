@@ -12,6 +12,8 @@ Split rule (universal in every production Muon run): 2D hidden matrices go to
 Muon; embeddings, the LM head, norms, and all 1D params go to AdamW.
 """
 
+from typing import Optional
+
 import torch
 from torch import Tensor
 
@@ -161,6 +163,12 @@ def build_optimizers(model, muon_lr=0.02, adam_lr=3e-4, muon_wd=0.1,
         "conv_proj_wd": conv_proj_wd,
         "conv_proj_tensors": len(conv_params),
         "conv_proj_params": sum(p.numel() for p in conv_params),
+        # Which Muon group a decay schedule must write to. Reported rather than
+        # left for the caller to assume, because the only other way to find it
+        # is to hard-code index 1 -- and a schedule that silently retunes the
+        # *other* 76.9% of Muon's parameters is a failure no arm would show as
+        # anything but a puzzling result.
+        "conv_proj_group_index": None if conv_proj_wd is None else 1,
     }
     return muon, adamw, stats
 
@@ -202,3 +210,48 @@ def momentum_warmup(step: int, warmup: int = 300,
     if step >= warmup:
         return end
     return start + (end - start) * step / max(warmup, 1)
+
+
+def conv_proj_wd_schedule(step: int, total: int, start: float,
+                          end: Optional[float] = None,
+                          ramp_frac: float = 0.0,
+                          hold_frac: float = 0.0) -> float:
+    """Weight decay for the conv-projection group at `step`.
+
+    Phase 5 compares four decay schedules for these projections, and two of
+    them vary over the run. The reason they have to is that the two constants
+    fail in *opposite* directions, which
+    `runs/preflight/conv-death-fix-validated.md` states before its sweep ran:
+    decay 0 stops the death but has no equilibrium (6.8x-10.5x projection
+    growth in 600 steps), while a decay weak enough to lose the early race is
+    still strong enough to win it later -- the death is postponed, not
+    prevented. A schedule that is weak while the race is being decided and
+    strong once it is over is the only shape that can have both.
+
+    Linear from `start` to `end` across `[hold_frac, ramp_frac]` of the run,
+    flat at `start` before and at `end` after. `end=None` is a constant, which
+    is what the shipped 0.1 and the 0.0133 arm are -- so all four arms come out
+    of one primitive and no arm gets a code path of its own.
+
+    `total` is steps, not tokens, and the fractions are of the whole run:
+    what decides the race is `wd` against the update, and the clock that runs
+    it is `lr x steps` (that note's own correction -- lr cannot tilt the race,
+    only time it). A ramp pinned to a fixed step count would therefore mean
+    something different in every arm.
+    """
+    if end is None or end == start:
+        return start
+    if not 0.0 <= hold_frac <= ramp_frac <= 1.0:
+        raise ValueError(
+            f"conv-proj-wd ramp must satisfy 0 <= hold_frac ({hold_frac}) <= "
+            f"ramp_frac ({ramp_frac}) <= 1")
+    hold_until = hold_frac * max(total, 1)
+    ramp_until = ramp_frac * max(total, 1)
+    if step <= hold_until:
+        return start
+    if step >= ramp_until:
+        return end
+    # `ramp_until > hold_until` here: they can only be equal if the step
+    # already returned above.
+    prog = (step - hold_until) / (ramp_until - hold_until)
+    return start + (end - start) * prog

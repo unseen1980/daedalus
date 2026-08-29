@@ -1,0 +1,39 @@
+{
+  "state_at_note": "TWO LANES RUNNING. main = phase6-stageb-scoring-retry, detached ~06:18Z, GPU, one arm to score. retrieval = phase6-stagea-retrieval-remeasure, detached 05:53Z, CPU (8 of 24 threads), 2 of 4 arms done by 06:00Z. Neither may be relaunched. The evidence lane is free.",
+
+  "first_real_retrieval_numbers": "Stage-A control a8-kv4, passkey, remeasured through the pass-through path: 0.34 / 0.26 / 0.22 / 0.02 at depths 256/512/1024/2048. Every one of those cells read 0.0 before. Monotonic decay collapsing at the 2048 trained-context boundary -- the shape a passkey curve should have. This is the first real number the retrieval column has carried in phase 6.",
+
+  "headline": "THE RETRIEVAL BLOCKER IS CLEARED, AND IT NEVER NEEDED THE REBUILD. The recorded remedy was to rebuild llama-cli with -DLLAMA_BUILD_UI=OFF, filed as an operator step with no approved wrapper. The same pinned build advertises --jinja and --chat-template-file, and a pass-through Jinja template renders the messages verbatim -- so the -st turn feeds the model exactly the prompt as written. Stock binary, unmodified, which is the constraint that actually mattered.",
+
+  "evidence": "Released base weights, same GGUF (sha256 1d45ce41...), same binary: copy control 0.0 templated -> 1.0 pass-through; passkey d256 1.0; mqar d256 1.0. runs/eval/diag-passthrough/ against runs/eval/diag-llamacpp-template/. The 150M proxies were never asked to retrieve -- they can.",
+
+  "how_it_was_found": "scripts/retrieval_eval.py --probe. The scoring guards raise on a build that cannot measure a base model, which is right for a run and useless for 'then what DOES this build support?', and there is no approved way to run llama-cli --help. So the blocker was written as an environment fact from a traceback. --probe reports the flag families, the pass-through route, and the sibling binaries as data. Reach for it first on any llama.cpp question. It also confirmed there is no llama-completion and no llama-server here, which was the other half of the guess.",
+
+  "commits": "df89334 pass-through backend plus --probe; 9deab69 a card the gate refuses is not a card an arm has been scored on; a1a2342 score a stage on the arms it trained",
+
+  "fix_2": "retrieval_scored_from answered on the artifact digest alone, so the invalid templated stage-A cards counted as already-scored: the chain would skip them, the gate would keep refusing them, and the column would stay unmeasured with nothing left that would run. Both ends now share templated_cards, so a stale arm re-scores by itself. An absent template_mode re-scores too. --refresh is NOT the way to fix one stale arm -- it discards every card, valid ones included, at ~1h of CPU each.",
+
+  "fix_3": "phase6-stageb-scoring FAILED at 06:07Z on a8-kv2: eligible at stage A, not selected, never trained. `score` iterated arms_for(shape) -- the shape's whole 15-arm grid -- while the sweep trained the four arms stage A advanced. It raised correctly on the missing checkpoint, but after 26 GPU-minutes on the three arms ahead of it, leaving the fourth trained arm unscored. sweep-<tag>.json now supplies the default arm set. Stage A keeps the whole grid; its behaviour is byte-identical.",
+
+  "next_1": "When the scoring retry lands: `python scripts/architecture_report.py --shape stage-b --tag stageb report`, then commit runs/architecture/stageb-report.{json,md}. Read credited_bpb_delta_pct beside the raw delta -- parameter spread across the four arms is +/-1.2% about the midpoint, favouring a3-kv4. build_report also calls select_stage_b on a stage-B table; that field is meaningless here and advanced_selection refuses a stage selecting its own arms, so nothing can act on it by accident.",
+
+  "next_2": "Then the stage-B evidence chain. Export and retrieval are safe to run in the evidence lane. DECODE IS NOT, while the retrieval lane is still running: decode_bench is a timing measurement and a CPU pass beside it makes the absolutes a report about the box. Run `export` and `retrieval` now, and `decode` after the retrieval lane finishes -- not `all`, which would run decode into the contention. Stage-B retrieval will now measure rather than record zeros.",
+
+  "next_3": "Then `recommend --shape stage-b`. Every arm should now be PROVEN or REFUTED on retrieval rather than unproven -- that column has never once carried a real number in this phase. Stage C takes at most two finalists and is gated on deadline reserve AND prior discrimination; if stage B does not separate the arms beyond the parameter margin, the preregistered answer is to record that and not spend 1B tokens.",
+
+  "next_4": "Stage A's recommendation still reads unproven on retrieval and will until the remeasure lands (~15:00Z), after which rerun `--tag stagea recommend`. Do not regenerate it before then; it would just rewrite the same verdicts.",
+
+  "next_5": "Phase 7's corpus rebuild is CPU and disk work. It does NOT contend with the GPU but it DOES contend with any decode pass, which is a timing measurement. Run decode first -- it is minutes -- then give phase 7 the evidence lane.",
+
+  "cost_note": "IGNORE the 9h estimate this phase was launched with -- it was mine and it was wrong by more than an order of magnitude. The control arm's 408 items took 4 minutes on a quiet box; a later arm took ~28 minutes while the GPU scoring retry and a full pytest run were competing for CPU. So budget minutes to tens of minutes per arm, and expect contention, not concurrency, to be what sets the number. Stage-B retrieval is therefore cheap and does not have to be sequenced ahead of phase 7.",
+
+  "launcher_status": "The two launcher fixes the standing prompt asks for are in and tested: run-phase --detach starts a phase in its own session via start_new_session (d551ade, 3e22382) and refuses an undetached phase at or past 0.25h (9f81cd7); run_with_resume resumes an interrupted run on relaunch, not just on retry (3ed93a2), and architecture_sweep, conv_health and qat_recovery all go through it. 54 focused tests green. Nothing further is needed before phases 5-8.",
+
+  "deadline": "Program started 2026-08-24T10:44:35Z. At this note T+43.6h of 144h; finalization opens at T+136h = 2026-08-30T02:44Z. Phase 6 remains ahead of the hours 72-104 slot.",
+
+  "trap_1": "runs/vast-program/state.json is written with sorted keys, so `lanes` sorts before `status`: grepping for status and taking the first hit answers with a lane's status, not the program's. Parse it as JSON.",
+
+  "trap_2": "The running progress publisher imported github_progress.py before the lanes field existed, so STATUS.md keeps omitting lanes -- including a failed lane's action banner. `daedalus-approved reload-service daedalus_progress` fixes it, but only after `bash ops/vast/install_supervisor.sh` copies the new wrapper to /usr/local/bin, which is deliberately an operator step. Still outstanding.",
+
+  "trap_3": "--show-prompt does NOT reveal the chat template: _clean_completion anchors on the echoed prompt and strips everything before it, wrapper included. What exposed the template was comparing the same weights across backends; what explained it was --probe. Reach for both before concluding anything about a binary."
+}

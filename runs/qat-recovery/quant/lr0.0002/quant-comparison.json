@@ -1,0 +1,16 @@
+{
+  "chunks_better": 154,
+  "chunks_tied": 0,
+  "chunks_worse": 138,
+  "fp16_sha256": "0f61f5cb891f2b1ffa74e927dffa76c69cc4b0ec692542d789e8cc6f6f70da8b",
+  "max_chunk_delta": 0.06609459763438963,
+  "mean_nll_delta": -0.00102844631707112,
+  "n_chunks": 292,
+  "n_ctx": 512,
+  "perplexity_fp16": 6.712599999999999,
+  "perplexity_q4_0": 6.7057,
+  "q4_penalty_pct": -0.10279176474091711,
+  "quantized_precision": "q4_0",
+  "quantized_sha256": "8d835529bdcd091a888e5ae6acaf14a65b28ee507fafd3abd00513c09d0a7d55",
+  "text_file": "data/eval/ppl-finewiki-150k.txt"
+}

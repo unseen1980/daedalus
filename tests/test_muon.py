@@ -20,6 +20,7 @@ from daedalus.model import Daedalus
 from daedalus.muon import (
     Muon,
     build_optimizers,
+    conv_proj_wd_schedule,
     momentum_warmup,
     wsd_lr,
     zeropower_via_newtonschulz5,
@@ -360,6 +361,173 @@ def test_train_py_exposes_conv_proj_wd_and_defaults_it_off():
         f"--conv-proj-wd defaults to {args.conv_proj_wd!r}, not None")
     args = train_mod.parse_args(["--run-name", "x", "--conv-proj-wd", "0.0"])
     assert args.conv_proj_wd == 0.0
+
+
+# ------------------------------------------- scheduled conv-projection decay --
+# Phase 5 compares four decay schedules for these projections, two of them
+# varying. They have to vary because the two constants fail in opposite
+# directions (`runs/preflight/conv-death-fix-validated.md`): decay 0 stops the
+# death but has no equilibrium, and a decay weak enough to lose the early race
+# still wins it later, postponing the death rather than preventing it.
+
+def test_a_constant_schedule_is_what_the_two_constant_arms_get():
+    """`end=None` must be the shipped behaviour exactly, at every step, so the
+    two constant arms need no code path of their own."""
+    for step in (0, 1, 500, 4_999, 5_000, 10_000):
+        assert conv_proj_wd_schedule(step, 10_000, 0.1) == 0.1
+        assert conv_proj_wd_schedule(step, 10_000, 0.0133) == 0.0133
+        # An explicit end equal to start is the same thing said twice.
+        assert conv_proj_wd_schedule(step, 10_000, 0.1, end=0.1,
+                                     ramp_frac=0.3) == 0.1
+
+
+def test_the_zero_to_shipped_arm_ramps_over_the_first_tenth_then_holds():
+    """Arm 3: nothing while the early race is being decided, the shipped 0.1
+    once it is over."""
+    total = 10_000
+    schedule = lambda step: conv_proj_wd_schedule(  # noqa: E731
+        step, total, 0.0, end=0.1, ramp_frac=0.1)
+
+    assert schedule(0) == 0.0
+    assert schedule(500) == pytest.approx(0.05)
+    assert schedule(1_000) == pytest.approx(0.1)
+    assert schedule(9_999) == pytest.approx(0.1)
+
+
+def test_the_weak_then_shipped_arm_reaches_the_shipped_value_at_thirty_percent():
+    """Arm 4: 0.0133 early, ramping to 0.1 by 30% of the run."""
+    total = 10_000
+    schedule = lambda step: conv_proj_wd_schedule(  # noqa: E731
+        step, total, 0.0133, end=0.1, ramp_frac=0.3)
+
+    assert schedule(0) == pytest.approx(0.0133)
+    assert schedule(1_500) == pytest.approx(0.0133 + (0.1 - 0.0133) * 0.5)
+    assert schedule(3_000) == pytest.approx(0.1)
+    assert schedule(10_000) == pytest.approx(0.1)
+
+
+def test_a_hold_delays_the_ramp_without_moving_where_it_lands():
+    """The `hold` shape exists so "weak early, then ramp" can be expressed with
+    an explicit early window rather than by reading one into the ramp."""
+    total = 1_000
+    held = lambda step: conv_proj_wd_schedule(  # noqa: E731
+        step, total, 0.0, end=0.1, ramp_frac=0.3, hold_frac=0.1)
+
+    assert held(100) == 0.0                       # still holding at the boundary
+    assert held(200) == pytest.approx(0.05)       # halfway through 100..300
+    assert held(300) == pytest.approx(0.1)
+
+
+def test_the_schedule_is_monotone_and_bounded_between_its_endpoints():
+    """A ramp that overshoots would put a decay on these projections that no
+    arm preregistered, and the arm would still look like the one that was."""
+    total = 997                                   # not a round number on purpose
+    values = [conv_proj_wd_schedule(s, total, 0.0133, end=0.1, ramp_frac=0.3)
+              for s in range(total + 1)]
+
+    assert values == sorted(values)
+    assert min(values) == pytest.approx(0.0133)
+    assert max(values) == pytest.approx(0.1)
+
+
+def test_a_ramp_that_ends_before_it_starts_is_refused():
+    with pytest.raises(ValueError, match="hold_frac"):
+        conv_proj_wd_schedule(0, 1_000, 0.0, end=0.1, ramp_frac=0.1,
+                              hold_frac=0.3)
+
+
+def test_build_optimizers_reports_which_group_a_schedule_must_write_to():
+    """The only other way to find it is to hard-code index 1, and a schedule
+    that retuned the other 76.9% of Muon's parameters would show up as nothing
+    but a puzzling arm result."""
+    model = Daedalus(PRESETS["daedalus-150m"])
+
+    _, _, default_stats = build_optimizers(model)
+    assert default_stats["conv_proj_group_index"] is None
+
+    muon, _, stats = build_optimizers(model, conv_proj_wd=0.0133)
+    group = muon.param_groups[stats["conv_proj_group_index"]]
+    expected = {id(p) for n, p in model.named_parameters()
+                if p.ndim == 2 and ".conv." in n}
+    assert {id(p) for p in group["params"]} == expected
+    assert group["weight_decay"] == 0.0133
+
+
+def test_train_py_exposes_the_ramp_and_leaves_it_off_by_default():
+    import train as train_mod
+
+    args = train_mod.parse_args(["--run-name", "x"])
+    assert args.conv_proj_wd_end is None
+    assert args.conv_proj_wd_ramp_frac == 0.0
+    assert args.conv_proj_wd_hold_frac == 0.0
+
+    args = train_mod.parse_args([
+        "--run-name", "x", "--conv-proj-wd", "0.0",
+        "--conv-proj-wd-end", "0.1", "--conv-proj-wd-ramp-frac", "0.1"])
+    assert (args.conv_proj_wd, args.conv_proj_wd_end) == (0.0, 0.1)
+    assert args.conv_proj_wd_ramp_frac == 0.1
+
+
+def test_a_ramp_without_a_group_to_ramp_is_refused():
+    """Same silent no-op `build_optimizers` refuses for the flag itself: the
+    run looks configured, trains the shipped schedule, and only the arm's
+    result says otherwise -- after the GPU hours are spent."""
+    import train as train_mod
+
+    with pytest.raises(ValueError, match="need conv_proj_wd set"):
+        train_mod.parse_args(["--run-name", "x", "--conv-proj-wd-end", "0.1",
+                              "--conv-proj-wd-ramp-frac", "0.1"])
+
+
+def test_an_end_value_with_no_ramp_is_refused_rather_than_applied_at_step_zero():
+    """`ramp_frac=0` would make the "ramp" a step change at step 0, i.e. the
+    end value constant -- an arm silently replaced by a different arm."""
+    import train as train_mod
+
+    with pytest.raises(ValueError, match="ramp fraction"):
+        train_mod.parse_args(["--run-name", "x", "--conv-proj-wd", "0.0",
+                              "--conv-proj-wd-end", "0.1"])
+
+
+def test_the_trainer_writes_the_schedule_to_the_conv_group_only():
+    """The wiring, without training: the scheduled value must land on the conv
+    group and the other Muon group's decay must not move."""
+    import train as train_mod
+
+    args = train_mod.TrainArgs(
+        run_name="conv-wd-wiring", config="tiny", data_dir="unused",
+        conv_proj_wd=0.0, conv_proj_wd_end=0.1, conv_proj_wd_ramp_frac=0.1,
+        device="cpu")
+    trainer = train_mod.Trainer.__new__(train_mod.Trainer)
+    trainer.args = args
+    model = Daedalus(PRESETS["tiny"])
+    trainer.muon, trainer.adamw, trainer.opt_stats = build_optimizers(
+        model, conv_proj_wd=args.conv_proj_wd)
+    conv_index = trainer.opt_stats["conv_proj_group_index"]
+    other_index = 1 - conv_index
+
+    trainer.step = 0
+    assert trainer._conv_proj_wd(1_000) == 0.0
+    trainer.step = 50
+    assert trainer._conv_proj_wd(1_000) == pytest.approx(0.05)
+    trainer.step = 100
+    assert trainer._conv_proj_wd(1_000) == pytest.approx(0.1)
+
+    assert trainer.muon.param_groups[other_index]["weight_decay"] == 0.1
+
+
+def test_the_trainer_reports_no_schedule_when_the_group_does_not_exist():
+    """With `--conv-proj-wd` unset there is no second group, and writing into
+    `param_groups[1]` would either raise or retune the wrong 76.9%."""
+    import train as train_mod
+
+    args = train_mod.TrainArgs(run_name="x", config="tiny", data_dir="unused",
+                               device="cpu")
+    trainer = train_mod.Trainer.__new__(train_mod.Trainer)
+    trainer.args = args
+    trainer.step = 10
+
+    assert trainer._conv_proj_wd(1_000) is None
 
 
 # --------------------------------------------------------------- schedules ---

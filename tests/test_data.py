@@ -634,3 +634,199 @@ def test_replacement_sampling_coverage_matches_the_poisson_prediction(tmp_path):
         f"drifted, make_loader is no longer sampling with replacement")
     # And the point of the whole exercise: it is emphatically not ~0.
     assert unseen > 0.03
+
+
+# ------------------------------------------------- tokenizer provenance ----
+# Added in Phase 4, where four shard directories differing only in vocabulary
+# sit side by side. Reading the wrong one is not an error anything raises: the
+# dtype, the shape and the manifest schema are identical, and a 32,768-token
+# id served to a 49,152-row embedding is simply a different word.
+
+class _FingerprintTokenizer:
+    """Enough of the `PreTrainedTokenizer` surface to be fingerprinted."""
+
+    def __init__(self, vocab_size: int, salt: int = 0):
+        self.vocab_size = vocab_size
+        self.name_or_path = f"fake-v{vocab_size}-s{salt}"
+        self._salt = salt
+
+    def encode(self, text, add_special_tokens=True):
+        return [(ord(c) + self._salt) % self.vocab_size for c in text]
+
+    def convert_tokens_to_ids(self, token):
+        return 0
+
+
+def test_fingerprint_records_vocab_size_and_a_tokenization_digest():
+    from daedalus.data import tokenizer_fingerprint
+
+    fingerprint = tokenizer_fingerprint(_FingerprintTokenizer(32768))
+    assert fingerprint["vocab_size"] == 32768
+    assert len(fingerprint["probe_digest"]) == 32
+    assert "partial" not in fingerprint
+
+
+def test_two_vocabularies_of_the_same_size_fingerprint_differently():
+    """Vocabulary size alone cannot identify a tokenizer -- Phase 4 trains
+    candidates a future retrain could easily match the size of."""
+    from daedalus.data import tokenizer_fingerprint
+
+    a = tokenizer_fingerprint(_FingerprintTokenizer(32768, salt=0))
+    b = tokenizer_fingerprint(_FingerprintTokenizer(32768, salt=1))
+    assert a["vocab_size"] == b["vocab_size"]
+    assert a["probe_digest"] != b["probe_digest"]
+
+
+def test_a_minimal_tokenizer_yields_a_partial_fingerprint_not_a_crash():
+    """Packing shards must not start requiring a full tokenizer
+    implementation; the fingerprint records what it could read and says so."""
+    from daedalus.data import tokenizer_fingerprint
+
+    assert tokenizer_fingerprint(FakeTokenizer())["partial"] is True
+
+
+def test_tokenize_and_pack_records_the_tokenizer_in_the_manifest(tmp_path):
+    out = tmp_path / "shards"
+    tokenize_and_pack(_FingerprintTokenizer(32768), ["hello world"] * 4,
+                      str(out), shard_tokens=64)
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert manifest["tokenizer"]["vocab_size"] == 32768
+
+
+def test_batched_packing_produces_identical_ids(tmp_path):
+    """The batched path exists for speed and must be indistinguishable in
+    output, or Phase 4's corpora differ from every other corpus in this
+    repository for a reason nobody would find."""
+
+    class _BatchTokenizer(_FingerprintTokenizer):
+        def __call__(self, texts):
+            return {"input_ids": [self.encode(t) for t in texts]}
+
+    documents = [f"document number {i} with some text" for i in range(37)]
+    one_at_a_time = tmp_path / "single"
+    batched = tmp_path / "batched"
+    tokenize_and_pack(_BatchTokenizer(4096), documents, str(one_at_a_time),
+                      shard_tokens=1000)
+    tokenize_and_pack(_BatchTokenizer(4096), documents, str(batched),
+                      shard_tokens=1000, batch_documents=8)
+
+    for name in ("total_tokens", "n_documents"):
+        assert (json.loads((one_at_a_time / "manifest.json").read_text())[name]
+                == json.loads((batched / "manifest.json").read_text())[name])
+    left = np.fromfile(one_at_a_time / "shard_00000.bin", dtype=np.uint16)
+    right = np.fromfile(batched / "shard_00000.bin", dtype=np.uint16)
+    assert np.array_equal(left, right)
+
+
+def test_reading_shards_under_a_different_tokenizer_is_refused():
+    from daedalus.data import assert_manifest_tokenizer, tokenizer_fingerprint
+
+    manifest = {"tokenizer": tokenizer_fingerprint(_FingerprintTokenizer(32768))}
+    assert_manifest_tokenizer(manifest, _FingerprintTokenizer(32768))   # same
+    with pytest.raises(ValueError, match="tokenizer mismatch"):
+        assert_manifest_tokenizer(manifest, _FingerprintTokenizer(49152))
+
+
+def test_a_manifest_without_a_fingerprint_still_loads():
+    """Every corpus already on disk was packed before the field existed."""
+    from daedalus.data import assert_manifest_tokenizer
+
+    assert_manifest_tokenizer({"total_tokens": 10}, _FingerprintTokenizer(32768))
+
+
+def _packed_tree(root, name, vocab_size=None, tokens=64):
+    """One shard directory, with or without a recorded vocabulary."""
+    from daedalus.data import ShardWriter
+
+    out_dir = root / name
+    writer = ShardWriter(str(out_dir), shard_tokens=tokens)
+    writer.write(list(range(tokens)))
+    writer.close()
+    extra = {"eos_id": 0, "source_key": name}
+    if vocab_size is not None:
+        extra["tokenizer"] = {"name": f"fake/tok-{vocab_size}",
+                              "vocab_size": vocab_size,
+                              "probe_digest": "0" * 32}
+    writer.write_manifest(extra)
+    return out_dir
+
+
+def test_a_tree_packed_under_another_vocabulary_is_refused_before_it_trains(
+        tmp_path):
+    """The reader with no tokenizer to compare against. A 49,152-row model
+    reading 32,768-vocabulary shards indexes every id successfully and trains
+    on text that means something else -- nothing raises, and the loss curve
+    looks like a run that is working."""
+    from daedalus.data import assert_shards_vocab_size
+
+    tree = _packed_tree(tmp_path, "code", vocab_size=32_768)
+    assert_shards_vocab_size(str(tree), 32_768)
+    with pytest.raises(ValueError, match="shard vocabulary mismatch") as excinfo:
+        assert_shards_vocab_size(str(tree), 49_152)
+    # Both numbers and the directory, because "a mismatch" is not actionable.
+    assert "32,768" in str(excinfo.value) and "49,152" in str(excinfo.value)
+    assert "'code'" in str(excinfo.value)
+
+
+def test_one_wrong_source_in_a_mixture_root_is_named(tmp_path):
+    """A mixture is wrong per source: two of three can be right, and the run
+    would sample the third at its blueprint share without a word."""
+    from daedalus.data import assert_shards_vocab_size
+
+    root = tmp_path / "mixture"
+    _packed_tree(root, "fineweb-edu", vocab_size=49_152)
+    _packed_tree(root, "dclm-baseline", vocab_size=49_152)
+    _packed_tree(root, "stack-edu-python", vocab_size=32_768)
+
+    with pytest.raises(ValueError, match="stack-edu-python") as excinfo:
+        assert_shards_vocab_size(str(root), 49_152)
+    assert "fineweb-edu" not in str(excinfo.value)
+
+
+def test_a_holdout_packed_by_another_tokenizer_is_refused_with_its_directory(
+        tmp_path):
+    """The evaluator holds a real tokenizer, so it gets the stronger check: two
+    vocabularies of the same size trained on different samples agree on
+    `vocab_size` and nothing else, and the probe digest separates them. The
+    directory is named because a holdout root has one per source."""
+    from daedalus.data import assert_shards_tokenizer, tokenizer_fingerprint
+
+    root = tmp_path / "holdout"
+    for name in ("fineweb-edu", "stack-edu-python"):
+        tree = _packed_tree(root, name)
+        manifest = json.loads((tree / "manifest.json").read_text())
+        manifest["tokenizer"] = tokenizer_fingerprint(
+            _FingerprintTokenizer(32768), f"fake/tok-32768-{name}")
+        (tree / "manifest.json").write_text(json.dumps(manifest))
+
+    assert_shards_tokenizer(str(root), _FingerprintTokenizer(32768))
+    with pytest.raises(ValueError, match="tokenizer mismatch") as excinfo:
+        assert_shards_tokenizer(str(root), _FingerprintTokenizer(49152))
+    assert "fineweb-edu" in str(excinfo.value)
+
+
+def test_a_tree_that_records_no_vocabulary_still_loads(tmp_path):
+    """Every corpus on this box predates the fingerprint, including the one
+    phase 8 continues from. Unknown must not read as mismatched."""
+    from daedalus.data import assert_shards_vocab_size, manifest_vocab_size
+
+    tree = _packed_tree(tmp_path, "legacy")
+    assert manifest_vocab_size(json.loads(
+        (tree / "manifest.json").read_text())) is None
+    assert_shards_vocab_size(str(tree), 49_152)
+
+    root = tmp_path / "mixed"
+    _packed_tree(root, "legacy-source")
+    _packed_tree(root, "rebuilt-source", vocab_size=49_152)
+    assert_shards_vocab_size(str(root), 49_152)
+
+
+def test_get_tokenizer_default_is_still_smollm2():
+    """The explicit-path form must not change what any existing caller gets."""
+    import inspect
+
+    from daedalus.data import SMOLLM2_TOKENIZER, get_tokenizer
+
+    assert inspect.signature(get_tokenizer).parameters["name"].default is None
+    assert "name or SMOLLM2_TOKENIZER" in inspect.getsource(get_tokenizer)
+    assert SMOLLM2_TOKENIZER == "HuggingFaceTB/SmolLM2-135M"

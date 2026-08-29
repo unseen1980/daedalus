@@ -81,6 +81,19 @@ def run_training(data_dir: str, config: str, total_tokens: int, run_name: str,
     `resumed`/`attempts` into results.json, where the writeup has to confront
     it. Re-running both arms remains the rigorous option and stays the
     caller's decision, made with the numbers in hand.
+
+    **This loop predates `daedalus.supervise` and is missing what that module
+    grew since.** It writes no in-flight marker, so `scripts/boot_resume.py`
+    cannot see an arm launched here at all, and its `attempt > 1` rule restarts
+    from step zero when the *supervisor* is killed rather than the trainer --
+    the failure `supervise.interrupted_marker` now closes for every caller that
+    goes through `run_with_resume`. It is left as-is because `run_abl_arch`
+    handles `CalledProcessError` from here specifically and the released
+    ablation was produced by this code; changing its exception contract to fix
+    a path that experiment no longer runs would trade a real risk for none.
+    New long-run work -- `scripts/architecture_sweep.py` in phase 6 included --
+    must call `supervise.run_with_resume` and reuse this module for its
+    evaluation and export helpers only.
     """
     run_dir = os.path.join("runs", run_name)
     ckpt_path = os.path.join(run_dir, "checkpoint.pt")
@@ -445,7 +458,7 @@ def run_abl_arch(mixture_dir: str, configs: List[str], total_tokens: int,
     #  - `hero.py` has passed --val-dir since 298c059, so the four-day, ~$43.70
     #    run depends on a code path that has never executed on a GPU -- the
     #    holdout is a *mixture root*, and `evaluate_bpb_mixture` exists only
-    #    because plain `evaluate_bpb` raised on one. `Trainer._val_bpb` swallows
+    #    because plain `evaluate_bpb` raised on one. `Trainer._validate` swallows
     #    every exception by design, so a mistake here does not fail loudly: it
     #    logs `val_bpb: null` behind a WARNING for the whole run. abl-arch
     #    exercises it first, on the same hardware, for free.
