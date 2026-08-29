@@ -1,0 +1,377 @@
+{
+  "continue": true,
+  "gate": {
+    "arms": [
+      {
+        "arm": "code-probe-lr0.0005",
+        "code_bpb": 0.46448458887633626,
+        "code_bpb_base": 0.5871422684627945,
+        "code_bpb_improvement_pct": 20.89062330797441,
+        "code_bpb_threshold_pct": 2.0,
+        "criterion_a_code_bpb": true,
+        "criterion_b_execution": true,
+        "execution": {
+          "humaneval-plus": {
+            "metrics": {
+              "pass@1": {
+                "arm": 0.0,
+                "base": 0.0,
+                "delta_points": 0.0,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 1.0
+              },
+              "pass@1_plus": {
+                "arm": 0.0,
+                "base": 0.0,
+                "delta_points": 0.0,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 1.0
+              },
+              "syntax_valid": {
+                "arm": 1.0,
+                "base": 1.0,
+                "delta_points": 0.0,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 2.0
+              }
+            },
+            "moved": false,
+            "n": 164
+          },
+          "mbpp-plus": {
+            "metrics": {
+              "pass@1": {
+                "arm": 0.005291005291005291,
+                "base": 0.007936507936507936,
+                "delta_points": -0.26455026455026454,
+                "moved": false,
+                "regressed": true,
+                "threshold_points": 1.0
+              },
+              "pass@1_plus": {
+                "arm": 0.0026455026455026454,
+                "base": 0.005291005291005291,
+                "delta_points": -0.26455026455026454,
+                "moved": false,
+                "regressed": true,
+                "threshold_points": 1.0
+              },
+              "syntax_valid": {
+                "arm": 0.37037037037037035,
+                "base": 0.23809523809523808,
+                "delta_points": 13.227513227513226,
+                "moved": true,
+                "regressed": false,
+                "threshold_points": 2.0
+              }
+            },
+            "moved": true,
+            "n": 378
+          }
+        },
+        "qualifies": true,
+        "retention": {
+          "general_bpb": 0.9455994215888892,
+          "general_bpb_base": 0.9390589357612245,
+          "regression_pct": 0.6964936468404802,
+          "retained": true,
+          "share_covered": 0.7792207792207793,
+          "threshold_pct": 1.5
+        }
+      },
+      {
+        "arm": "code-probe-lr0.001",
+        "code_bpb": 0.4484501054134633,
+        "code_bpb_base": 0.5871422684627945,
+        "code_bpb_improvement_pct": 23.621559969178016,
+        "code_bpb_threshold_pct": 2.0,
+        "criterion_a_code_bpb": true,
+        "criterion_b_execution": true,
+        "execution": {
+          "humaneval-plus": {
+            "metrics": {
+              "pass@1": {
+                "arm": 0.0,
+                "base": 0.0,
+                "delta_points": 0.0,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 1.0
+              },
+              "pass@1_plus": {
+                "arm": 0.0,
+                "base": 0.0,
+                "delta_points": 0.0,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 1.0
+              },
+              "syntax_valid": {
+                "arm": 1.0,
+                "base": 1.0,
+                "delta_points": 0.0,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 2.0
+              }
+            },
+            "moved": false,
+            "n": 164
+          },
+          "mbpp-plus": {
+            "metrics": {
+              "pass@1": {
+                "arm": 0.0,
+                "base": 0.007936507936507936,
+                "delta_points": -0.7936507936507936,
+                "moved": false,
+                "regressed": true,
+                "threshold_points": 1.0
+              },
+              "pass@1_plus": {
+                "arm": 0.0,
+                "base": 0.005291005291005291,
+                "delta_points": -0.5291005291005291,
+                "moved": false,
+                "regressed": true,
+                "threshold_points": 1.0
+              },
+              "syntax_valid": {
+                "arm": 0.30423280423280424,
+                "base": 0.23809523809523808,
+                "delta_points": 6.613756613756616,
+                "moved": true,
+                "regressed": false,
+                "threshold_points": 2.0
+              }
+            },
+            "moved": true,
+            "n": 378
+          }
+        },
+        "qualifies": true,
+        "retention": {
+          "general_bpb": 0.9529717954425143,
+          "general_bpb_base": 0.9390589357612245,
+          "regression_pct": 1.4815747075567467,
+          "retained": true,
+          "share_covered": 0.7792207792207793,
+          "threshold_pct": 1.5
+        }
+      },
+      {
+        "arm": "code-probe-lr0.002",
+        "code_bpb": 0.43735857344152895,
+        "code_bpb_base": 0.5871422684627945,
+        "code_bpb_improvement_pct": 25.510630568876664,
+        "code_bpb_threshold_pct": 2.0,
+        "criterion_a_code_bpb": true,
+        "criterion_b_execution": false,
+        "execution": {
+          "humaneval-plus": {
+            "metrics": {
+              "pass@1": {
+                "arm": 0.0,
+                "base": 0.0,
+                "delta_points": 0.0,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 1.0
+              },
+              "pass@1_plus": {
+                "arm": 0.0,
+                "base": 0.0,
+                "delta_points": 0.0,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 1.0
+              },
+              "syntax_valid": {
+                "arm": 1.0,
+                "base": 1.0,
+                "delta_points": 0.0,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 2.0
+              }
+            },
+            "moved": false,
+            "n": 164
+          },
+          "mbpp-plus": {
+            "metrics": {
+              "pass@1": {
+                "arm": 0.007936507936507936,
+                "base": 0.007936507936507936,
+                "delta_points": 0.0,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 1.0
+              },
+              "pass@1_plus": {
+                "arm": 0.007936507936507936,
+                "base": 0.005291005291005291,
+                "delta_points": 0.26455026455026454,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 1.0
+              },
+              "syntax_valid": {
+                "arm": 0.2566137566137566,
+                "base": 0.23809523809523808,
+                "delta_points": 1.8518518518518545,
+                "moved": false,
+                "regressed": false,
+                "threshold_points": 2.0
+              }
+            },
+            "moved": false,
+            "n": 378
+          }
+        },
+        "qualifies": true,
+        "retention": {
+          "general_bpb": 0.967644466954371,
+          "general_bpb_base": 0.9390589357612245,
+          "regression_pct": 3.044061464574043,
+          "retained": false,
+          "share_covered": 0.7792207792207793,
+          "threshold_pct": 1.5
+        }
+      }
+    ],
+    "best_before_retention": "code-probe-lr0.002",
+    "continue": true,
+    "gate": "probes_250m",
+    "qualifying": [
+      "code-probe-lr0.0005",
+      "code-probe-lr0.001",
+      "code-probe-lr0.002"
+    ],
+    "ranking": [
+      "code-probe-lr0.002",
+      "code-probe-lr0.001",
+      "code-probe-lr0.0005"
+    ],
+    "reading": "loose: continue when any arm clears either criterion",
+    "reason": "3 of 3 arm(s) cleared a criterion",
+    "thresholds": {
+      "code_bpb_improvement_pct": 2.0,
+      "execution_move_points": {
+        "pass@1": 1.0,
+        "pass@1_plus": 1.0,
+        "syntax_valid": 2.0
+      }
+    }
+  },
+  "general_bpb_base": {
+    "bpb": 0.9390589357612245,
+    "card": "runs/eval/code-base/general-bpb.json",
+    "share_covered": 0.7792207792207793,
+    "sources": [
+      "dclm-baseline",
+      "fineweb-edu"
+    ]
+  },
+  "models": {
+    "base": {
+      "cards": "runs/eval/code-base",
+      "checkpoint": "/root/daedalus/final/hero/checkpoint.pt"
+    },
+    "code-probe-lr0.0005": {
+      "cards": "runs/eval/code-probe-lr0.0005",
+      "checkpoint": "runs/code-probe-lr0.0005/checkpoint.pt"
+    },
+    "code-probe-lr0.001": {
+      "cards": "runs/eval/code-probe-lr0.001",
+      "checkpoint": "runs/code-probe-lr0.001/checkpoint.pt"
+    },
+    "code-probe-lr0.002": {
+      "cards": "runs/eval/code-probe-lr0.002",
+      "checkpoint": "runs/code-probe-lr0.002/checkpoint.pt"
+    }
+  },
+  "plan": {
+    "caveats": [
+      "data/holdout/stack-edu-python is GitHub Python from the same dataset and revision the code bucket streams, and the code corpus is repository-split against its own holdout only -- so that source cannot serve as a general-retention measurement for a model being trained on code. Score general BPB over the general-text sources separately from it."
+    ],
+    "code-bpb": {
+      "absent": [],
+      "bucket": "code",
+      "share_covered": 1.0,
+      "sources": [
+        "code-javascript-typescript-javascript-all",
+        "code-javascript-typescript-typescript-all",
+        "code-python"
+      ],
+      "weights": {
+        "code-javascript-typescript-javascript-all": 0.1934265476923077,
+        "code-javascript-typescript-typescript-all": 0.2565734523076923,
+        "code-python": 0.55
+      }
+    },
+    "general-bpb": {
+      "absent": [
+        "cosmopedia-v2",
+        "everyday-conversations",
+        "finephrase",
+        "finewiki-en"
+      ],
+      "bucket": "general-replay",
+      "share_covered": 0.7792207792207793,
+      "sources": [
+        "dclm-baseline",
+        "fineweb-edu"
+      ],
+      "weights": {
+        "dclm-baseline": 0.37499999999999994,
+        "fineweb-edu": 0.625
+      }
+    },
+    "holdout_root": "data/code-mixture/holdout",
+    "present": [
+      "code-javascript-typescript-javascript-all",
+      "code-javascript-typescript-typescript-all",
+      "code-python",
+      "dclm-baseline",
+      "fineweb-edu"
+    ],
+    "unscored": []
+  },
+  "reason": "code-probe-lr0.001 is the lowest-code-BPB qualifying arm that holds general BPB within 1.5%",
+  "retention": {
+    "code-probe-lr0.0005": {
+      "general_bpb": 0.9455994215888892,
+      "general_bpb_base": 0.9390589357612245,
+      "regression_pct": 0.6964936468404802,
+      "retained": true,
+      "share_covered": 0.7792207792207793,
+      "threshold_pct": 1.5
+    },
+    "code-probe-lr0.001": {
+      "general_bpb": 0.9529717954425143,
+      "general_bpb_base": 0.9390589357612245,
+      "regression_pct": 1.4815747075567467,
+      "retained": true,
+      "share_covered": 0.7792207792207793,
+      "threshold_pct": 1.5
+    },
+    "code-probe-lr0.002": {
+      "general_bpb": 0.967644466954371,
+      "general_bpb_base": 0.9390589357612245,
+      "regression_pct": 3.044061464574043,
+      "retained": false,
+      "share_covered": 0.7792207792207793,
+      "threshold_pct": 1.5
+    }
+  },
+  "retention_rejected": [
+    "code-probe-lr0.002"
+  ],
+  "retention_threshold_pct": 1.5,
+  "schema": 1,
+  "selected": "code-probe-lr0.001"
+}

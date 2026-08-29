@@ -1,0 +1,24 @@
+{
+  "item_count": 3,
+  "item_digest": "0b0ae74091d083283fcbce45f8d81312",
+  "items": [
+    {
+      "bpb": 0.5061984528085198,
+      "id": "code-javascript-typescript-javascript-all",
+      "tokens": 859869
+    },
+    {
+      "bpb": 0.1391207850808585,
+      "id": "code-javascript-typescript-typescript-all",
+      "tokens": 1160534
+    },
+    {
+      "bpb": 0.4887835613155193,
+      "id": "code-python",
+      "tokens": 2000611
+    }
+  ],
+  "kind": "bpb",
+  "name": "code-bpb",
+  "schema": 1
+}

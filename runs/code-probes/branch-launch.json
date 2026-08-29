@@ -1,0 +1,217 @@
+{
+  "arm": {
+    "adam_lr": 1.4999999999999999e-05,
+    "estimated_steps": 1908,
+    "muon_lr": 0.001,
+    "name": "code-branch-1b",
+    "total_tokens": 1000000000,
+    "warmup_steps": 95
+  },
+  "command": [
+    "python",
+    "train.py",
+    "--run-name",
+    "code-branch-1b",
+    "--config",
+    "daedalus-150m",
+    "--data-dir",
+    "data/code-mixture/train",
+    "--init-from",
+    "/root/daedalus/final/hero/checkpoint.pt",
+    "--total-tokens",
+    "1000000000",
+    "--micro-batch",
+    "8",
+    "--seq-start",
+    "2048",
+    "--seq-end",
+    "2048",
+    "--tok-start",
+    "524288",
+    "--tok-end",
+    "524288",
+    "--muon-lr",
+    "0.001",
+    "--adam-lr",
+    "1.5e-05",
+    "--warmup-steps",
+    "95",
+    "--decay-frac",
+    "0.8",
+    "--device",
+    "cuda",
+    "--val-dir",
+    "data/code-mixture/holdout",
+    "--val-every-steps",
+    "250",
+    "--mixture-weight",
+    "code-javascript-typescript-javascript-all=0.125727256",
+    "--mixture-weight",
+    "code-javascript-typescript-typescript-all=0.166772744",
+    "--mixture-weight",
+    "code-python=0.35750000000000004",
+    "--mixture-weight",
+    "cosmopedia-v2=0.01298701298701299",
+    "--mixture-weight",
+    "dclm-baseline=0.05844155844155844",
+    "--mixture-weight",
+    "everyday-conversations=0.005194805194805195",
+    "--mixture-weight",
+    "finemath-3plus=0.03214285714285713",
+    "--mixture-weight",
+    "finepdfs-edu=0.0857142857142857",
+    "--mixture-weight",
+    "finephrase=0.018181818181818184",
+    "--mixture-weight",
+    "fineweb-edu=0.09740259740259741",
+    "--mixture-weight",
+    "finewiki-en=0.007792207792207792",
+    "--mixture-weight",
+    "infiwebmath-3plus=0.03214285714285713",
+    "--hub-repo",
+    ""
+  ],
+  "estimated_hours": 7.007908214660502,
+  "gate": "branch_1b",
+  "init_from": {
+    "path": "/root/daedalus/final/hero/checkpoint.pt",
+    "sha256": "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153"
+  },
+  "mixture": {
+    "holdout_root": "data/code-mixture/holdout",
+    "preflight": {
+      "capped_sources": [
+        "everyday-conversations"
+      ],
+      "l1_skew_pts": 0.7161,
+      "max_epochs": 4.0,
+      "max_epochs_seen": 4.0,
+      "most_repeated_source": "everyday-conversations",
+      "per_source": {
+        "code-javascript-typescript-javascript-all": {
+          "capped": false,
+          "effective_share": 0.12618,
+          "epochs": 1.004,
+          "target_share": 0.125727,
+          "tokens_on_disk": 125728713
+        },
+        "code-javascript-typescript-typescript-all": {
+          "capped": false,
+          "effective_share": 0.167373,
+          "epochs": 1.003,
+          "target_share": 0.166773,
+          "tokens_on_disk": 166799914
+        },
+        "code-python": {
+          "capped": false,
+          "effective_share": 0.358787,
+          "epochs": 1.004,
+          "target_share": 0.3575,
+          "tokens_on_disk": 357501624
+        },
+        "cosmopedia-v2": {
+          "capped": false,
+          "effective_share": 0.013034,
+          "epochs": 0.13,
+          "target_share": 0.012987,
+          "tokens_on_disk": 100000000
+        },
+        "dclm-baseline": {
+          "capped": false,
+          "effective_share": 0.058652,
+          "epochs": 0.226,
+          "target_share": 0.058442,
+          "tokens_on_disk": 259854466
+        },
+        "everyday-conversations": {
+          "capped": true,
+          "effective_share": 0.001614,
+          "epochs": 4.0,
+          "target_share": 0.005195,
+          "tokens_on_disk": 403573
+        },
+        "finemath-3plus": {
+          "capped": false,
+          "effective_share": 0.032259,
+          "epochs": 0.323,
+          "target_share": 0.032143,
+          "tokens_on_disk": 100000000
+        },
+        "finepdfs-edu": {
+          "capped": false,
+          "effective_share": 0.086023,
+          "epochs": 0.86,
+          "target_share": 0.085714,
+          "tokens_on_disk": 100000000
+        },
+        "finephrase": {
+          "capped": false,
+          "effective_share": 0.018247,
+          "epochs": 0.182,
+          "target_share": 0.018182,
+          "tokens_on_disk": 100000000
+        },
+        "fineweb-edu": {
+          "capped": false,
+          "effective_share": 0.097753,
+          "epochs": 0.23,
+          "target_share": 0.097403,
+          "tokens_on_disk": 425596079
+        },
+        "finewiki-en": {
+          "capped": false,
+          "effective_share": 0.00782,
+          "epochs": 0.078,
+          "target_share": 0.007792,
+          "tokens_on_disk": 100000000
+        },
+        "infiwebmath-3plus": {
+          "capped": false,
+          "effective_share": 0.032259,
+          "epochs": 0.323,
+          "target_share": 0.032143,
+          "tokens_on_disk": 100000000
+        }
+      },
+      "total_run_tokens": 1000000000,
+      "total_tokens_on_disk": 1935884369
+    },
+    "record": "runs/codeprep/train-mixture.json",
+    "train_root": "data/code-mixture/train",
+    "weights": {
+      "code-javascript-typescript-javascript-all": 0.125727256,
+      "code-javascript-typescript-typescript-all": 0.166772744,
+      "code-python": 0.35750000000000004,
+      "cosmopedia-v2": 0.01298701298701299,
+      "dclm-baseline": 0.05844155844155844,
+      "everyday-conversations": 0.005194805194805195,
+      "finemath-3plus": 0.03214285714285713,
+      "finepdfs-edu": 0.0857142857142857,
+      "finephrase": 0.018181818181818184,
+      "fineweb-edu": 0.09740259740259741,
+      "finewiki-en": 0.007792207792207792,
+      "infiwebmath-3plus": 0.03214285714285713
+    }
+  },
+  "phase": "phase8-branch-1b",
+  "projection": {
+    "hours": 7.007908214660502,
+    "margin": 1.25,
+    "slowest_tok_per_sec": 49547.198905350306,
+    "steps": 1908,
+    "tok_per_sec": {
+      "code-probe-lr0.0005": 49547.198905350306,
+      "code-probe-lr0.001": 49725.05863912524,
+      "code-probe-lr0.002": 49732.3298335905
+    }
+  },
+  "run_dir": "runs/code-branch-1b",
+  "schema": 1,
+  "selected_probe": "code-probe-lr0.001",
+  "supervise_checkpoint": "runs/code-branch-1b/checkpoint.pt",
+  "verdict": {
+    "continue": true,
+    "path": "runs/code-probes/verdict.json",
+    "reason": "code-probe-lr0.001 is the lowest-code-BPB qualifying arm that holds general BPB within 1.5%"
+  }
+}

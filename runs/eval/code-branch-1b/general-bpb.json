@@ -1,0 +1,69 @@
+{
+  "created_at": "2026-08-27T10:25:12.127351Z",
+  "details": {
+    "bucket": "general-replay",
+    "bucket_absent": [
+      "cosmopedia-v2",
+      "everyday-conversations",
+      "finephrase",
+      "finewiki-en"
+    ],
+    "bucket_share_covered": 0.7792207792207793,
+    "caveats": [
+      "data/holdout/stack-edu-python is GitHub Python from the same dataset and revision the code bucket streams, and the code corpus is repository-split against its own holdout only -- so that source cannot serve as a general-retention measurement for a model being trained on code. Score general BPB over the general-text sources separately from it."
+    ],
+    "holdout_root": "data/code-mixture/holdout",
+    "model": "code-branch-1b",
+    "phase": "phase8-code-probes",
+    "sources_requested": [
+      "dclm-baseline",
+      "fineweb-edu"
+    ],
+    "weighting": "explicit",
+    "weights": {
+      "dclm-baseline": 0.37499999999999994,
+      "fineweb-edu": 0.625
+    }
+  },
+  "item_count": 2,
+  "item_digest": "f0c1239520956b61938a0a6c34dc7252",
+  "kind": "bpb",
+  "metrics": {
+    "bpb": 0.9602740757278454,
+    "bpb_dclm-baseline": 1.0599920055733103,
+    "bpb_equal_weight": 0.9802176616969385,
+    "bpb_fineweb-edu": 0.9004433178205666,
+    "bpb_token_weighted": 0.9888373345498146,
+    "n_sources": 2.0,
+    "tokens_dclm-baseline": 66572481.0,
+    "tokens_fineweb-edu": 53588955.0
+  },
+  "name": "general-bpb",
+  "provenance": {
+    "artifact": {
+      "config": "daedalus-150m",
+      "kind": "checkpoint",
+      "path": "runs/code-branch-1b/checkpoint.pt",
+      "revision": null,
+      "sha256": "52c451a1768f17a4e76c263ac5c2f0e09a55918bb23eafd70fd895a1794ac3ae"
+    },
+    "bpb_mode": "full",
+    "bpb_sample_batches": null,
+    "git_sha": "0ad6c9a",
+    "runtime": {
+      "batch_size": 8,
+      "device": "cuda",
+      "seq_len": 2048
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<smollm2-default>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

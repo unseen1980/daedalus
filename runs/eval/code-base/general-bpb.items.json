@@ -1,0 +1,19 @@
+{
+  "item_count": 2,
+  "item_digest": "6fd1c0f279fdd3f0f56db0cd7debaced",
+  "items": [
+    {
+      "bpb": 1.0388629119873702,
+      "id": "dclm-baseline",
+      "tokens": 66572481
+    },
+    {
+      "bpb": 0.8791765500255371,
+      "id": "fineweb-edu",
+      "tokens": 53588955
+    }
+  ],
+  "kind": "bpb",
+  "name": "general-bpb",
+  "schema": 1
+}

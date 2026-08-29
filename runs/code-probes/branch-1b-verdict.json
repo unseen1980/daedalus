@@ -1,0 +1,405 @@
+{
+  "code_bpb_by_source": {
+    "code-javascript-typescript-javascript-all": {
+      "base": 0.7623826496271792,
+      "improvement_pct": 33.603099040086846,
+      "measured": 0.5061984528085198,
+      "tokens": 859869.0,
+      "weight": 0.1934265476923077
+    },
+    "code-javascript-typescript-typescript-all": {
+      "base": 0.5963380406414385,
+      "improvement_pct": 76.67081829439957,
+      "measured": 0.1391207850808585,
+      "tokens": 1160534.0,
+      "weight": 0.2565734523076923
+    },
+    "code-python": {
+      "base": 0.521223117627484,
+      "improvement_pct": 6.223737055183549,
+      "measured": 0.4887835613155193,
+      "tokens": 2000611.0,
+      "weight": 0.55
+    }
+  },
+  "continue": false,
+  "five_task_scores": {
+    "base": {
+      "arc_easy": 50.2104377104377,
+      "hellaswag": 37.91077474606652,
+      "openbookqa": 32.4,
+      "piqa": 65.99564744287268,
+      "winogrande": 50.355169692186266
+    },
+    "code-branch-1b": {
+      "arc_easy": 49.87373737373738,
+      "hellaswag": 36.59629555865365,
+      "openbookqa": 32.2,
+      "piqa": 65.12513601741023,
+      "winogrande": 49.408050513022886
+    }
+  },
+  "gate": {
+    "branch": "code-branch-1b",
+    "checks": [
+      {
+        "base": 0.5871422684627945,
+        "branch": 0.4024378780134275,
+        "gate": "code-bpb",
+        "limit_improvement_pct": 2.0,
+        "observed_improvement_pct": 31.458200230234517,
+        "passed": true
+      },
+      {
+        "gate": "code-execution-regression",
+        "moved": [
+          "mbpp-plus"
+        ],
+        "passed": true,
+        "regressed": []
+      },
+      {
+        "base": 0.9390589357612245,
+        "branch": 0.9602740757278454,
+        "gate": "general-bpb",
+        "limit_regression_pct": 1.5,
+        "observed_regression_pct": 2.259191533002497,
+        "passed": false
+      },
+      {
+        "base": 47.37440591831263,
+        "branch": 46.640643892564825,
+        "gate": "five-task-mean",
+        "limit_drop_points": 1.0,
+        "observed_drop_points": 0.7337620257478079,
+        "passed": true
+      },
+      {
+        "gate": "retrieval",
+        "limit_drop_points": 2.0,
+        "missing": [],
+        "passed": false,
+        "per_key": {
+          "retrieval-copy-control:d0": {
+            "base": 1.0,
+            "branch": 1.0,
+            "drop_points": 0.0
+          },
+          "retrieval-mqar:d1024": {
+            "base": 0.91,
+            "branch": 0.92,
+            "drop_points": -1.0000000000000009
+          },
+          "retrieval-mqar:d2048": {
+            "base": 0.86,
+            "branch": 0.88,
+            "drop_points": -2.0000000000000018
+          },
+          "retrieval-mqar:d256": {
+            "base": 0.99,
+            "branch": 0.99,
+            "drop_points": 0.0
+          },
+          "retrieval-mqar:d512": {
+            "base": 0.96,
+            "branch": 0.95,
+            "drop_points": 1.0000000000000009
+          },
+          "retrieval-passkey:d1024": {
+            "base": 0.86,
+            "branch": 0.8,
+            "drop_points": 5.999999999999995
+          },
+          "retrieval-passkey:d2048": {
+            "base": 0.88,
+            "branch": 0.8,
+            "drop_points": 7.9999999999999964
+          },
+          "retrieval-passkey:d256": {
+            "base": 0.83,
+            "branch": 0.85,
+            "drop_points": -2.0000000000000018
+          },
+          "retrieval-passkey:d512": {
+            "base": 0.81,
+            "branch": 0.82,
+            "drop_points": -0.9999999999999898
+          }
+        },
+        "worst_drop_points": 7.9999999999999964,
+        "worst_key": "retrieval-passkey:d2048"
+      }
+    ],
+    "continue": false,
+    "execution": {
+      "humaneval-plus": {
+        "metrics": {
+          "pass@1": {
+            "arm": 0.0,
+            "base": 0.0,
+            "delta_points": 0.0,
+            "moved": false,
+            "regressed": false,
+            "threshold_points": 1.0
+          },
+          "pass@1_plus": {
+            "arm": 0.0,
+            "base": 0.0,
+            "delta_points": 0.0,
+            "moved": false,
+            "regressed": false,
+            "threshold_points": 1.0
+          },
+          "syntax_valid": {
+            "arm": 1.0,
+            "base": 1.0,
+            "delta_points": 0.0,
+            "moved": false,
+            "regressed": false,
+            "threshold_points": 2.0
+          }
+        },
+        "moved": false,
+        "n": 164
+      },
+      "mbpp-plus": {
+        "metrics": {
+          "pass@1": {
+            "arm": 0.021164021164021163,
+            "base": 0.007936507936507936,
+            "delta_points": 1.3227513227513228,
+            "moved": true,
+            "regressed": false,
+            "threshold_points": 1.0
+          },
+          "pass@1_plus": {
+            "arm": 0.015873015873015872,
+            "base": 0.005291005291005291,
+            "delta_points": 1.0582010582010581,
+            "moved": true,
+            "regressed": false,
+            "threshold_points": 1.0
+          },
+          "syntax_valid": {
+            "arm": 0.3862433862433862,
+            "base": 0.23809523809523808,
+            "delta_points": 14.814814814814813,
+            "moved": true,
+            "regressed": false,
+            "threshold_points": 2.0
+          }
+        },
+        "moved": true,
+        "n": 378
+      }
+    },
+    "failed": [
+      "general-bpb",
+      "retrieval"
+    ],
+    "gate": "branch_1b",
+    "reading": "code BPB improvement is required at the 250M stage's own 2% bar, execution is checked for regression only, and all three retention bounds are as written",
+    "reason": "general-bpb, retrieval did not pass",
+    "thresholds": {
+      "code_bpb_improvement_pct": 2.0,
+      "execution_move_points": {
+        "pass@1": 1.0,
+        "pass@1_plus": 1.0,
+        "syntax_valid": 2.0
+      },
+      "five_task_drop_points_max": 1.0,
+      "general_bpb_regression_pct_max": 1.5,
+      "retrieval_drop_points_max": 2.0
+    }
+  },
+  "harness": {
+    "base": {
+      "humaneval-plus": {
+        "backend": "torch",
+        "item_count": 164,
+        "max_new_tokens": 384,
+        "seed": 20260824
+      },
+      "mbpp-plus": {
+        "backend": "torch",
+        "item_count": 378,
+        "max_new_tokens": 384,
+        "seed": 20260824
+      },
+      "retrieval-copy-control": {
+        "backend": "torch",
+        "item_count": 8,
+        "max_new_tokens": 24,
+        "per_depth_n": {
+          "n_d0": 8
+        },
+        "seed": 20260824
+      },
+      "retrieval-mqar": {
+        "backend": "torch",
+        "item_count": 400,
+        "max_new_tokens": 24,
+        "per_depth_n": {
+          "n_d1024": 100,
+          "n_d2048": 100,
+          "n_d256": 100,
+          "n_d512": 100
+        },
+        "seed": 20260824
+      },
+      "retrieval-passkey": {
+        "backend": "torch",
+        "item_count": 400,
+        "max_new_tokens": 24,
+        "per_depth_n": {
+          "n_d1024": 100,
+          "n_d2048": 100,
+          "n_d256": 100,
+          "n_d512": 100
+        },
+        "seed": 20260824
+      }
+    },
+    "code-branch-1b": {
+      "humaneval-plus": {
+        "backend": "torch",
+        "item_count": 164,
+        "max_new_tokens": 384,
+        "seed": 20260824
+      },
+      "mbpp-plus": {
+        "backend": "torch",
+        "item_count": 378,
+        "max_new_tokens": 384,
+        "seed": 20260824
+      },
+      "retrieval-copy-control": {
+        "backend": "torch",
+        "item_count": 8,
+        "max_new_tokens": 24,
+        "per_depth_n": {
+          "n_d0": 8
+        },
+        "seed": 20260824
+      },
+      "retrieval-mqar": {
+        "backend": "torch",
+        "item_count": 400,
+        "max_new_tokens": 24,
+        "per_depth_n": {
+          "n_d1024": 100,
+          "n_d2048": 100,
+          "n_d256": 100,
+          "n_d512": 100
+        },
+        "seed": 20260824
+      },
+      "retrieval-passkey": {
+        "backend": "torch",
+        "item_count": 400,
+        "max_new_tokens": 24,
+        "per_depth_n": {
+          "n_d1024": 100,
+          "n_d2048": 100,
+          "n_d256": 100,
+          "n_d512": 100
+        },
+        "seed": 20260824
+      }
+    }
+  },
+  "models": {
+    "base": {
+      "cards": {
+        "code-bpb": "runs/eval/code-base/code-bpb.json",
+        "general-bpb": "runs/eval/code-base/general-bpb.json",
+        "humaneval-plus": "runs/eval/code-base/humaneval-plus.json",
+        "mbpp-plus": "runs/eval/code-base/mbpp-plus.json",
+        "retrieval-copy-control": "runs/eval/retrieval-base-n100/retrieval-copy-control.json",
+        "retrieval-mqar": "runs/eval/retrieval-base-n100/retrieval-mqar.json",
+        "retrieval-passkey": "runs/eval/retrieval-base-n100/retrieval-passkey.json",
+        "tasks": "runs/eval/baseline-hero-tasks.json"
+      },
+      "details": {
+        "checkpoint": "/root/daedalus/final/hero/checkpoint.pt",
+        "code_bpb_by_source": {
+          "code-javascript-typescript-javascript-all": {
+            "bpb": 0.7623826496271792,
+            "tokens": 859869.0,
+            "weight": 0.1934265476923077
+          },
+          "code-javascript-typescript-typescript-all": {
+            "bpb": 0.5963380406414385,
+            "tokens": 1160534.0,
+            "weight": 0.2565734523076923
+          },
+          "code-python": {
+            "bpb": 0.521223117627484,
+            "tokens": 2000611.0,
+            "weight": 0.55
+          }
+        },
+        "five_task_scores": {
+          "arc_easy": 50.2104377104377,
+          "hellaswag": 37.91077474606652,
+          "openbookqa": 32.4,
+          "piqa": 65.99564744287268,
+          "winogrande": 50.355169692186266
+        },
+        "general_bpb_share_covered": 0.7792207792207793,
+        "general_bpb_sources": [
+          "dclm-baseline",
+          "fineweb-edu"
+        ]
+      },
+      "sha256": "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153"
+    },
+    "code-branch-1b": {
+      "cards": {
+        "code-bpb": "runs/eval/code-branch-1b/code-bpb.json",
+        "general-bpb": "runs/eval/code-branch-1b/general-bpb.json",
+        "humaneval-plus": "runs/eval/code-branch-1b/humaneval-plus.json",
+        "mbpp-plus": "runs/eval/code-branch-1b/mbpp-plus.json",
+        "retrieval-copy-control": "runs/eval/code-branch-1b/retrieval-copy-control.json",
+        "retrieval-mqar": "runs/eval/code-branch-1b/retrieval-mqar.json",
+        "retrieval-passkey": "runs/eval/code-branch-1b/retrieval-passkey.json",
+        "tasks": "runs/eval/code-branch-1b/tasks.json"
+      },
+      "details": {
+        "checkpoint": "runs/code-branch-1b/checkpoint.pt",
+        "code_bpb_by_source": {
+          "code-javascript-typescript-javascript-all": {
+            "bpb": 0.5061984528085198,
+            "tokens": 859869.0,
+            "weight": 0.1934265476923077
+          },
+          "code-javascript-typescript-typescript-all": {
+            "bpb": 0.1391207850808585,
+            "tokens": 1160534.0,
+            "weight": 0.2565734523076923
+          },
+          "code-python": {
+            "bpb": 0.4887835613155193,
+            "tokens": 2000611.0,
+            "weight": 0.55
+          }
+        },
+        "five_task_scores": {
+          "arc_easy": 49.87373737373738,
+          "hellaswag": 36.59629555865365,
+          "openbookqa": 32.2,
+          "piqa": 65.12513601741023,
+          "winogrande": 49.408050513022886
+        },
+        "general_bpb_share_covered": 0.7792207792207793,
+        "general_bpb_sources": [
+          "dclm-baseline",
+          "fineweb-edu"
+        ]
+      },
+      "sha256": "52c451a1768f17a4e76c263ac5c2f0e09a55918bb23eafd70fd895a1794ac3ae"
+    }
+  },
+  "reason": "general-bpb, retrieval did not pass",
+  "schema": 1
+}
