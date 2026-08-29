@@ -449,6 +449,30 @@ The guard it forced stays, because it was never about this one run. A trainer do
 
 One thing stays on the record unexplained rather than attributed: `runs/code-branch-1b/milestone-checkpoint.pt` — 1.435G, present at 10:05Z — was gone by 10:35Z, deleted by nothing in this repository and recorded by no controller event.
 
+### The artifact exports to stock llama.cpp, and carries the base's Q4 damage
+
+The gate stops the training ladder; it does not stop the branch being an artifact. Exported from the scored checkpoint `52c451a1768f` through unmodified llama.cpp with no imatrix: **306.22 MiB f16 → 95.56 MiB Q4_0** over 164 tensors, `sha256:b087eb09…` and `sha256:3e8302cd…`.
+
+| | released base | Daedalus-Code V1 |
+| --- | ---: | ---: |
+| fp16 perplexity | 6.6135 | 6.894 |
+| Q4_0 perplexity | 6.9798 | 7.3235 |
+| **Q4 penalty** | **5.54%** | **6.23%** |
+
+The phase's final gate asks that the Q4 penalty "meets the selected V1 QAT target or is transparently reported". **There is no selected target.** Phase 3's three QAT probes each eliminated the Q4 penalty outright — `lr 1e-3` reached −0.37%, Q4 *better* than fp16 — and each failed retention on fp16 perplexity and on `passkey:d2048`; `runs/qat-recovery/verdict.json` records `winner: null`. So step 8 had no recipe to inherit even before gate 2 stopped it, and this number is the transparent report. Continued pretraining neither repaired the damage nor materially worsened it.
+
+The fp16 figure moved with it: 6.6135 → 6.894 is +4.24% on finewiki, the same direction and rough size as the +2.26% general-replay BPB the gate stopped on, measured on a different corpus. Two corpora agreeing is worth more than either alone.
+
+Decode on 8 of 24 CPU threads with the GPU idle: **280.0 tok/s** at depth 0, 245.0 at 512, **229.8** at the trained 2048.
+
+Only `quantization_check.json` is committed. The GGUFs and safetensors are ignored by name, and the model card `export.py` regenerated is the *general* model's template — its bar-to-beat and its deviations list belong to the released model — so it is left for publication to rewrite rather than committed as this artifact's description.
+
+### Two runs from the same base lost the same depth
+
+Worth stating once, because it is the only finding in this phase that is not about code. Phase 3's QAT recovery and phase 8's 1B branch share nothing but their starting weights — different data, different objective, different learning rates, 100M tokens against 1B. Both cleared their progress gate outright. Both failed retention. And both failed it on **`retrieval-passkey:d2048`**: −7.0 points for `qat-recovery-lr0.001`, −8.0 for `code-branch-1b`, one-sided in the paired test here.
+
+That is a property of the released checkpoint rather than of either treatment, and it belongs in the V2 recommendation rather than in this branch's model card: the released model's long-depth passkey retrieval does not survive further training, whatever the further training is.
+
 ### The evidence is now in the branch, not only in the container
 
 The two verdicts, the stop record and every scorecard behind them are committed here, per-item sidecars included. Phase 9 is required to re-run its headline metrics from immutable artifacts, and the base's own retrieval sidecars have been tracked since phase 3 at the same size — a branch scored against them whose items are not kept is a difference nobody else can check.
