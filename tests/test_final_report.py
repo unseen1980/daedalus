@@ -275,6 +275,17 @@ def test_markdown_keeps_each_caveat_with_its_finding(tmp_path):
     assert "- **general BPB regression**\n  - still accruing at 1B" in rendered
 
 
+def test_markdown_does_not_end_with_a_blank_line(tmp_path):
+    """`git diff --check` rejects one, so the report could not be committed."""
+
+    payload = _report(tmp_path)
+
+    rendered = render_markdown(payload, title="R", preamble="P")
+
+    assert rendered.endswith("|\n")
+    assert not rendered.endswith("\n\n")
+
+
 def test_markdown_flags_a_mismatched_artifact_loudly(tmp_path):
     target = tmp_path / "model.gguf"
     target.write_bytes(b"weights")

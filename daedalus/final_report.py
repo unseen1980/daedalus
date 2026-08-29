@@ -433,8 +433,11 @@ def render_markdown(payload: dict, *, title: str, preamble: str) -> str:
                     None: "fingerprint only"}[record["sha256"]["verified"]]
         lines.append(f"| `{record['name']}` | {record['role']} | "
                      f"`{digest[:16]}` | {verified} |")
-    lines.append("")
-    return "\n".join(lines) + "\n"
+    # Sections append a trailing "" to separate themselves, so the last one
+    # leaves a blank line at EOF -- which `git diff --check` rejects, and which
+    # is how this was found: the report could not be committed. Strip it here
+    # rather than at each append site, so a new section cannot reintroduce it.
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 _SCOPE_DESCRIPTION = {
