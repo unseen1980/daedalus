@@ -1,0 +1,32 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+{
+  "fail_assertion_failed": 159.0,
+  "fail_exception": 5.0,
+  "n": 164.0,
+  "pass@1": 0.0,
+  "pass@1_plus": 0.0,
+  "syntax_valid": 1.0
+}
+wrote runs/eval/code-base/humaneval-plus.json
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+{
+  "fail_assertion_failed": 159.0,
+  "fail_exception": 5.0,
+  "n": 164.0,
+  "pass@1": 0.0,
+  "pass@1_plus": 0.0,
+  "plus_inputs_absent": 0.0,
+  "syntax_valid": 1.0
+}
+wrote runs/eval/code-base/humaneval-plus.json
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+{
+  "fail_assertion_failed": 159.0,
+  "fail_exception": 5.0,
+  "n": 164.0,
+  "pass@1": 0.0,
+  "pass@1_plus": 0.0,
+  "plus_inputs_absent": 0.0,
+  "syntax_valid": 1.0
+}
+wrote runs/eval/code-base/humaneval-plus.json

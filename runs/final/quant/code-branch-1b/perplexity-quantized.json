@@ -1,0 +1,42 @@
+{
+  "created_at": "2026-08-29T03:36:48.393770Z",
+  "details": {
+    "n_ctx": 512,
+    "text_file": "data/eval/ppl-finewiki-150k.txt"
+  },
+  "item_count": 292,
+  "item_digest": "f23af9f1011ffa244439acd203b5841d",
+  "kind": "paired-quant",
+  "metrics": {
+    "mean_nll": 1.9910883557762251,
+    "perplexity": 7.323500000000003
+  },
+  "name": "perplexity-quantized",
+  "provenance": {
+    "artifact": {
+      "config": null,
+      "kind": "gguf-q4_0",
+      "path": "runs/code-branch-1b/export/model-q4_0.gguf",
+      "revision": null,
+      "sha256": "3e8302cdd3bcb6c14fb3135ab89982733a5041b0e02206dd0e6795efbbbae0a5"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "b12de92",
+    "runtime": {
+      "llama_cpp_commit": "unknown",
+      "llama_perplexity": "/opt/llama.cpp/build/bin/llama-perplexity",
+      "threads": 16
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<embedded-in-gguf>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

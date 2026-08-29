@@ -1,0 +1,987 @@
+{
+  "artifacts": {
+    "all_recorded_digests_match": true,
+    "fingerprinted_only": [
+      "tokenizer-v32768"
+    ],
+    "matched": [
+      "released-base-checkpoint",
+      "released-base-f16-gguf",
+      "released-base-q4_0-gguf",
+      "code-branch-1b-checkpoint",
+      "code-branch-1b-f16-gguf",
+      "code-branch-1b-q4_0-gguf",
+      "qat-recovery-lr0.001-f16-gguf",
+      "qat-recovery-lr0.001-q4_0-gguf"
+    ],
+    "mismatched": [],
+    "records": [
+      {
+        "config": "daedalus-150m",
+        "data_manifest": null,
+        "hub": {
+          "path": null,
+          "private": null,
+          "repo": null,
+          "revision": null
+        },
+        "kind": "checkpoint",
+        "name": "released-base-checkpoint",
+        "notes": "unmodified throughout; this program never wrote to it",
+        "path": "/root/daedalus/final/hero/checkpoint.pt",
+        "producing_commit": "pre-program (released artifact)",
+        "producing_commit_basis": "not built by this program",
+        "role": "the immutable baseline every gate is measured against",
+        "seed": null,
+        "sha256": {
+          "detail": "",
+          "expected": "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153",
+          "observed": "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153",
+          "verified": true
+        },
+        "tokenizer": "HuggingFaceTB/SmolLM2-135M (49,152 entries), sha256 c191819e74634ef249cd609f55bb135ac4789069ce90e98dc9d3dee52e3e22af"
+      },
+      {
+        "config": "daedalus-150m",
+        "data_manifest": null,
+        "hub": {
+          "path": null,
+          "private": null,
+          "repo": null,
+          "revision": null
+        },
+        "kind": "gguf-f16",
+        "name": "released-base-f16-gguf",
+        "notes": null,
+        "path": "/root/daedalus/gguf/hero-base-f16.gguf",
+        "producing_commit": "pre-program (released artifact)",
+        "producing_commit_basis": "not built by this program",
+        "role": "released FP16 artifact, the FP16 side of the Q4 penalty",
+        "seed": null,
+        "sha256": {
+          "detail": "",
+          "expected": "95f1e6795b715be82495fcc68df68946727c4d198589992eccf31d50ed08eeff",
+          "observed": "95f1e6795b715be82495fcc68df68946727c4d198589992eccf31d50ed08eeff",
+          "verified": true
+        },
+        "tokenizer": "HuggingFaceTB/SmolLM2-135M (49,152 entries), sha256 c191819e74634ef249cd609f55bb135ac4789069ce90e98dc9d3dee52e3e22af"
+      },
+      {
+        "config": "daedalus-150m",
+        "data_manifest": null,
+        "hub": {
+          "path": null,
+          "private": null,
+          "repo": null,
+          "revision": null
+        },
+        "kind": "gguf-q4_0",
+        "name": "released-base-q4_0-gguf",
+        "notes": null,
+        "path": "/root/daedalus/gguf/hero-base-q4_0.gguf",
+        "producing_commit": "pre-program (released artifact)",
+        "producing_commit_basis": "not built by this program",
+        "role": "released Q4_0 artifact, the one a user runs",
+        "seed": null,
+        "sha256": {
+          "detail": "",
+          "expected": "1d45ce41239b9e03573cd29a7a71dbc550ec443821f3e19d1b4e0042a4a1ec97",
+          "observed": "1d45ce41239b9e03573cd29a7a71dbc550ec443821f3e19d1b4e0042a4a1ec97",
+          "verified": true
+        },
+        "tokenizer": "HuggingFaceTB/SmolLM2-135M (49,152 entries), sha256 c191819e74634ef249cd609f55bb135ac4789069ce90e98dc9d3dee52e3e22af"
+      },
+      {
+        "config": "daedalus-150m",
+        "data_manifest": "runs/codeprep/train-mixture.json",
+        "hub": {
+          "path": null,
+          "private": null,
+          "repo": null,
+          "revision": null
+        },
+        "kind": "checkpoint",
+        "name": "code-branch-1b-checkpoint",
+        "notes": null,
+        "path": "runs/code-branch-1b/checkpoint.pt",
+        "producing_commit": "0ad6c9a",
+        "producing_commit_basis": "the commit recording step 1908, the final step",
+        "role": "Daedalus-Code V1, 1B continued-pretraining tokens; terminal",
+        "seed": 20260824,
+        "sha256": {
+          "detail": "",
+          "expected": "52c451a1768f17a4e76c263ac5c2f0e09a55918bb23eafd70fd895a1794ac3ae",
+          "observed": "52c451a1768f17a4e76c263ac5c2f0e09a55918bb23eafd70fd895a1794ac3ae",
+          "verified": true
+        },
+        "tokenizer": "HuggingFaceTB/SmolLM2-135M (49,152 entries), sha256 c191819e74634ef249cd609f55bb135ac4789069ce90e98dc9d3dee52e3e22af"
+      },
+      {
+        "config": "daedalus-150m",
+        "data_manifest": "runs/codeprep/train-mixture.json",
+        "hub": {
+          "path": null,
+          "private": null,
+          "repo": null,
+          "revision": null
+        },
+        "kind": "gguf-f16",
+        "name": "code-branch-1b-f16-gguf",
+        "notes": null,
+        "path": "runs/code-branch-1b/export/model-f16.gguf",
+        "producing_commit": "f17645a",
+        "producing_commit_basis": "the export commit",
+        "role": "Daedalus-Code FP16 export, stock llama.cpp",
+        "seed": 20260824,
+        "sha256": {
+          "detail": "",
+          "expected": "b087eb098bd575c19a70a2390b3503cb65e758d5c3618c53d74759758150c98c",
+          "observed": "b087eb098bd575c19a70a2390b3503cb65e758d5c3618c53d74759758150c98c",
+          "verified": true
+        },
+        "tokenizer": "HuggingFaceTB/SmolLM2-135M (49,152 entries), sha256 c191819e74634ef249cd609f55bb135ac4789069ce90e98dc9d3dee52e3e22af"
+      },
+      {
+        "config": "daedalus-150m",
+        "data_manifest": "runs/codeprep/train-mixture.json",
+        "hub": {
+          "path": null,
+          "private": null,
+          "repo": null,
+          "revision": null
+        },
+        "kind": "gguf-q4_0",
+        "name": "code-branch-1b-q4_0-gguf",
+        "notes": null,
+        "path": "runs/code-branch-1b/export/model-q4_0.gguf",
+        "producing_commit": "f17645a",
+        "producing_commit_basis": "the export commit",
+        "role": "Daedalus-Code Q4_0 export, stock llama.cpp",
+        "seed": 20260824,
+        "sha256": {
+          "detail": "",
+          "expected": "3e8302cdd3bcb6c14fb3135ab89982733a5041b0e02206dd0e6795efbbbae0a5",
+          "observed": "3e8302cdd3bcb6c14fb3135ab89982733a5041b0e02206dd0e6795efbbbae0a5",
+          "verified": true
+        },
+        "tokenizer": "HuggingFaceTB/SmolLM2-135M (49,152 entries), sha256 c191819e74634ef249cd609f55bb135ac4789069ce90e98dc9d3dee52e3e22af"
+      },
+      {
+        "config": "daedalus-150m",
+        "data_manifest": null,
+        "hub": {
+          "path": null,
+          "private": null,
+          "repo": null,
+          "revision": null
+        },
+        "kind": "gguf-f16",
+        "name": "qat-recovery-lr0.001-f16-gguf",
+        "notes": null,
+        "path": "runs/qat-recovery/export/lr0.001/model-f16.gguf",
+        "producing_commit": "bb5fe46",
+        "producing_commit_basis": "git_sha recorded in the measuring scorecard",
+        "role": "rejected QAT arm, best penalty reduction of the three",
+        "seed": 20260824,
+        "sha256": {
+          "detail": "",
+          "expected": "c12655413bb81fff180fe6030eb5bd50334666b9685a8c132110c8304432468a",
+          "observed": "c12655413bb81fff180fe6030eb5bd50334666b9685a8c132110c8304432468a",
+          "verified": true
+        },
+        "tokenizer": "HuggingFaceTB/SmolLM2-135M (49,152 entries), sha256 c191819e74634ef249cd609f55bb135ac4789069ce90e98dc9d3dee52e3e22af"
+      },
+      {
+        "config": "daedalus-150m",
+        "data_manifest": null,
+        "hub": {
+          "path": null,
+          "private": null,
+          "repo": null,
+          "revision": null
+        },
+        "kind": "gguf-q4_0",
+        "name": "qat-recovery-lr0.001-q4_0-gguf",
+        "notes": null,
+        "path": "runs/qat-recovery/export/lr0.001/model-q4_0.gguf",
+        "producing_commit": "bb5fe46",
+        "producing_commit_basis": "git_sha recorded in the measuring scorecard",
+        "role": "rejected QAT arm, Q4_0 side",
+        "seed": 20260824,
+        "sha256": {
+          "detail": "",
+          "expected": "1fc643d4a55c4d69f9654e21820713e721db9b97300edc60b8cd7a9be0bb69da",
+          "observed": "1fc643d4a55c4d69f9654e21820713e721db9b97300edc60b8cd7a9be0bb69da",
+          "verified": true
+        },
+        "tokenizer": "HuggingFaceTB/SmolLM2-135M (49,152 entries), sha256 c191819e74634ef249cd609f55bb135ac4789069ce90e98dc9d3dee52e3e22af"
+      },
+      {
+        "config": null,
+        "data_manifest": null,
+        "hub": {
+          "path": null,
+          "private": null,
+          "repo": null,
+          "revision": null
+        },
+        "kind": "tokenizer",
+        "name": "tokenizer-v32768",
+        "notes": "a V2 input. No model in this program was trained on it beyond the equal-compute tiny probes that scored it",
+        "path": "data/tokenizer-lab/tokenizers/v32768/tokenizer.json",
+        "producing_commit": null,
+        "producing_commit_basis": "trained by scripts/tokenizer_lab.py",
+        "role": "Phase 4's selected V2 vocabulary; never transplanted into weights",
+        "seed": null,
+        "sha256": {
+          "detail": "hashed at finalization; no earlier digest was recorded for this artifact, so this is a fingerprint and not a match",
+          "expected": null,
+          "observed": "e0236978255695462cdc21910d4ed543a439481501ee33dfc7250ea9df401259",
+          "verified": null
+        },
+        "tokenizer": null
+      }
+    ]
+  },
+  "program": {
+    "generated_at": "2026-08-29T03:43:47Z",
+    "generated_by": "scripts/final_report.py",
+    "head_sha": "b12de92a7d1fd338457ffea8c9e73967afd85f40",
+    "name": "Daedalus improvement and code program"
+  },
+  "schema": 1,
+  "sections": [
+    {
+      "claims": [
+        {
+          "applies_to_released_model": true,
+          "caveats": [],
+          "key": "baseline-fp16-ppl",
+          "scope": "released-model",
+          "sources": [
+            "runs/final/quant/released-base/quant-comparison.json"
+          ],
+          "statement": "FP16 perplexity",
+          "units": null,
+          "value": 6.613500000000001
+        },
+        {
+          "applies_to_released_model": true,
+          "caveats": [],
+          "key": "baseline-q4-ppl",
+          "scope": "released-model",
+          "sources": [
+            "runs/final/quant/released-base/quant-comparison.json"
+          ],
+          "statement": "Q4_0 perplexity",
+          "units": null,
+          "value": 6.9798
+        },
+        {
+          "applies_to_released_model": true,
+          "caveats": [
+            "Paired per-chunk: Q4_0 is worse on 285 of 292 chunks, so the penalty is a consistent shift and not an aggregate artefact."
+          ],
+          "key": "baseline-q4-penalty",
+          "scope": "released-model",
+          "sources": [
+            "runs/final/quant/released-base/quant-comparison.json"
+          ],
+          "statement": "Q4_0 perplexity penalty over FP16",
+          "units": "%",
+          "value": 5.53867090043092
+        },
+        {
+          "applies_to_released_model": true,
+          "caveats": [],
+          "key": "baseline-five-task-mean",
+          "scope": "released-model",
+          "sources": [
+            "runs/eval/baseline-hero-tasks.json",
+            "runs/qat-recovery/baseline.json"
+          ],
+          "statement": "five-task mean (full splits, no per-task limit)",
+          "units": null,
+          "value": 47.37440591831263
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "baseline-reproducibility",
+          "scope": "process",
+          "sources": [
+            "runs/final/quant/released-base/quant-comparison.json",
+            "runs/eval/quant-base/quant-comparison.json"
+          ],
+          "statement": "finalization re-measurement reproduced Phase 0 exactly (identical perplexities, chunk counts and artifact digests)",
+          "units": null,
+          "value": true
+        }
+      ],
+      "key": "released-baseline",
+      "scope": "released-model",
+      "summary": "Re-measured at finalization from the released GGUFs, through stock llama.cpp, against the same 292-chunk text at the same context size as the Phase 0 baseline five days earlier.",
+      "title": "1. Released V1 baseline"
+    },
+    {
+      "claims": [
+        {
+          "applies_to_released_model": true,
+          "caveats": [
+            "The released weights are unchanged. This program ships no improved V1."
+          ],
+          "key": "qat-winner",
+          "scope": "released-model",
+          "sources": [
+            "runs/qat-recovery/verdict.json"
+          ],
+          "statement": "selected recovery checkpoint",
+          "units": null,
+          "value": "none -- all three arms rejected"
+        },
+        {
+          "applies_to_released_model": true,
+          "caveats": [
+            "Negative means Q4_0 scored marginally *better* than its own FP16 parent. All three arms cleared the improvement gate outright; the phase failed on retention, not on the quantization target."
+          ],
+          "key": "qat-penalty-eliminated",
+          "scope": "released-model",
+          "sources": [
+            "runs/qat-recovery/scored/qat-recovery-lr0.001.json"
+          ],
+          "statement": "Q4_0 penalty after recovery at Muon lr 1e-3 (baseline 5.539%)",
+          "units": "%",
+          "value": -0.3729292028823772
+        },
+        {
+          "applies_to_released_model": true,
+          "caveats": [
+            "The shipping artifact did get better in absolute terms (-3.93%). It is rejected because of what it cost elsewhere, which is the trade the retention gates exist to price."
+          ],
+          "key": "qat-q4-absolute",
+          "scope": "released-model",
+          "sources": [
+            "runs/qat-recovery/scored/qat-recovery-lr0.001.json",
+            "runs/qat-recovery/baseline.json"
+          ],
+          "statement": "Q4_0 absolute perplexity after recovery, against the released Q4_0's 6.9798",
+          "units": null,
+          "value": 6.7054
+        },
+        {
+          "applies_to_released_model": true,
+          "caveats": [],
+          "key": "qat-fp16-retention",
+          "scope": "released-model",
+          "sources": [
+            "runs/qat-recovery/scored/qat-recovery-lr0.001.json"
+          ],
+          "statement": "FP16 perplexity regression (gate: at most 0.5%)",
+          "units": "%",
+          "value": 1.7691086414152402
+        },
+        {
+          "applies_to_released_model": true,
+          "caveats": [],
+          "key": "qat-retrieval-retention",
+          "scope": "released-model",
+          "sources": [
+            "runs/qat-recovery/scored/qat-recovery-lr0.001.json"
+          ],
+          "statement": "worst retrieval drop, at passkey d2048 (gate: at most 1 point)",
+          "units": "points",
+          "value": 6.999999999999995
+        },
+        {
+          "applies_to_released_model": true,
+          "caveats": [
+            "General task scores rose. The damage is concentrated in long-context retrieval, which the five-task suite does not measure."
+          ],
+          "key": "qat-five-task",
+          "scope": "released-model",
+          "sources": [
+            "runs/qat-recovery/scored/qat-recovery-lr0.001.json"
+          ],
+          "statement": "five-task mean after recovery, against the baseline's 47.37",
+          "units": null,
+          "value": 48.08226053914475
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "qat-escalation",
+          "scope": "process",
+          "sources": [
+            "runs/qat-recovery/verdict.json"
+          ],
+          "statement": "escalation to 300M and 1B tokens",
+          "units": null,
+          "value": "refused -- no 100M probe passed both the improvement and retention gates; reporting the negative result rather than escalating"
+        }
+      ],
+      "key": "qat-recovery",
+      "scope": "released-model",
+      "summary": "Three 100M-token probes from `--init-from` on the released base, exact-grid QAT from step one, identical data order and seed. All three eliminated the Q4_0 penalty. All three failed retention. **Negative result: no recovery checkpoint is recommended and the released weights are untouched.**",
+      "title": "2. QAT recovery of the released model"
+    },
+    {
+      "claims": [
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "Weighted over three sources whose individual improvements are 6.2% (Python), 33.6% (JavaScript) and 76.7% (TypeScript). TypeScript is 25.7% of the weight and contributes about 20 of the 31.46 points -- two thirds of the headline from a quarter of the mixture.",
+            "Its held-out BPB of 0.139 is low enough to need explaining. File-level leakage is excluded (own source directory, salted per-repository split, zero rows admitted without a repository), but the TypeScript holdout is narrow and generated or vendored content would produce this honestly and mean little. Unresolved; see runs/final/daedalus-code-next.md step 0.",
+            "The Python figure, 6.2%, is the one to quote against a Python-first claim -- and both gate benchmarks are Python-only."
+          ],
+          "key": "code-bpb",
+          "scope": "code-model",
+          "sources": [
+            "runs/code-probes/branch-1b-verdict.json"
+          ],
+          "statement": "held-out code BPB improvement (gate: at least 2%)",
+          "units": "%",
+          "value": 31.458200230234517
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "code-bpb-python",
+          "scope": "code-model",
+          "sources": [
+            "runs/code-probes/branch-1b-verdict.json"
+          ],
+          "statement": "Python held-out BPB improvement, the 55% bucket",
+          "units": "%",
+          "value": 6.223737055183549
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "The signal that moved. This was preregistered as the more sensitive alternative to pass@1 at a scale where pass@1 is near zero."
+          ],
+          "key": "code-mbpp-syntax",
+          "scope": "code-model",
+          "sources": [
+            "runs/code-probes/branch-1b-verdict.json"
+          ],
+          "statement": "MBPP+ syntax validity, from a 0.238 base",
+          "units": null,
+          "value": 0.3862433862433862
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "8 of 378 items against 3. At a 150M base this is movement off the floor, not a usable coding model."
+          ],
+          "key": "code-mbpp-pass1",
+          "scope": "code-model",
+          "sources": [
+            "runs/code-probes/branch-1b-verdict.json"
+          ],
+          "statement": "MBPP+ pass@1, from a 0.0079 base",
+          "units": null,
+          "value": 0.021164021164021163
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "Zero before and after. The harness is not at fault: the canonical-solution oracle returns 1.000 through the identical sandbox."
+          ],
+          "key": "code-humaneval",
+          "scope": "code-model",
+          "sources": [
+            "runs/code-probes/branch-1b-verdict.json"
+          ],
+          "statement": "HumanEval+ pass@1, base and branch alike",
+          "units": null,
+          "value": 0.0
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "The selected probe measured 1.48% at 250M tokens, inside the bound. Four times the tokens took it to 2.26%: the cost is still accruing, which is the argument against the 2B extension."
+          ],
+          "key": "code-general-bpb",
+          "scope": "code-model",
+          "sources": [
+            "runs/code-probes/branch-1b-verdict.json"
+          ],
+          "statement": "general-replay BPB regression (gate: at most 1.5%) -- FAILED",
+          "units": "%",
+          "value": 2.259191533002497
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "Paired McNemar p=0.013, and 8 of 8 discordant items moved against the branch. Not noise."
+          ],
+          "key": "code-retrieval",
+          "scope": "code-model",
+          "sources": [
+            "runs/code-probes/branch-1b-verdict.json",
+            "runs/code-probes/branch-1b-stop.json"
+          ],
+          "statement": "worst retrieval drop, at passkey d2048 (gate: at most 2 points) -- FAILED",
+          "units": "points",
+          "value": 7.9999999999999964
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "code-five-task",
+          "scope": "code-model",
+          "sources": [
+            "runs/code-probes/branch-1b-verdict.json"
+          ],
+          "statement": "five-task mean drop (gate: at most 1 point)",
+          "units": "points",
+          "value": 0.7337620257478079
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "The branch inherits the base's quantization damage and adds a little. It was trained in full precision with no QAT, and Phase 3 selected no recipe to inherit."
+          ],
+          "key": "code-q4-penalty",
+          "scope": "code-model",
+          "sources": [
+            "runs/final/quant/code-branch-1b/quant-comparison.json"
+          ],
+          "statement": "Q4_0 penalty of the exported branch, against the released base's 5.54% on the identical text",
+          "units": "%",
+          "value": 6.230055120394606
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "code-probe-lr0.001 is the lowest-code-BPB qualifying arm that holds general BPB within 1.5%"
+          ],
+          "key": "code-probe-selection",
+          "scope": "code-model",
+          "sources": [
+            "runs/code-probes/verdict.json"
+          ],
+          "statement": "selected probe learning rate",
+          "units": null,
+          "value": "code-probe-lr0.001"
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "code-stages-not-run",
+          "scope": "process",
+          "sources": [
+            "runs/code-probes/branch-1b-verdict.json",
+            "runs/code-probes/branch-1b-stop.json"
+          ],
+          "statement": "stages the failed gate cancelled",
+          "units": null,
+          "value": "2B extension, code/general SFT, execution-grounded DPO, and the QAT pass over the final code checkpoint"
+        }
+      ],
+      "key": "daedalus-code",
+      "scope": "code-model",
+      "summary": "Continued pretraining from `hero-base-f16` on a 65/15/20 code/technical/replay mixture, Python 55% and JavaScript-TypeScript 45%, split by repository. Three 250M-token probes selected Muon lr 1e-3; the 1B branch then **failed its continuation gate** on general BPB and retrieval, so the 2B extension, the SFT stage and the preference stage did not run. The 1B checkpoint is the terminal artifact and it is a base model, not an instruct model.",
+      "title": "3. Daedalus-Code V1"
+    },
+    {
+      "claims": [
+        {
+          "applies_to_released_model": true,
+          "caveats": [
+            "Two unrelated treatments breaking the same capability in the same place points at the checkpoint rather than at either treatment. The released model's deepest retrieval appears to sit on a narrow basin that ordinary continued training leaves.",
+            "This is a hypothesis with two supporting observations, not an established mechanism. It was not isolated -- doing so needs an arm that varies only the starting weights, which no phase ran.",
+            "It is the single most consequential result for V2: it says the shipped checkpoint is hard to build on, which is a different problem from any that phases 4 to 7 were scoped to find."
+          ],
+          "key": "cross-passkey-2048",
+          "scope": "released-model",
+          "sources": [
+            "runs/qat-recovery/scored/qat-recovery-lr0.001.json",
+            "runs/code-probes/branch-1b-stop.json"
+          ],
+          "statement": "passkey d2048 drop under two unrelated continuations of the released base",
+          "units": null,
+          "value": "7.0 points (QAT lr 1e-3) and 8.0 points (code 1B)"
+        }
+      ],
+      "key": "cross-phase",
+      "scope": "released-model",
+      "summary": "Phase 3's QAT recovery and Phase 8's code branch share nothing but their starting weights. Different data, different objective, different token budget, independently preregistered gates -- and each cleared its own progress criterion outright. Both then failed retention in the same place.",
+      "title": "4. The finding that spans two phases"
+    },
+    {
+      "claims": [
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "32768 cleared every clause and has the best tiny-model BPB among those that did"
+          ],
+          "key": "tok-selected",
+          "scope": "proxy",
+          "sources": [
+            "runs/tokenizer-lab/verdict.json"
+          ],
+          "statement": "selected V2 vocabulary size",
+          "units": null,
+          "value": 32768
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "tok-code-fertility",
+          "scope": "proxy",
+          "sources": [
+            "runs/tokenizer-lab/verdict.json"
+          ],
+          "statement": "code bytes-per-token change at 32,768 (negative is better)",
+          "units": "%",
+          "value": -3.0401576255996514
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "Measured on equal-compute tiny models, not on the 150M shape. It ranks vocabularies; it does not predict what a 150M or larger V2 would score."
+          ],
+          "key": "tok-tiny-bpb",
+          "scope": "proxy",
+          "sources": [
+            "runs/tokenizer-lab/verdict.json"
+          ],
+          "statement": "tiny-model held-out BPB regression under the worse of the two protocols (bar: 0.5%)",
+          "units": "%",
+          "value": 0.037622770910901195
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "10.3 MB of a ~101 MB Q4_0 artifact. This half of the result is arithmetic and transfers to any shape; the quality half does not."
+          ],
+          "key": "tok-embedding-bytes",
+          "scope": "proxy",
+          "sources": [
+            "runs/tokenizer-lab/verdict.json"
+          ],
+          "statement": "embedding Q6_K bytes saved against the incumbent",
+          "units": "%",
+          "value": 33.3
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "A real defect in the shipped tokenizer, found while measuring the reference. It is not fixable in V1 for the same reason 32,768 is not adoptable in V1."
+          ],
+          "key": "tok-incumbent-defect",
+          "scope": "proxy",
+          "sources": [
+            "runs/tokenizer-lab/addendum.json"
+          ],
+          "statement": "the shipped SmolLM2 vocabulary fails the byte round-trip the candidates were held to",
+          "units": null,
+          "value": "missing 21 of 256 byte characters; cannot round-trip U+40000-U+FFFFF"
+        }
+      ],
+      "key": "tokenizer",
+      "scope": "proxy",
+      "summary": "Three byte-level BPE vocabularies trained on a deterministic source-balanced sample and scored against the shipped SmolLM2 49,152 by a rule fixed before the numbers existed. **32,768 cleared every clause.** Nothing here was transplanted into any trained weights, because a vocabulary cannot be.",
+      "title": "5. Tokenizer lab (V2 only)"
+    },
+    {
+      "claims": [
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "conv-control-death",
+          "scope": "proxy",
+          "sources": [
+            "runs/conv-health/verdict-paired.json"
+          ],
+          "statement": "dead conv-channel fraction under the shipped 0.1 decay, at the 150M shape over 500M tokens",
+          "units": "%",
+          "value": 53.86284722222222
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "Effectively zero. The honest framing of the opportunity is parameters paid for and not used, not quality lost."
+          ],
+          "key": "conv-ablation",
+          "scope": "proxy",
+          "sources": [
+            "runs/conv-health/verdict-paired.json"
+          ],
+          "statement": "held-out loss cost of removing every channel the control flagged dead",
+          "units": "nats",
+          "value": 2.9802322387695312e-08
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "Fourteen times the bar. This is not a threshold a slightly different ramp would have cleared."
+          ],
+          "key": "conv-best-arm",
+          "scope": "proxy",
+          "sources": [
+            "runs/conv-health/verdict-paired.json"
+          ],
+          "statement": "lowest dead fraction any arm reached (weak-0.0133), against a 1% bar",
+          "units": "%",
+          "value": 14.518229166666666
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "1.61x at the shorter screen, 2.33x here: the cost grows with the decay clock rather than settling. That is the equilibrium objection, now measured."
+          ],
+          "key": "conv-norm-cost",
+          "scope": "proxy",
+          "sources": [
+            "runs/conv-health/verdict-paired.json"
+          ],
+          "statement": "that arm's out_proj norm against the alive-channel baseline (limit 2x)",
+          "units": "x",
+          "value": 2.3309278463633905
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "conv-selected",
+          "scope": "proxy",
+          "sources": [
+            "runs/conv-health/verdict-paired.json"
+          ],
+          "statement": "schedules recommended for V2",
+          "units": null,
+          "value": "none"
+        }
+      ],
+      "key": "conv-health",
+      "scope": "proxy",
+      "summary": "Four decay schedules at the shipped 150M shape over 500M tokens, read on a coupled in_proj x kernel x out_proj instrument rather than on a weight-magnitude proxy. **Negative result: no schedule cleared the preregistered rule.** No result here revives a dead channel in the released model, and nothing claims to.",
+      "title": "6. ShortConv channel death (V2 only)"
+    },
+    {
+      "claims": [
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "no shape clears every preregistered column, so this phase recommends none. That is a statement about the evidence, not about the shapes: see `unproven` for the columns still to be measured."
+          ],
+          "key": "arch-verdict",
+          "scope": "proxy",
+          "sources": [
+            "runs/architecture/stageb-recommendation.json"
+          ],
+          "statement": "recommended Pareto set",
+          "units": null,
+          "value": "empty"
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "The most transferable finding here. Parameter and byte accounting is arithmetic and holds at any scale; the quality ranking does not."
+          ],
+          "key": "arch-control-kv",
+          "scope": "proxy",
+          "sources": [
+            "runs/architecture/stageb-recommendation.json"
+          ],
+          "statement": "the shipped shape's KV bytes per context token, against the plan's 6,144 ceiling",
+          "units": "bytes",
+          "value": 8192
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "Attention-layer count barely moves BPB at this scale. What separated the arms was retrieval, which is the column the plan was right to add."
+          ],
+          "key": "arch-quality-flat",
+          "scope": "proxy",
+          "sources": [
+            "runs/architecture/stageb-recommendation.json"
+          ],
+          "statement": "held-out BPB spread across the four Stage-B finalists, all inside the 0.5% floor",
+          "units": "%",
+          "value": 0.2644531082461263
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "Every shape that bought a smaller KV cache paid for it in retrieval. That trade is the phase's real content, even though no arm cleared the gate."
+          ],
+          "key": "arch-retrieval-binding",
+          "scope": "proxy",
+          "sources": [
+            "runs/architecture/stageb-recommendation.json"
+          ],
+          "statement": "worst passkey drop among the arms that beat the control on KV bytes",
+          "units": "points",
+          "value": 41.99999999999999
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "arch-mac-pending",
+          "scope": "process",
+          "sources": [
+            "runs/architecture/stageb-recommendation.json",
+            "runs/architecture/decode-stageb.json"
+          ],
+          "statement": "Apple Silicon decode",
+          "units": null,
+          "value": "pending the Mac run; the decode column here is this box's CPU"
+        }
+      ],
+      "key": "architecture",
+      "scope": "proxy",
+      "summary": "Fifteen shapes at Stage A over 101M tokens, four parameter-matched finalists at Stage B over 252M, against the shipped 18x768 / 6-attention / 4-KV control. **No shape cleared every preregistered column, so the phase recommends none** -- and the control itself fails the KV-bytes ceiling the plan set.",
+      "title": "7. Architecture Pareto proxies (V2 only)"
+    },
+    {
+      "claims": [
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "The corpus as built was indexed against the wrong splits for ARC-Easy and OpenBookQA and truncated at 2,000 items. That is the gap this index closes."
+          ],
+          "key": "corpus-index",
+          "scope": "proxy",
+          "sources": [
+            "runs/corpus/decontam-index.json"
+          ],
+          "statement": "frozen decontamination index: n-grams over all five scored tasks at their scored splits, no per-task limit",
+          "units": null,
+          "value": 1371773
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "`docs_filtered` is 0 -- the negative control -- so dataprep removed everything it indexed.",
+            "Decided from a 1.32% sampled scan. A hit is decisive; a zero bounds the document rate at 3.2e-05 rather than proving absence.",
+            "158M fineweb-edu tokens, 3.0% of the largest source, were never in front of the scanner. That gap was invisible until the scan artifact and the manifests were compared, and it is now its own criterion."
+          ],
+          "key": "corpus-contamination",
+          "scope": "proxy",
+          "sources": [
+            "runs/corpus/phase7-gate-59.9b.json",
+            "runs/preflight/contam-exposure.json"
+          ],
+          "statement": "documents in the as-built corpus hitting the previously-unindexed split and limit gaps",
+          "units": null,
+          "value": 2
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "The corpus delivers the blueprint inside the bound to ~55.4B, and to ~56.9B with the dialogue source dropped. The released run's own budget is past both.",
+            "Below ~53B the entire skew is one source: dropping everyday-conversations takes it to exactly 0.0000 at 30B and 50B."
+          ],
+          "key": "corpus-skew",
+          "scope": "proxy",
+          "sources": [
+            "runs/corpus/phase7-gate-59.9b.json"
+          ],
+          "statement": "mixture L1 skew at the released run's 59.9B budget, against a 5-point bound",
+          "units": "points",
+          "value": 11.4593
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "The cap worked. Repetition is bounded; what is not delivered is the blueprint."
+          ],
+          "key": "corpus-epochs",
+          "scope": "proxy",
+          "sources": [
+            "runs/corpus/phase7-gate-59.9b.json"
+          ],
+          "statement": "worst source epoch count at 59.9B under the four-epoch cap",
+          "units": null,
+          "value": 4.0
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "They predate `dataprep.source_provenance`. The rebuild smoke's manifest carries all of it, so the criterion is closed by construction rather than retroactively."
+          ],
+          "key": "corpus-provenance",
+          "scope": "proxy",
+          "sources": [
+            "runs/corpus/phase7-gate-59.9b.json"
+          ],
+          "statement": "as-built manifests carrying a source revision, a filters block and a builder sha",
+          "units": null,
+          "value": "0 of 10"
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [
+            "best admissible arm 'quality-heavy' gains 0.0810% of aggregate BPB, under the preregistered 0.5000%",
+            "The best re-weighting bought 0.08% of aggregate BPB against a 0.5% bar. Mixture weights are not where the headroom is; supply is."
+          ],
+          "key": "mixture-selected",
+          "scope": "proxy",
+          "sources": [
+            "runs/corpus/mixture-verdict-probe.json"
+          ],
+          "statement": "mixture weights selected by the proxy sweep",
+          "units": null,
+          "value": "baseline"
+        }
+      ],
+      "key": "corpus",
+      "scope": "proxy",
+      "summary": "Measured against the corpus **as built** -- the only one that exists. Two of five criteria pass, one is a measurement worth keeping, and two are gaps a rebuild closes by construction, which a 200,000-token rebuild smoke then demonstrated.",
+      "title": "8. Corpus, decontamination and mixture (V2 only)"
+    },
+    {
+      "claims": [
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "process-gates-honoured",
+          "scope": "process",
+          "sources": [
+            "runs/qat-recovery/verdict.json",
+            "runs/conv-health/verdict-paired.json",
+            "runs/architecture/stageb-recommendation.json",
+            "runs/code-probes/branch-1b-stop.json"
+          ],
+          "statement": "phases that stopped on a preregistered gate rather than continuing",
+          "units": null,
+          "value": "Phase 3 (no QAT winner), Phase 5 (no schedule), Phase 6 (no shape), Phase 8 (stopped at 1B)"
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "process-base-sha",
+          "scope": "process",
+          "sources": [
+            "runs/vast-program/state.json"
+          ],
+          "statement": "program base SHA; the default branch is unchanged from it",
+          "units": null,
+          "value": "99232b4aaaeee6c507611094593f39e861178ebe"
+        },
+        {
+          "applies_to_released_model": false,
+          "caveats": [],
+          "key": "process-started",
+          "scope": "process",
+          "sources": [
+            "runs/vast-program/state.json"
+          ],
+          "statement": "program start (UTC)",
+          "units": null,
+          "value": "2026-08-24T10:44:35.993665Z"
+        }
+      ],
+      "key": "process",
+      "scope": "process",
+      "summary": "Preregistered gates, and what they cost. Three of the four experimental phases returned a negative result and one returned no recommendation; none of those thresholds moved after a number was seen.",
+      "title": "9. How the program ran"
+    }
+  ],
+  "validation": {
+    "full_suite": "2584 passed, 4 skipped in 303.64s"
+  }
+}

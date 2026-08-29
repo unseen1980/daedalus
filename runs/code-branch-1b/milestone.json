@@ -1,0 +1,14 @@
+{
+  "revision": "code-branch-1b-stable-end-step381",
+  "step": 381,
+  "tokens_seen": 199753728,
+  "total_steps": 1908,
+  "decay_frac": 0.8,
+  "lr_mult_at_branch": 1.0,
+  "muon_lr": 0.001,
+  "adam_lr": 1.5e-05,
+  "config": "daedalus-150m",
+  "repo": null,
+  "path_in_repo": "milestone/code-branch-1b/checkpoint.pt",
+  "created_at": 1787808132.0416553
+}

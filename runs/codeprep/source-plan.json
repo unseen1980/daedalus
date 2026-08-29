@@ -1,0 +1,47 @@
+{
+  "buckets": {
+    "javascript-typescript": {
+      "configs": [
+        "JavaScript-all",
+        "TypeScript-all"
+      ],
+      "missing_configs": [],
+      "plan_share": 0.45,
+      "reason": "every directory this bucket names exists on the revision",
+      "redistributed": 0.0,
+      "share": 0.45,
+      "source": "directories"
+    },
+    "python": {
+      "configs": [
+        "Python-all"
+      ],
+      "missing_configs": [],
+      "plan_share": 0.55,
+      "reason": "every directory this bucket names exists on the revision",
+      "redistributed": 0.0,
+      "share": 0.55,
+      "source": "directories"
+    }
+  },
+  "evidence": {
+    "configs": "runs/codeprep/github-code-configs.json",
+    "probe": "runs/codeprep/allall-yield.json"
+  },
+  "interleave_passes": 1.0,
+  "interleaved": {
+    "admitted_bytes": 897676361,
+    "available": true,
+    "config": "all-all",
+    "kept_fraction": 0,
+    "rows_read": 200000,
+    "stream_amplification": 1.54
+  },
+  "min_bucket_share": 0.005,
+  "problems": [],
+  "redistributed": 0.0,
+  "shares": {
+    "javascript-typescript": 0.45,
+    "python": 0.55
+  }
+}

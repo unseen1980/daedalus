@@ -1,0 +1,27 @@
+{
+  "available": {
+    "C#-all": 10,
+    "C++-all": 10,
+    "C++-gpl-2.0": 10,
+    "C-all": 10,
+    "C-gpl-2.0": 10,
+    "HTML-all": 10,
+    "HTML-mit": 10,
+    "Java-all": 10,
+    "Java-apache-2.0": 10,
+    "JavaScript-all": 10,
+    "JavaScript-mit": 10,
+    "PHP-all": 10,
+    "Python-all": 10,
+    "all-all": 10,
+    "all-apache-2.0": 10,
+    "all-bsd-3-clause": 10,
+    "all-gpl-2.0": 10,
+    "all-gpl-3.0": 10,
+    "all-mit": 10
+  },
+  "dataset": "codeparrot/github-code-clean",
+  "missing": {},
+  "near_misses": {},
+  "revision": "refs/convert/parquet"
+}

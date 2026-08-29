@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -41,6 +42,13 @@ SUPERVISED_BACKOFF_SEC = 60.0
 #: stalled. Matches `qat_recovery`, `conv_health`, `mixture_opt` and
 #: `architecture_sweep`, all of which pass 20.0.
 SUPERVISED_STALL_MIN = 20.0
+
+#: Copies of a checkpoint that exist at once during a save. `train.save_checkpoint`
+#: writes `checkpoint.pt.tmp` and `os.replace`s it over `checkpoint.pt`, which is
+#: what makes a failed write leave the previous checkpoint resumable -- and it
+#: means the peak footprint of every save after the first is two whole
+#: checkpoints, not one.
+CHECKPOINT_SAVE_COPIES = 2
 
 
 def default_lease_name(lane: str = MAIN_LANE) -> str:
@@ -520,6 +528,112 @@ def trainer_checkpoint_for(command: Sequence[str]) -> Optional[str]:
         return None
 
 
+def expected_checkpoint_bytes(
+    supervise_checkpoint, command: Sequence[str]
+) -> Optional[tuple[int, str]]:
+    """`(bytes, which file said so)` for this run's checkpoint, or None.
+
+    Two sources, in order of authority, and both are files that exist rather
+    than an estimate: the supervised checkpoint itself, once an earlier attempt
+    has written one, and the `--init-from` weights a continued-pretraining phase
+    starts from, which are the same architecture and so the same size -- the
+    released base and the 1B branch checkpoint measure 1.435G apiece.
+
+    None means "no evidence on disk", not "small": a first-ever run of a shape
+    nothing has trained yet has neither file. A launch is never blocked by that,
+    for the same reason `trainer_checkpoint_for` returns None rather than
+    refusing -- a guard that cannot see is not entitled to a verdict.
+    """
+
+    candidates = ((supervise_checkpoint, "the checkpoint it resumes"),
+                  (_flag_value(command, "--init-from"), "its --init-from weights"))
+    for path, source in candidates:
+        if not path:
+            continue
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        if size > 0:
+            return size, f"{source} at {path}"
+    return None
+
+
+def free_bytes_for(path) -> Optional[int]:
+    """Free bytes on the filesystem that will hold `path`.
+
+    Walks up to the nearest ancestor that exists, because the run directory of a
+    phase that has not started yet does not. None when nothing can be measured,
+    which the caller treats as "no evidence" rather than "no space".
+    """
+
+    probe = Path(path).parent
+    while True:
+        if probe.exists():
+            try:
+                return shutil.disk_usage(probe).free
+            except OSError:
+                return None
+        if probe.parent == probe:
+            return None
+        probe = probe.parent
+
+
+def refuse_unsavable_run(
+    *,
+    phase: str,
+    supervise_checkpoint,
+    command: Sequence[str],
+    min_free_bytes: Optional[int] = None,
+) -> Optional[dict]:
+    """Refuse a supervised run that cannot write its first checkpoint.
+
+    A trainer does not touch the disk for hours after it starts, so a volume too
+    full to hold a checkpoint is invisible at launch and terminal at the first
+    save: the write raises on ENOSPC, `save_checkpoint` reclaims its partial
+    `.tmp` and re-raises, the supervisor resumes -- from nothing, because
+    nothing was ever written -- and each attempt burns the same hours again
+    before failing at the same place. For the 2B extension that is 11 GPU-hours
+    per attempt against a fixed 144-hour budget.
+
+    So it is asked up front, in the launcher, where the answer is one `statvfs`
+    and the cost of being wrong is a message. This is the same reasoning
+    `code_extension.assert_fits_deadline` is written from -- the controller does
+    refuse a phase that cannot finish, but it refuses inside the detached child,
+    where the refusal lands in a log nobody reads until the GPU has been idle
+    for hours.
+
+    Returns what it measured when the run may proceed, so the caller can record
+    it; raises `SystemExit` when it may not.
+    """
+
+    measured = expected_checkpoint_bytes(supervise_checkpoint, command)
+    if min_free_bytes is not None:
+        required = int(min_free_bytes)
+        why = f"--min-free-bytes {required}"
+    elif measured is None:
+        return None
+    else:
+        required = CHECKPOINT_SAVE_COPIES * measured[0]
+        why = (f"{CHECKPOINT_SAVE_COPIES} x {measured[0]} bytes, "
+               f"from {measured[1]}")
+    if required <= 0:                       # an explicit 0 turns the check off
+        return None
+    free = free_bytes_for(supervise_checkpoint)
+    if free is None:
+        return None
+    report = {"free_bytes": free, "required_bytes": required, "basis": why}
+    if free >= required:
+        return report
+    raise SystemExit(
+        f"phase {phase!r} has {free / 1e9:.2f}G free where {supervise_checkpoint} "
+        f"needs {required / 1e9:.2f}G to save ({why}); a save holds the "
+        f"checkpoint and its .tmp at once. The run would train until its first "
+        f"save, fail on ENOSPC with nothing written, and retry from step zero "
+        f"into the same wall. Free space first, or state the real requirement "
+        f"with --min-free-bytes (0 disables this check).")
+
+
 def detached_phase_argv(
     *,
     state,
@@ -534,6 +648,7 @@ def detached_phase_argv(
     supervise_checkpoint=None,
     watchdog_tokens: int = 0,
     stall_min: float = SUPERVISED_STALL_MIN,
+    min_free_bytes: Optional[int] = None,
 ) -> list[str]:
     """Rebuild this invocation for the detached controller, without ``--detach``.
 
@@ -569,6 +684,12 @@ def detached_phase_argv(
     if watchdog_tokens:
         argv += ["--watchdog-tokens", str(int(watchdog_tokens)),
                  "--stall-min", str(float(stall_min))]
+    # Only an *explicit* floor is carried, but it has to be: the child re-derives
+    # the default itself, so dropping an override -- `--min-free-bytes 0`, or a
+    # figure a caller measured for a differently shaped run -- would leave the
+    # parent admitting the phase and the child refusing it, into a detached log.
+    if min_free_bytes is not None:
+        argv += ["--min-free-bytes", str(int(min_free_bytes))]
     argv += ["--", *[str(part) for part in command]]
     return argv
 
@@ -588,6 +709,7 @@ def detach_phase(
     supervise_checkpoint=None,
     watchdog_tokens: int = 0,
     stall_min: float = SUPERVISED_STALL_MIN,
+    min_free_bytes: Optional[int] = None,
     spawn: Callable[..., subprocess.Popen] = subprocess.Popen,
 ) -> dict:
     """Start the phase controller in its own session and return immediately.
@@ -602,7 +724,17 @@ def detach_phase(
     session's lifetime: the turn ends, the keeper starts the next one, and the
     sweep keeps running. Ownership is unchanged -- the detached controller takes
     the same single-owner lease, so this cannot start a second writer.
+
+    The space floor is checked *here* rather than only in `main`, because
+    `code_branch.launch` and the extension's launcher call this function
+    directly. Left to the child, the one refusal that matters to a caller about
+    to walk away would be written to the phase log it is walking away from.
     """
+
+    space = refuse_unsavable_run(
+        phase=phase, supervise_checkpoint=supervise_checkpoint,
+        command=command, min_free_bytes=min_free_bytes
+    ) if supervise_checkpoint else None
 
     argv = detached_phase_argv(
         state=state,
@@ -617,6 +749,7 @@ def detach_phase(
         supervise_checkpoint=supervise_checkpoint,
         watchdog_tokens=watchdog_tokens,
         stall_min=stall_min,
+        min_free_bytes=min_free_bytes,
     )
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -628,7 +761,10 @@ def detach_phase(
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    return {"pid": process.pid, "log": str(log_path), "argv": argv}
+    started = {"pid": process.pid, "log": str(log_path), "argv": argv}
+    if space:
+        started["space"] = space
+    return started
 
 
 def take_lease(controller: "VastProgramController") -> dict:
@@ -727,6 +863,12 @@ def main(argv=None) -> int:
              "omitted, the run has no divergence or stall detection")
     run.add_argument("--stall-min", type=float, default=SUPERVISED_STALL_MIN)
     run.add_argument(
+        "--min-free-bytes", type=int, default=None,
+        help="free bytes a --supervise-checkpoint run must have before it may "
+             f"start (default: {CHECKPOINT_SAVE_COPIES} x the size of the "
+             "checkpoint it resumes, or of its --init-from weights; 0 disables "
+             "the check)")
+    run.add_argument(
         "--detach",
         action="store_true",
         help="own the phase from a new session so it outlives the caller",
@@ -794,6 +936,7 @@ def main(argv=None) -> int:
             f"relaunch, and an explicit one makes attempt one train nothing "
             f"and exit 0. Use --init-from to start from existing weights.")
 
+    space: Optional[dict] = None
     if args.supervise_checkpoint:
         writes = trainer_checkpoint_for(command)
         if writes and os.path.abspath(writes) != os.path.abspath(args.supervise_checkpoint):
@@ -802,6 +945,13 @@ def main(argv=None) -> int:
                 f"but its trainer writes {writes}. The marker would sit beside "
                 f"a file that never appears and every relaunch would restart "
                 f"from step zero without saying so.")
+        # Before the detach branch, so the refusal reaches whoever typed the
+        # launch rather than a log in the run directory.
+        space = refuse_unsavable_run(
+            phase=args.phase,
+            supervise_checkpoint=args.supervise_checkpoint,
+            command=command,
+            min_free_bytes=args.min_free_bytes)
 
     if (not args.detach and args.estimated_hours >= DETACH_REQUIRED_HOURS
             and not running_in_own_session()):
@@ -829,9 +979,13 @@ def main(argv=None) -> int:
             supervise_checkpoint=args.supervise_checkpoint,
             watchdog_tokens=args.watchdog_tokens,
             stall_min=args.stall_min,
+            min_free_bytes=args.min_free_bytes,
         )
         print(f"detached phase {args.phase} lane {lane} pid {started['pid']} "
               f"log {started['log']}")
+        if space:
+            print(f"  free {space['free_bytes'] / 1e9:.2f}G against a "
+                  f"{space['required_bytes'] / 1e9:.2f}G floor ({space['basis']})")
         return 0
 
     if not Path(args.state).exists():
@@ -875,6 +1029,11 @@ def main(argv=None) -> int:
         if supervised:
             controller.note(phase=args.phase, kind="supervised_run",
                             details={"checkpoint": str(args.supervise_checkpoint),
+                                     # What the volume looked like when this run
+                                     # was admitted. A run that later dies on
+                                     # ENOSPC is then readable as "the disk moved
+                                     # under it" rather than "nobody looked".
+                                     **({"space": space} if space else {}),
                                      **supervised})
         controller.release_lease()
     return 0

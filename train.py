@@ -154,7 +154,25 @@ def save_checkpoint(path: str, model, muon, adamw, step: int, tokens_seen: int,
     if d:
         os.makedirs(d, exist_ok=True)
     tmp = path + ".tmp"
-    torch.save(payload, tmp)
+    try:
+        torch.save(payload, tmp)
+    except BaseException:
+        # A failed write must not also cost the disk. `os.replace` below is
+        # skipped, so the previous checkpoint is still the good one and the run
+        # stays resumable -- but the partial `.tmp` holds a whole checkpoint's
+        # worth (1.4 GB for the code branch) of exactly the resource that just
+        # ran out, and nothing removes it until a later save succeeds. On a full
+        # volume that later save is the one that cannot happen, and if the
+        # supervisor then exhausts its attempts the orphan outlives the run.
+        #
+        # `BaseException` because the other way a write stops part-way is
+        # `KeyboardInterrupt`: at T+144h the controller SIGINTs the trainer and
+        # waits for the checkpoint to drain, so an interrupt inside the write is
+        # the ordinary case at that boundary. Re-raised either way -- reclaiming
+        # the space is not a reason to hide why the save failed.
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
     os.replace(tmp, path)  # never leave a half-written checkpoint on crash
     return path
 
@@ -1113,6 +1131,16 @@ class Trainer:
         # one the interval already wrote. None until the first of each.
         self._last_metrics_step: Optional[int] = None
         self._last_stats: Optional[dict] = None
+        # Which step last carried a validation. Held rather than derived from
+        # `step % val_every_steps`, because `_validate` is only ever reached on
+        # a metrics row: a modulo on both intervals is satisfied only at their
+        # *common* multiple, so `--val-every-steps 250` beside the default
+        # 20-step metrics cadence validates every 500 steps, and a run shorter
+        # than 500 validates never. All three phase-8 probe arms ran 477 steps
+        # and reported `val_bpb: null` for their whole length. Elapsed steps
+        # instead, so any interval reaches the first metrics row at or after it
+        # and no cadence is silently unreachable.
+        self._last_val_step = self.step
 
         self.net = torch.compile(self.model) if args.compile else self.model
 
@@ -1433,8 +1461,14 @@ class Trainer:
         the 1.5% bound says so at its first interval rather than after 1B tokens.
         """
         args = self.args
-        if not args.val_dir or self.step % args.val_every_steps != 0:
+        if not args.val_dir or args.val_every_steps <= 0:
             return None
+        if self.step - self._last_val_step < args.val_every_steps:
+            return None
+        # Stamped before the pass, not after it: a holdout that raises below
+        # would otherwise leave the run due forever and re-attempt the same
+        # broken directory on every metrics row for the rest of the budget.
+        self._last_val_step = self.step
         try:
             # lazy: eval imports train
             from eval import evaluate_bpb_mixture

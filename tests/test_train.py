@@ -3,6 +3,7 @@ exercised through fakes/local repos so the suite stays fast and offline.
 
 Run: python -m pytest tests/test_train.py -v
 """
+import errno
 import json
 import math
 import os
@@ -293,6 +294,89 @@ def test_checkpoint_never_leaves_partial_file(tmp_path):
     save_checkpoint(path, model, muon, adamw, step=1, tokens_seen=1, cfg=cfg)
     assert os.path.exists(path)
     assert not os.path.exists(path + ".tmp")
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"),
+                    reason="needs /dev/full to produce a real ENOSPC")
+def test_torch_save_raises_on_a_full_device(tmp_path):
+    """The premise the tmp-then-rename below rests on: a write that runs out of
+    space *raises*.
+
+    Worth asserting rather than assuming, because the alternative is silent: a
+    `torch.save` that swallowed the error would return normally, `os.replace`
+    would move a truncated file over the good checkpoint, and the run would keep
+    going until something tried to resume from it. `/dev/full` is a real device
+    that returns ENOSPC on every write, so this exercises torch's own writer
+    against the same errno a full volume produces.
+    """
+    payload = {"model": {"w": torch.zeros(4096)}, "step": 1}
+    with pytest.raises(Exception):
+        torch.save(payload, "/dev/full")
+
+
+def test_checkpoint_write_failure_keeps_last_good_and_reclaims_the_partial(
+        tmp_path, monkeypatch):
+    """A save that fails part-way must cost neither the run nor the disk.
+
+    The scenario is the volume filling during the 1B branch run: `torch.save`
+    writes part of a 1.4 GB payload and raises. tmp-then-rename already means
+    the previous checkpoint is untouched -- `os.replace` never runs -- so the
+    run stays resumable, which is the half that matters most.
+
+    The other half is the partial file. Left behind, it holds a whole
+    checkpoint's worth of exactly the resource that just ran out, and nothing
+    removes it until a later save succeeds -- which, on a full volume, is the
+    save that cannot happen. If the supervisor then exhausts its attempts, the
+    orphan outlives the run and phase 9 exports into what is left.
+    """
+    cfg = PRESETS["tiny"]
+    model = Daedalus(cfg)
+    muon, adamw, _ = build_optimizers(model)
+    path = str(tmp_path / "ckpt.pt")
+    save_checkpoint(path, model, muon, adamw, step=11, tokens_seen=1100, cfg=cfg)
+    good = open(path, "rb").read()
+
+    real_save = torch.save
+
+    def out_of_space(payload, target, *args, **kwargs):
+        with open(target, "wb") as handle:      # a partial write, as ENOSPC leaves
+            handle.write(b"\x00" * 4096)
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(torch, "save", out_of_space)
+    with pytest.raises(OSError):
+        save_checkpoint(path, model, muon, adamw, step=12, tokens_seen=1200,
+                        cfg=cfg)
+    monkeypatch.setattr(torch, "save", real_save)
+
+    assert open(path, "rb").read() == good, "the good checkpoint was overwritten"
+    assert load_checkpoint(path, Daedalus(cfg))["step"] == 11
+    assert not os.path.exists(path + ".tmp"), "the partial write still holds disk"
+
+
+def test_checkpoint_write_interrupted_reclaims_the_partial(tmp_path, monkeypatch):
+    """The same reclaim on SIGINT, which is how this program stops a run.
+
+    `KeyboardInterrupt` is not an `OSError`, and the deadline drain and every
+    manual stop deliver exactly it: at T+144h the controller SIGINTs the trainer
+    and waits for the checkpoint to drain. An interrupt landing inside the write
+    is the ordinary case at that boundary, not an exotic one.
+    """
+    cfg = PRESETS["tiny"]
+    model = Daedalus(cfg)
+    muon, adamw, _ = build_optimizers(model)
+    path = str(tmp_path / "ckpt.pt")
+
+    def interrupted(payload, target, *args, **kwargs):
+        with open(target, "wb") as handle:
+            handle.write(b"\x00" * 4096)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(torch, "save", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        save_checkpoint(path, model, muon, adamw, step=1, tokens_seen=1, cfg=cfg)
+    assert not os.path.exists(path + ".tmp")
+    assert not os.path.exists(path)
 
 
 # ------------------------------------------------------------------ metrics ---
@@ -1257,6 +1341,51 @@ def test_val_bpb_is_logged_on_its_own_cadence(tmp_path, monkeypatch):
     for step in (2, 4):
         assert by_step[step] is not None and math.isfinite(by_step[step])
         assert by_step[step] > 0
+
+
+def test_val_bpb_fires_when_the_two_cadences_never_coincide(tmp_path, monkeypatch):
+    """A validation interval that is not a multiple of the metrics interval
+    used to disable validation outright, silently.
+
+    `_validate` is only reached from `log_step`, which runs on the metrics
+    cadence, and it used to gate on `step % val_every_steps`. Both moduli are
+    therefore satisfied only at the two intervals' common multiple, so a run
+    shorter than that validates *never* -- and reports `val_bpb: null` on every
+    row, which reads as validation being broken rather than as never having been
+    due. All three phase-8 probe arms ran 477 steps with `--val-every-steps 250`
+    beside the default 20-step metrics cadence: LCM(20, 250) = 500, so none of
+    them produced a single held-out number for its whole length.
+
+    Nine steps at metrics 3 / val 4 is the same arithmetic in miniature:
+    LCM(3, 4) = 12, past the end of the run, and no row is a multiple of 4.
+    """
+    val_dir = _val_shards(tmp_path)
+    args = _tiny_args(tmp_path / "run", max_steps=9, seq_len=16, micro_batch=2)
+    args.val_dir = val_dir
+    args.val_every_steps = 4
+    args.val_batches = 1
+    args.val_batch_size = 2
+    args.seq_end = 16
+    args.metrics_every_steps = 3
+
+    t = Trainer(args)
+    t._tokenizer = _ByteTokenizer()
+    monkeypatch.setattr("daedalus.data.get_tokenizer", lambda *a, **k: _ByteTokenizer())
+    t.batch_source = FixedBatchSource(
+        [torch.randint(0, t.cfg.vocab_size, (2, 16)) for _ in range(9)])
+    t.fit()
+
+    records = [json.loads(l) for l in
+              (tmp_path / "run" / "metrics.jsonl").read_text().strip().splitlines()]
+    by_step = {r["step"]: r["val_bpb"] for r in records}
+    assert set(by_step) == {3, 6, 9}                      # the metrics cadence
+    assert not any(step % args.val_every_steps == 0 for step in by_step)
+    validated = [step for step, value in by_step.items() if value is not None]
+    assert validated, "no row carried val_bpb; the cadences never coincided"
+    assert by_step[6] is not None and math.isfinite(by_step[6]) and by_step[6] > 0
+    # Elapsed steps, not a modulo: due once four steps have passed since the
+    # last pass, so the next is at 10 rather than at every later metrics row.
+    assert by_step[9] is None
 
 
 def _mixture_val_shards(tmp_path, names=("source-a", "source-b"), n_tokens=4096):

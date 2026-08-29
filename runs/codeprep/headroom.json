@@ -1,0 +1,223 @@
+{
+  "budgets": [
+    {
+      "budget": 162500000,
+      "sources": [
+        {
+          "basis": "605,000 rows of JavaScript-all at 5,146 admitted bytes/row read + 369,000 rows of TypeScript-all at 11,192 admitted bytes/row read",
+          "budget": 162500000,
+          "epoch_cap": 4.0,
+          "epochs": 0.028892520837131935,
+          "growth_x": 0.007223130209282984,
+          "key": "javascript-typescript",
+          "needed_tokens": 73125000,
+          "note": "",
+          "over_cap": false,
+          "share": 0.45,
+          "shortfall_tokens": 0,
+          "unique_tokens": 2530931808
+        },
+        {
+          "basis": "641,000 rows of Python-all at 4,113 admitted bytes/row read",
+          "budget": 162500000,
+          "epoch_cap": 4.0,
+          "epochs": 0.09702868569960159,
+          "growth_x": 0.024257171424900397,
+          "key": "python",
+          "needed_tokens": 89375000,
+          "note": "",
+          "over_cap": false,
+          "share": 0.55,
+          "shortfall_tokens": 0,
+          "unique_tokens": 921119351
+        }
+      ],
+      "totals": {
+        "binding_epochs": 0.09702868569960159,
+        "binding_source": "python",
+        "corpus_epochs": 0.047073462273680054,
+        "needed_tokens": 162500000,
+        "shortfall_tokens": 0,
+        "sources_over_cap": 0,
+        "unique_tokens": 3452051159,
+        "verdict": "SUPPORTED"
+      }
+    },
+    {
+      "budget": 650000000,
+      "sources": [
+        {
+          "basis": "605,000 rows of JavaScript-all at 5,146 admitted bytes/row read + 369,000 rows of TypeScript-all at 11,192 admitted bytes/row read",
+          "budget": 650000000,
+          "epoch_cap": 4.0,
+          "epochs": 0.11557008334852774,
+          "growth_x": 0.028892520837131935,
+          "key": "javascript-typescript",
+          "needed_tokens": 292500000,
+          "note": "",
+          "over_cap": false,
+          "share": 0.45,
+          "shortfall_tokens": 0,
+          "unique_tokens": 2530931808
+        },
+        {
+          "basis": "641,000 rows of Python-all at 4,113 admitted bytes/row read",
+          "budget": 650000000,
+          "epoch_cap": 4.0,
+          "epochs": 0.38811474279840635,
+          "growth_x": 0.09702868569960159,
+          "key": "python",
+          "needed_tokens": 357500000,
+          "note": "",
+          "over_cap": false,
+          "share": 0.55,
+          "shortfall_tokens": 0,
+          "unique_tokens": 921119351
+        }
+      ],
+      "totals": {
+        "binding_epochs": 0.38811474279840635,
+        "binding_source": "python",
+        "corpus_epochs": 0.18829384909472022,
+        "needed_tokens": 650000000,
+        "shortfall_tokens": 0,
+        "sources_over_cap": 0,
+        "unique_tokens": 3452051159,
+        "verdict": "SUPPORTED"
+      }
+    },
+    {
+      "budget": 1950000000,
+      "sources": [
+        {
+          "basis": "605,000 rows of JavaScript-all at 5,146 admitted bytes/row read + 369,000 rows of TypeScript-all at 11,192 admitted bytes/row read",
+          "budget": 1950000000,
+          "epoch_cap": 4.0,
+          "epochs": 0.3467102500455832,
+          "growth_x": 0.0866775625113958,
+          "key": "javascript-typescript",
+          "needed_tokens": 877500000,
+          "note": "",
+          "over_cap": false,
+          "share": 0.45,
+          "shortfall_tokens": 0,
+          "unique_tokens": 2530931808
+        },
+        {
+          "basis": "641,000 rows of Python-all at 4,113 admitted bytes/row read",
+          "budget": 1950000000,
+          "epoch_cap": 4.0,
+          "epochs": 1.164344228395219,
+          "growth_x": 0.29108605709880475,
+          "key": "python",
+          "needed_tokens": 1072500000,
+          "note": "",
+          "over_cap": false,
+          "share": 0.55,
+          "shortfall_tokens": 0,
+          "unique_tokens": 921119351
+        }
+      ],
+      "totals": {
+        "binding_epochs": 1.164344228395219,
+        "binding_source": "python",
+        "corpus_epochs": 0.5648815472841606,
+        "needed_tokens": 1950000000,
+        "shortfall_tokens": 0,
+        "sources_over_cap": 0,
+        "unique_tokens": 3452051159,
+        "verdict": "SUPPORTED"
+      }
+    }
+  ],
+  "bytes_per_token": 2.862,
+  "code_share": 0.65,
+  "epoch_cap": 4.0,
+  "evidence": {
+    "plan": "runs/codeprep/source-plan.json",
+    "probes": [
+      "runs/codeprep/directory-yield.json",
+      "runs/codeprep/allall-yield.json"
+    ]
+  },
+  "row_counts": {
+    "C++-all": {
+      "errors": {},
+      "files": 10,
+      "files_read": 10,
+      "rows": 389000
+    },
+    "C-all": {
+      "errors": {},
+      "files": 10,
+      "files_read": 10,
+      "rows": 354000
+    },
+    "Java-all": {
+      "errors": {},
+      "files": 10,
+      "files_read": 10,
+      "rows": 828000
+    },
+    "JavaScript-all": {
+      "errors": {},
+      "files": 10,
+      "files_read": 10,
+      "rows": 605000
+    },
+    "Python-all": {
+      "errors": {},
+      "files": 10,
+      "files_read": 10,
+      "rows": 641000
+    },
+    "TypeScript-all": {
+      "errors": {},
+      "files": 10,
+      "files_read": 10,
+      "rows": 369000
+    },
+    "all-all": {
+      "errors": {
+        "all-all/partial-train/0009.parquet": "HfHubHTTPError('(Request ID: 01M0ZT5W8WZWAATFBMCQPQ6XJJ)\\n\\n429 Too Many Requests for url: https://us.aws.cdn.hf.co/xet-bridge-us/621ffdd236468d709f183929/ab025c77118a84d775286e7d38620591e17223e21c754de48f4f37029a9fe01f?response-content-disposition=inline%3B+filename*%3DUTF-8%27%270009.parquet%3B+filename%3D%220009.parquet%22%3B&user_id=public&X-Xet-Cas-Uid=public&Expires=1787777638&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjIxZmZkZDIzNjQ2OGQ3MDlmMTgzOTI5L2FiMDI1Yzc3MTE4YTg0ZDc3NTI4NmU3ZDM4NjIwNTkxZTE3MjIzZTIxYzc1NGRlNDhmNGYzNzAyOWE5ZmUwMWZcXD9yZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3MDAwOS5wYXJxdWV0JTNCK2ZpbGVuYW1lJTNEJTIyMDAwOS5wYXJxdWV0JTIyJTNCJnVzZXJfaWQ9cHVibGljJlgtWGV0LUNhcy1VaWQ9cHVibGljIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3ODc3Nzc2Mzh9fX1dfQ__&Signature=MEQCIBd5Oc2jVNWoEp30B0wRd5rUqMLR-cgyRhNFIRCJhy-GAiB5XsykBY-SgHmwGKRNoiaA3YjLGotdUTvmN8hLWmYadg__&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F.')"
+      },
+      "files": 10,
+      "files_read": 9,
+      "rows": 547000
+    }
+  },
+  "supply": {
+    "javascript-typescript": {
+      "basis": "605,000 rows of JavaScript-all at 5,146 admitted bytes/row read + 369,000 rows of TypeScript-all at 11,192 admitted bytes/row read",
+      "configs": [
+        "JavaScript-all",
+        "TypeScript-all"
+      ],
+      "lower_bound": false,
+      "missing": [],
+      "partial": [],
+      "per_config": {
+        "JavaScript-all": 1087887556,
+        "TypeScript-all": 1443044251
+      },
+      "share": 0.45,
+      "unique_bytes": 7243526835,
+      "unique_tokens": 2530931808
+    },
+    "python": {
+      "basis": "641,000 rows of Python-all at 4,113 admitted bytes/row read",
+      "configs": [
+        "Python-all"
+      ],
+      "lower_bound": false,
+      "missing": [],
+      "partial": [],
+      "per_config": {
+        "Python-all": 921119351
+      },
+      "share": 0.55,
+      "unique_bytes": 2636243584,
+      "unique_tokens": 921119351
+    }
+  }
+}

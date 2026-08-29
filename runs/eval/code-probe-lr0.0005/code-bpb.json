@@ -1,0 +1,68 @@
+{
+  "created_at": "2026-08-27T02:02:06.095910Z",
+  "details": {
+    "bucket": "code",
+    "bucket_absent": [],
+    "bucket_share_covered": 1.0,
+    "caveats": [
+      "data/holdout/stack-edu-python is GitHub Python from the same dataset and revision the code bucket streams, and the code corpus is repository-split against its own holdout only -- so that source cannot serve as a general-retention measurement for a model being trained on code. Score general BPB over the general-text sources separately from it."
+    ],
+    "holdout_root": "data/code-mixture/holdout",
+    "model": "code-probe-lr0.0005",
+    "phase": "phase8-code-probes",
+    "sources_requested": [
+      "code-javascript-typescript-javascript-all",
+      "code-javascript-typescript-typescript-all",
+      "code-python"
+    ],
+    "weighting": "explicit",
+    "weights": {
+      "code-javascript-typescript-javascript-all": 0.1934265476923077,
+      "code-javascript-typescript-typescript-all": 0.2565734523076923,
+      "code-python": 0.55
+    }
+  },
+  "item_count": 3,
+  "item_digest": "502c547297a73ca1c986bdd8ab480c32",
+  "kind": "bpb",
+  "metrics": {
+    "bpb": 0.46448458887633626,
+    "bpb_code-javascript-typescript-javascript-all": 0.6098228196091416,
+    "bpb_code-javascript-typescript-typescript-all": 0.25175200448796253,
+    "bpb_code-python": 0.5126105186518052,
+    "bpb_equal_weight": 0.4580617809163032,
+    "bpb_token_weighted": 0.45811050177428697,
+    "n_sources": 3.0,
+    "tokens_code-javascript-typescript-javascript-all": 859869.0,
+    "tokens_code-javascript-typescript-typescript-all": 1160534.0,
+    "tokens_code-python": 2000611.0
+  },
+  "name": "code-bpb",
+  "provenance": {
+    "artifact": {
+      "config": "daedalus-150m",
+      "kind": "checkpoint",
+      "path": "runs/code-probe-lr0.0005/checkpoint.pt",
+      "revision": null,
+      "sha256": "119899b4cfddb135e139ab9204977044f213a77a01c2456ce53867e3733a649e"
+    },
+    "bpb_mode": "full",
+    "bpb_sample_batches": null,
+    "git_sha": "d1251a2",
+    "runtime": {
+      "batch_size": 8,
+      "device": "cuda",
+      "seq_len": 2048
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<smollm2-default>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

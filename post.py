@@ -39,6 +39,7 @@ import json
 import os
 import random
 import sys
+from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Tuple
 
 import torch
@@ -172,6 +173,265 @@ def build_sft_source(dataset, tokenizer, micro_batch: int, device: str,
     pad_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
     return SFTBatchSource(examples, micro_batch, device, pad_id=pad_id,
                           loop=materialise)
+
+
+# ------------------------------------------------------- a locally built set ---
+# Phase 8 step 6 trains on conversations that were selected on disk rather than
+# streamed: `daedalus/code_sft.py` runs each one through an admission gate that
+# syntax-checks its code, executes the tests that ship with it, filters it
+# against both decontamination indexes and measures it in supervised tokens,
+# then writes what it admits as `train.jsonl` beside a manifest of those counts.
+#
+# The rows it writes are already `iter_chat_examples`' shape, which makes
+# `--dataset <that file>` look like the whole of the wiring. It is the one thing
+# that must not happen. That path re-applies `chatml.keep_example` at its
+# default 1,200-character cap over the *whole* assistant turn, while the build
+# applies the same cap to assistant **prose** with fenced code removed -- so a
+# forty-line function, the payload this phase exists to add, passes the build
+# and is dropped by the reader. Nothing would say so: the set would simply come
+# back smaller, reading exactly like a stream that ran short.
+#
+# So a built set gets a reader of its own, and it applies no content filter at
+# all. Everything below is about proving the file on disk is the set its
+# manifest describes, since that is the assumption the missing filter rests on.
+
+BUILT_MANIFEST_FILE = "manifest.json"
+
+
+class BuiltSFTSetError(RuntimeError):
+    """Raised when a built SFT set is not the set its manifest describes."""
+
+
+def read_built_manifest(directory, *, max_len: Optional[int] = None,
+                        tokenizer=None) -> dict:
+    """The manifest of a built set, or a refusal naming what is wrong with it.
+
+    Four refusals, each for a way of training on something other than what the
+    manifest describes, and none of them visible in a loss curve.
+    """
+
+    path = Path(directory) / BUILT_MANIFEST_FILE
+    try:
+        with path.open() as handle:
+            manifest = json.load(handle)
+    except FileNotFoundError as exc:
+        raise BuiltSFTSetError(
+            f"{path} does not exist. A built set is a directory carrying its "
+            f"manifest beside its files: the manifest is the only record of "
+            f"which gate admitted these conversations, which tokenizer measured "
+            f"them and at what budget, and this reader applies no filter of its "
+            f"own because that gate already ran. A bare .jsonl could have come "
+            f"from anywhere.") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BuiltSFTSetError(f"{path} is not readable as JSON: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise BuiltSFTSetError(f"{path} does not decode to an object")
+    missing = [key for key in ("problems", "files") if key not in manifest]
+    if missing:
+        raise BuiltSFTSetError(
+            f"{path} is not a built-set manifest: no {', '.join(missing)} "
+            f"block, so nothing here can tell whether the build finished or "
+            f"what it thinks of what it wrote.")
+
+    problems = manifest.get("problems") or []
+    if problems:
+        # The build's own verdict on what it wrote. It is reported rather than
+        # raised at build time so a short half still lands on disk to be looked
+        # at -- which makes training on it the mistake this refusal covers.
+        raise BuiltSFTSetError(
+            f"{path} reports {len(problems)} problem(s) with the set it "
+            f"describes: " + "; ".join(str(problem) for problem in problems) +
+            ". The build is saying this is not the corpus its own counts claim, "
+            "so a run over it trains a mixture nobody chose.")
+
+    built_max_len = manifest.get("max_len")
+    if not isinstance(built_max_len, int) or built_max_len <= 0:
+        raise BuiltSFTSetError(
+            f"{path} records no token budget, so there is no way to tell "
+            f"whether this run's --max-len would silently drop what the build "
+            f"admitted.")
+    if max_len is not None and max_len < built_max_len:
+        raise BuiltSFTSetError(
+            f"this set was admitted at max_len {built_max_len:,} and would be "
+            f"trained at {max_len:,}. `encode_sft_example` returns None rather "
+            f"than truncating and the encoder drops what it returns, so every "
+            f"conversation between the two budgets would leave the set without "
+            f"a count or a reason -- and the long ones are the code payload the "
+            f"set exists to add. A larger budget is fine: it admits everything "
+            f"the build admitted.")
+
+    if tokenizer is not None:
+        built_tokenizer = manifest.get("tokenizer") or {}
+        built_vocab = built_tokenizer.get("vocab_size")
+        vocab = getattr(tokenizer, "vocab_size", None)
+        if built_vocab is not None and vocab is not None \
+                and int(built_vocab) != int(vocab):
+            raise BuiltSFTSetError(
+                f"this set was measured with a {int(built_vocab):,}-token "
+                f"tokenizer ({built_tokenizer.get('name_or_path')!r}) and would "
+                f"be trained with a {int(vocab):,}-token one "
+                f"({getattr(tokenizer, 'name_or_path', None)!r}). Its supervised-"
+                f"token counts, its half shares and its max_len refusals are all "
+                f"measurements of the first; re-tokenized they describe a corpus "
+                f"that was never built.")
+    return manifest
+
+
+def built_train_path(directory, manifest) -> Path:
+    """The training file this manifest names, or a refusal.
+
+    Read out of the manifest rather than composed from a constant: the file the
+    manifest's counts describe is the one it names, and a reader that assumes
+    the name would happily train on a leftover from an earlier build.
+    """
+
+    files = manifest.get("files")
+    name = files.get("train") if isinstance(files, dict) else None
+    if not name:
+        raise BuiltSFTSetError(
+            f"the manifest in {directory} names no training file, so its counts "
+            f"describe nothing this can open")
+    path = Path(directory) / str(name)
+    if not path.exists():
+        raise BuiltSFTSetError(
+            f"{path} does not exist, though the manifest beside it says it does. "
+            f"A build publishes its files and its manifest together, so this is "
+            f"a set that was moved or half-copied rather than one that was built.")
+    return path
+
+
+def iter_built_examples(path) -> Iterator[List[dict]]:
+    """Message lists from a built set, with **no** content filter applied.
+
+    Deliberately not `iter_chat_examples`: see the note above this section. The
+    conversations in this file passed a strictly stronger gate than the one that
+    function applies, and re-applying it drops the code it was built to carry.
+
+    A malformed line raises rather than being skipped, which is the opposite of
+    the streaming reader's stance and right for the same reason: the producer of
+    this file is known, so a line it cannot have written means the file is not
+    the built set, and skipping would train on an unrecorded subset of it.
+    """
+
+    path = Path(path)
+    with path.open(encoding="utf-8") as handle:
+        for number, line in enumerate(handle, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise BuiltSFTSetError(f"{path} line {number} is not JSON: {exc}")
+            messages = row.get("messages") if isinstance(row, dict) else None
+            if not messages:
+                raise BuiltSFTSetError(
+                    f"{path} line {number} carries no messages. Every line a "
+                    f"build writes is a conversation; a line that is not means "
+                    f"this file is not the set the manifest describes.")
+            try:
+                yield [{"role": message["role"], "content": message["content"]}
+                       for message in messages]
+            except (KeyError, TypeError) as exc:
+                raise BuiltSFTSetError(
+                    f"{path} line {number} has a message without a role or a "
+                    f"content: {exc}")
+
+
+def encode_built(examples: Iterable[List[dict]], tokenizer, max_len: int
+                 ) -> Iterator[Tuple[List[int], List[int]]]:
+    """Encode a built set, refusing rather than dropping what does not fit.
+
+    `iter_encoded` drops silently, which is right for a stream whose rows nobody
+    vetted. Here the build already refused `over_token_budget` with this same
+    encoder, so a conversation that does not fit means the set and the tokenizer
+    disagree with the manifest that was just checked -- and the honest answer to
+    that is to stop rather than to train on the remainder. The shuffle buffer
+    fills before the first batch is yielded, so this surfaces at startup rather
+    than hours in.
+    """
+
+    for number, messages in enumerate(examples, start=1):
+        encoded = encode_sft_example(messages, tokenizer, max_len=max_len)
+        if encoded is None:
+            raise BuiltSFTSetError(
+                f"conversation {number} of the built set does not fit "
+                f"{max_len:,} tokens, though the build admitted it at its own "
+                f"budget with this same encoder. The set, the tokenizer and the "
+                f"manifest do not describe the same corpus.")
+        yield encoded
+
+
+class _Reiterable:
+    """A source `SFTBatchSource` can start over, without holding the corpus.
+
+    `iter()` on a generator hands back the same exhausted generator, which is
+    why the streaming path can only loop when it materialises. A built set is a
+    file and can simply be read again, so this rebuilds the whole
+    read -> encode -> shuffle pipeline per epoch and peak memory stays the
+    shuffle buffer rather than the set.
+
+    The shuffle seed is fixed, so every epoch sees the same order -- which is
+    what looping a materialised list already does today.
+    """
+
+    def __init__(self, factory):
+        self._factory = factory
+
+    def __iter__(self):
+        return iter(self._factory())
+
+
+def build_built_sft_source(directory, tokenizer, micro_batch: int, device: str,
+                           max_len: int = 2048, shuffle_buffer: int = 10_000,
+                           limit: Optional[int] = None, seed: int = 0
+                           ) -> Tuple[SFTBatchSource, dict]:
+    """Wire a built set: read -> encode -> local shuffle -> batches.
+
+    Returns the source and the manifest it was checked against, because the
+    manifest is what the run has to report -- the supervised-token counts and
+    the code-language shares step 6 is asked to track are measurements of this
+    file, not of the batches that come out of it.
+    """
+
+    manifest = read_built_manifest(directory, max_len=max_len,
+                                   tokenizer=tokenizer)
+    train_path = built_train_path(directory, manifest)
+
+    def pipeline():
+        chats = iter_built_examples(train_path)
+        if limit is not None:
+            chats = itertools.islice(chats, limit)
+        return shuffle_buffered(encode_built(chats, tokenizer, max_len),
+                                shuffle_buffer, seed=seed)
+
+    pad_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
+    return SFTBatchSource(_Reiterable(pipeline), micro_batch, device,
+                          pad_id=pad_id, loop=True), manifest
+
+
+def refuse_built_set_as_dataset(dataset: Optional[str]) -> None:
+    """Refuse a built set handed to `--dataset`.
+
+    The trap this whole section exists for, caught at the one place it is
+    reachable. A built row is already `iter_chat_examples`' shape, so the wrong
+    flag trains without complaint on most of the general half and a fraction of
+    the code half.
+    """
+
+    if not dataset:
+        return
+    path = Path(dataset)
+    looks_built = (path / BUILT_MANIFEST_FILE).exists() or \
+        (path.suffix == ".jsonl" and path.exists())
+    if looks_built:
+        raise SystemExit(
+            f"--dataset {dataset} looks like a locally built SFT set. It would "
+            f"be filtered a second time on the way in -- `keep_example` at the "
+            f"whole-turn character cap, over conversations a build already "
+            f"admitted by measuring their prose alone -- and most of the code "
+            f"would be dropped without a count. Use --built-dataset, which "
+            f"applies no filter and checks the manifest instead.")
 
 
 DEFAULT_DPO_DATASET = "HuggingFaceH4/ultrafeedback_binarized"
@@ -442,7 +702,16 @@ def _cli(argv=None):
                         "out roughly 10x earlier.")
     p.add_argument("--run-name", default="post-sft")
     p.add_argument("--config", default="daedalus-150m")
-    p.add_argument("--dataset", default=DEFAULT_SFT_DATASET)
+    p.add_argument("--dataset", default=None,
+                   help=f"Hub dataset to stream (default {DEFAULT_SFT_DATASET}). "
+                        f"Mutually exclusive with --built-dataset")
+    p.add_argument("--built-dataset", default=None,
+                   help="train on a locally built SFT set instead: a directory "
+                        "holding train.jsonl and the manifest of the gate that "
+                        "admitted it. No content filter is applied on the way "
+                        "in -- those conversations already passed a stronger "
+                        "one -- so --max-assistant-chars and --keep-cot have "
+                        "nothing to do here")
     p.add_argument("--split", default="train")
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--micro-batch", type=int, default=8)
@@ -485,19 +754,52 @@ def _cli(argv=None):
                         "split; the default costs no such assumption")
     args = p.parse_args(argv)
 
-    from datasets import load_dataset
+    if args.built_dataset and args.dataset:
+        raise SystemExit(
+            "--built-dataset and --dataset name two different sets and only one "
+            "of them can be trained on. The built set is a directory on this "
+            "box; --dataset streams from the Hub.")
+    if args.built_dataset and args.keep_cot:
+        raise SystemExit(
+            "--keep-cot has nothing to disable under --built-dataset: the "
+            "chain-of-thought filter ran at build time, over assistant prose "
+            "with fenced code removed, and its refusals are counted in the "
+            "manifest. Passing it here would look like an ablation that was "
+            "never applied.")
+    refuse_built_set_as_dataset(args.dataset)
+
     from daedalus.data import get_tokenizer
     from train import TrainArgs, Trainer
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer = get_tokenizer()
-    dataset = load_dataset(args.dataset, split=args.split, streaming=True)
 
-    source = build_sft_source(
-        dataset, tokenizer, micro_batch=args.micro_batch, device=device,
-        max_len=args.max_len, max_assistant_chars=args.max_assistant_chars,
-        drop_cot=not args.keep_cot, shuffle_buffer=args.shuffle_buffer,
-        limit=args.limit)
+    manifest = None
+    if args.built_dataset:
+        # No `datasets` import on this path: a built set is read off local disk
+        # and must not need the Hub library to train on.
+        source, manifest = build_built_sft_source(
+            args.built_dataset, tokenizer, micro_batch=args.micro_batch,
+            device=device, max_len=args.max_len,
+            shuffle_buffer=args.shuffle_buffer, limit=args.limit)
+        halves = manifest.get("halves") or {}
+        print(f"built SFT set {args.built_dataset}: "
+              f"{manifest.get('train_examples')} conversations, "
+              f"{manifest.get('train_supervised_tokens')} supervised tokens, "
+              f"realized code share {manifest.get('realized_code_share')}, "
+              f"halves " + ", ".join(
+                  f"{half} {block.get('supervised_tokens')}"
+                  for half, block in sorted(halves.items())))
+    else:
+        from datasets import load_dataset
+
+        dataset = load_dataset(args.dataset or DEFAULT_SFT_DATASET,
+                               split=args.split, streaming=True)
+        source = build_sft_source(
+            dataset, tokenizer, micro_batch=args.micro_batch, device=device,
+            max_len=args.max_len, max_assistant_chars=args.max_assistant_chars,
+            drop_cot=not args.keep_cot, shuffle_buffer=args.shuffle_buffer,
+            limit=args.limit)
 
     train_args = TrainArgs(
         run_name=args.run_name, config=args.config,
@@ -518,7 +820,10 @@ def _cli(argv=None):
         # insurance: the checkpoint is 1.4 GB written to local disk.
         ckpt_every_sec=300.0,
         muon_lr=args.muon_lr, adam_lr=args.adam_lr, device=device,
-        wandb_enabled=not args.no_wandb, tags=["post", "sft"],
+        wandb_enabled=not args.no_wandb,
+        # A run over a built set is a different experiment from one over the
+        # Hub stream and has to be findable as such afterwards.
+        tags=["post", "sft"] + (["built-sft"] if args.built_dataset else []),
         # DPO runs after fit() returns, in this same process, and must be able
         # to log to the same run. post.py closes it below instead.
         finish_wandb=False)

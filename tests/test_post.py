@@ -5,6 +5,7 @@ in milliseconds. What they pin is the wiring: filters actually applied,
 batches actually masked, and the stream actually bounded.
 """
 import itertools
+import json
 import os
 
 import pytest
@@ -149,6 +150,181 @@ def test_batch_source_refuses_to_silently_shorten_a_one_shot_stream(tok):
     src.get_batch(8)
     with pytest.raises(RuntimeError, match="cannot be re-iterated"):
         src.get_batch(8)
+
+
+# --------------------------------------------------------- built SFT sets ---
+# Phase 8 step 6 trains on a set `daedalus/code_sft.py` selected on disk. Its
+# rows are already `iter_chat_examples`' shape, which is exactly what makes
+# reading them through the streaming path so easy to do by accident -- and that
+# path re-applies a filter the build already applied more strictly, to prose
+# alone, so it drops the code payload without a count.
+
+#: Short prose, long payload: the shape the streaming reader gets wrong.
+_LONG_FUNCTION = ("Here you go.\n\n```python\n"
+                  + "\n".join(f"    step_{i} = {i} * 2" for i in range(120))
+                  + "\n```")
+
+
+def _built_row(user, assistant, half="code"):
+    """One line as `code_sft.build_record` writes it."""
+    return {"messages": [{"role": "user", "content": user},
+                         {"role": "assistant", "content": assistant}],
+            "half": half, "source": f"{half}-source",
+            "dataset": "HuggingFaceTB/smol-smoltalk",
+            "supervised_tokens": 32, "total_tokens": 64,
+            "primary_language": "python" if half == "code" else None,
+            "ships_test": False, "execution_tested": False}
+
+
+def _built_set(tmp_path, rows, *, vocab_size, max_len=2048, problems=(),
+               name="built", train_file="train.jsonl", write_train=True):
+    directory = tmp_path / name
+    directory.mkdir(parents=True, exist_ok=True)
+    if write_train:
+        with (directory / train_file).open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+    manifest = {
+        "schema": 1, "seed": 0, "max_len": max_len,
+        "supervised_token_budget": 8_000_000, "code_share": 0.65,
+        "train_examples": len(rows), "train_supervised_tokens": 32 * len(rows),
+        "realized_code_share": 0.65,
+        "halves": {"code": {"supervised_tokens": 21},
+                   "general": {"supervised_tokens": 11}},
+        "tokenizer": {"name_or_path": "HuggingFaceTB/SmolLM2-135M",
+                      "vocab_size": vocab_size},
+        "files": {"train": train_file, "holdout": "holdout.jsonl"},
+        "problems": list(problems),
+    }
+    (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return directory
+
+
+def test_a_built_set_is_read_without_a_second_content_filter(tmp_path, tok):
+    """The trap this reader exists for. `keep_example` counts the whole
+    assistant turn; the build counted its prose with the code removed, so the
+    streaming path drops exactly the payload phase 8 is adding."""
+    row = _built_row("write it", _LONG_FUNCTION)
+    assert len(_LONG_FUNCTION) > 1200
+
+    through_the_stream = list(post.iter_chat_examples(
+        [row], max_assistant_chars=1200, drop_cot=True))
+    assert through_the_stream == [], (
+        "the streaming reader is expected to drop this; if it stops doing so "
+        "the contrast this reader exists for has changed")
+
+    directory = _built_set(tmp_path, [row], vocab_size=tok.vocab_size)
+    kept = list(post.iter_built_examples(directory / "train.jsonl"))
+    assert len(kept) == 1
+    assert kept[0][1]["content"] == _LONG_FUNCTION
+
+
+def test_a_built_set_refuses_a_manifest_that_reports_problems(tmp_path, tok):
+    """`build_problems` is the build's own verdict on what it wrote, reported
+    rather than raised so a short half still lands on disk to be looked at."""
+    directory = _built_set(tmp_path, [_built_row("q", "a")],
+                           vocab_size=tok.vocab_size,
+                           problems=["the code half came up short"])
+    with pytest.raises(post.BuiltSFTSetError, match="came up short"):
+        post.read_built_manifest(directory)
+
+
+def test_a_built_set_refuses_a_smaller_budget_than_it_was_admitted_at(tmp_path, tok):
+    directory = _built_set(tmp_path, [_built_row("q", "a")],
+                           vocab_size=tok.vocab_size, max_len=2048)
+    with pytest.raises(post.BuiltSFTSetError, match="admitted at max_len"):
+        post.read_built_manifest(directory, max_len=1024)
+
+
+def test_a_larger_budget_than_the_build_used_is_accepted(tmp_path, tok):
+    """It admits everything the build admitted, so nothing is dropped."""
+    directory = _built_set(tmp_path, [_built_row("q", "a")],
+                           vocab_size=tok.vocab_size, max_len=1024)
+    manifest = post.read_built_manifest(directory, max_len=2048)
+    assert manifest["max_len"] == 1024
+
+
+def test_a_built_set_refuses_a_tokenizer_it_was_not_measured_with(tmp_path, tok):
+    """Its token counts, its half shares and its max_len refusals are all
+    measurements of one tokenizer."""
+    directory = _built_set(tmp_path, [_built_row("q", "a")],
+                           vocab_size=tok.vocab_size + 1)
+    with pytest.raises(post.BuiltSFTSetError, match="tokenizer"):
+        post.read_built_manifest(directory, tokenizer=tok)
+
+
+def test_a_built_set_refuses_a_missing_manifest(tmp_path):
+    (tmp_path / "loose").mkdir()
+    (tmp_path / "loose" / "train.jsonl").write_text("{}\n")
+    with pytest.raises(post.BuiltSFTSetError, match="does not exist"):
+        post.read_built_manifest(tmp_path / "loose")
+
+
+def test_a_built_set_refuses_a_training_file_that_is_not_there(tmp_path, tok):
+    directory = _built_set(tmp_path, [_built_row("q", "a")],
+                           vocab_size=tok.vocab_size, write_train=False)
+    manifest = post.read_built_manifest(directory)
+    with pytest.raises(post.BuiltSFTSetError, match="half-copied"):
+        post.built_train_path(directory, manifest)
+
+
+def test_a_built_line_that_is_not_a_conversation_stops_the_run(tmp_path, tok):
+    """The opposite of the streaming reader's stance, for the same reason: the
+    producer of this file is known, so skipping trains on an unrecorded subset."""
+    directory = _built_set(tmp_path, [_built_row("q", "a")],
+                           vocab_size=tok.vocab_size)
+    with (directory / "train.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"half": "code"}) + "\n")
+    with pytest.raises(post.BuiltSFTSetError, match="line 2 carries no messages"):
+        list(post.iter_built_examples(directory / "train.jsonl"))
+
+
+def test_encode_built_refuses_rather_than_dropping_what_does_not_fit(tok):
+    """`iter_encoded` drops silently, which is right for rows nobody vetted and
+    wrong for a set whose manifest says every one of them fits."""
+    messages = [{"role": "user", "content": "q"},
+                {"role": "assistant", "content": "a " * 500}]
+    assert list(post.iter_encoded([messages], tok, max_len=8)) == []
+    with pytest.raises(post.BuiltSFTSetError, match="does not fit"):
+        list(post.encode_built([messages], tok, max_len=8))
+
+
+def test_a_built_source_loops_without_materialising_the_set(tmp_path, tok):
+    """A file can be read again, so the source loops epochs while peak memory
+    stays the shuffle buffer."""
+    rows = [_built_row(f"q{i}", f"a{i}") for i in range(4)]
+    directory = _built_set(tmp_path, rows, vocab_size=tok.vocab_size,
+                           max_len=128)
+    source, manifest = post.build_built_sft_source(
+        directory, tok, micro_batch=2, device="cpu", max_len=128,
+        shuffle_buffer=2)
+    assert manifest["train_examples"] == 4
+    assert not isinstance(source._make_iter(), list)
+    for _ in range(4):                       # 8 examples out of a 4-example set
+        source.get_batch(2048)
+    assert source.epochs >= 1
+    assert source.examples_seen == 8
+
+
+def test_a_built_source_drives_a_real_train_step(tmp_path, tok):
+    """End to end through train.py's Trainer, as the streaming source is."""
+    from train import TrainArgs, Trainer
+
+    rows = [_built_row(f"q{i}", f"a{i}") for i in range(16)]
+    directory = _built_set(tmp_path, rows, vocab_size=tok.vocab_size,
+                           max_len=64)
+    source, _ = post.build_built_sft_source(
+        directory, tok, micro_batch=2, device="cpu", max_len=64,
+        shuffle_buffer=4)
+    args = TrainArgs(run_name="built-smoke", config="tiny", max_steps=1,
+                     micro_batch=2, seq_start=64, seq_end=64,
+                     tok_start=128, tok_end=128, compile=False, device="cpu",
+                     run_dir=str(tmp_path / "built-run"), wandb_enabled=False)
+    t = Trainer(args)
+    t.batch_source = _ClampedSource(source, args)
+    stats = t.train_step()
+    assert not stats["skipped"]
+    assert torch.isfinite(torch.tensor(stats["loss"]))
 
 
 # ------------------------------------------------------------ trainer wiring ---
@@ -357,6 +533,74 @@ def test_cli_pins_the_seq_ramp_flat(captured_train_args):
                                 "--max-len", "128"])
     assert args.seq_start == args.seq_end == 128
     assert args.tok_start == args.tok_end == 128
+
+
+def test_cli_still_streams_the_default_dataset(captured_train_args, monkeypatch):
+    """The built path is additive: with neither flag, nothing moves."""
+    asked = {}
+    import datasets
+
+    def record(name, **kwargs):
+        asked["name"] = name
+        return [_row("hi", "hello")] * 4
+
+    monkeypatch.setattr(datasets, "load_dataset", record)
+    args = captured_train_args(["--init-from", "/ckpt/hero.pt", "--no-wandb",
+                                "--limit", "2", "--micro-batch", "1",
+                                "--max-len", "128"])
+    assert asked["name"] == post.DEFAULT_SFT_DATASET
+    assert "built-sft" not in args.tags
+
+
+def test_cli_trains_on_a_built_set_without_touching_the_hub(
+        captured_train_args, monkeypatch, tmp_path, tok):
+    """A set on local disk must not need the Hub library to train on."""
+    import datasets
+
+    def refuse(*a, **k):
+        raise AssertionError("the built path must not call load_dataset")
+
+    monkeypatch.setattr(datasets, "load_dataset", refuse)
+    directory = _built_set(tmp_path, [_built_row(f"q{i}", f"a{i}")
+                                      for i in range(8)],
+                           vocab_size=tok.vocab_size, max_len=128)
+    args = captured_train_args(["--init-from", "/ckpt/hero.pt", "--no-wandb",
+                                "--built-dataset", str(directory),
+                                "--micro-batch", "1", "--max-len", "128"])
+    assert args.init_from == "/ckpt/hero.pt"
+    assert "built-sft" in args.tags
+
+
+def test_cli_refuses_a_built_set_handed_to_dataset(tmp_path, tok):
+    """The trap: a built row is already the streaming reader's shape, so the
+    wrong flag trains on a filtered fraction of the set without complaint."""
+    directory = _built_set(tmp_path, [_built_row("q", "a")],
+                           vocab_size=tok.vocab_size)
+    with pytest.raises(SystemExit, match="--built-dataset"):
+        post._cli(["--init-from", "/ckpt/hero.pt", "--no-wandb",
+                   "--dataset", str(directory)])
+    with pytest.raises(SystemExit, match="--built-dataset"):
+        post._cli(["--init-from", "/ckpt/hero.pt", "--no-wandb",
+                   "--dataset", str(directory / "train.jsonl")])
+
+
+def test_cli_refuses_two_sets_at_once(tmp_path, tok):
+    directory = _built_set(tmp_path, [_built_row("q", "a")],
+                           vocab_size=tok.vocab_size)
+    with pytest.raises(SystemExit, match="only one"):
+        post._cli(["--init-from", "/ckpt/hero.pt", "--no-wandb",
+                   "--built-dataset", str(directory),
+                   "--dataset", post.DEFAULT_SFT_DATASET])
+
+
+def test_cli_refuses_an_ablation_flag_that_would_never_be_applied(tmp_path, tok):
+    """`--keep-cot` under a built set reads as an ablation nobody ran: the
+    chain-of-thought filter ran at build time and its refusals are counted."""
+    directory = _built_set(tmp_path, [_built_row("q", "a")],
+                           vocab_size=tok.vocab_size)
+    with pytest.raises(SystemExit, match="keep-cot"):
+        post._cli(["--init-from", "/ckpt/hero.pt", "--no-wandb", "--keep-cot",
+                   "--built-dataset", str(directory)])
 
 
 # ------------------------------------------------ the DPO round must survive ---

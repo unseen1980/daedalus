@@ -1,0 +1,24 @@
+{
+  "n": 164.0,
+  "pass@1": 1.0,
+  "pass@1_plus": 1.0,
+  "plus_inputs_absent": 0.0,
+  "syntax_valid": 1.0
+}
+wrote runs/eval/code-base-oracle/humaneval-plus-oracle.json
+{
+  "n": 164.0,
+  "pass@1": 1.0,
+  "pass@1_plus": 1.0,
+  "plus_inputs_absent": 0.0,
+  "syntax_valid": 1.0
+}
+wrote runs/eval/code-base-oracle/humaneval-plus-oracle.json
+{
+  "n": 164.0,
+  "pass@1": 1.0,
+  "pass@1_plus": 1.0,
+  "plus_inputs_absent": 0.0,
+  "syntax_valid": 1.0
+}
+wrote runs/eval/code-base-oracle/humaneval-plus-oracle.json

@@ -1,0 +1,41 @@
+{
+  "path": "data/decontam/code-index-13gram.txt.gz",
+  "problems": [],
+  "provenance": {
+    "benchmarks": {
+      "humaneval-plus": {
+        "fields": {
+          "prompt": 9133,
+          "reference": 13458,
+          "solution": 2587,
+          "test": 9955
+        },
+        "items": 164,
+        "short_fields": {
+          "solution": 36
+        }
+      },
+      "mbpp-plus": {
+        "fields": {
+          "prompt": 5341,
+          "reference": 11790,
+          "solution": 2686
+        },
+        "items": 378,
+        "short_fields": {
+          "prompt": 3,
+          "solution": 197
+        }
+      }
+    },
+    "built_at": "2026-08-26T17:06:12Z",
+    "complete": true,
+    "digest": "sha256:67d21afc49ed21f995cc7dbe63196469e9bdda30c382167b89aca076d95cdf78",
+    "evalplus": "0.3.1",
+    "kind": "code",
+    "limit": null,
+    "n": 13,
+    "ngrams": 34286,
+    "schema": 1
+  }
+}

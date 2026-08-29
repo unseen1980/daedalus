@@ -1,0 +1,43 @@
+{
+  "created_at": "2026-08-27T10:51:10.848400Z",
+  "details": {},
+  "item_count": 8,
+  "item_digest": "3aae401a67368a4364f8dfe534039172",
+  "kind": "retrieval",
+  "metrics": {
+    "exact_match": 1.0,
+    "exact_match_d0": 1.0,
+    "n": 8.0,
+    "n_d0": 8.0,
+    "query_accuracy": 1.0
+  },
+  "name": "retrieval-copy-control",
+  "provenance": {
+    "artifact": {
+      "config": "daedalus-150m",
+      "kind": "checkpoint",
+      "path": "runs/code-branch-1b/checkpoint.pt",
+      "revision": null,
+      "sha256": "52c451a1768f17a4e76c263ac5c2f0e09a55918bb23eafd70fd895a1794ac3ae"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "89826d9",
+    "runtime": {
+      "backend": "torch",
+      "device": "cuda",
+      "max_new_tokens": 24,
+      "torch": "2.11.0+cu128"
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<none>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

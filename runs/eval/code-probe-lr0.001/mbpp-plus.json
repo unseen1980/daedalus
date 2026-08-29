@@ -1,0 +1,51 @@
+{
+  "created_at": "2026-08-27T03:22:32.564850Z",
+  "details": {
+    "memory_mb": 1024,
+    "timeout_s": 30.0
+  },
+  "item_count": 378,
+  "item_digest": "78031093b4e0bb8d199ec02d567c6164",
+  "kind": "code-execution",
+  "metrics": {
+    "fail_assertion_failed": 31.0,
+    "fail_exception": 70.0,
+    "fail_import_error": 5.0,
+    "fail_syntax_error": 272.0,
+    "n": 378.0,
+    "pass@1": 0.0,
+    "pass@1_plus": 0.0,
+    "plus_inputs_absent": 1.0,
+    "syntax_valid": 0.30423280423280424
+  },
+  "name": "mbpp-plus",
+  "provenance": {
+    "artifact": {
+      "config": "daedalus-150m",
+      "kind": "checkpoint",
+      "path": "runs/code-probe-lr0.001/checkpoint.pt",
+      "revision": null,
+      "sha256": "18b5419fe6ebae2e741992b1607387b59a8ed32a4867effc18e43a4dc485bd20"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "8003adc",
+    "runtime": {
+      "backend": "torch",
+      "evalplus": "0.3.1",
+      "max_new_tokens": 384
+    },
+    "seed": 20260824,
+    "task_revisions": {
+      "mbpp-plus": "unknown"
+    },
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<embedded>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

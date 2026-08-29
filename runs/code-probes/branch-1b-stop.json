@@ -1,0 +1,300 @@
+{
+  "branch": "code-branch-1b",
+  "decision": "stop",
+  "evidence": {
+    "general_bpb_by_source": {
+      "dclm-baseline": {
+        "base": 1.0388629119873702,
+        "improvement_pct": -2.033867350747905,
+        "measured": 1.0599920055733103,
+        "tokens": 66572481.0,
+        "weight": 0.37499999999999994
+      },
+      "fineweb-edu": {
+        "base": 0.8791765500255371,
+        "improvement_pct": -2.4189416556221652,
+        "measured": 0.9004433178205666,
+        "tokens": 53588955.0,
+        "weight": 0.625
+      }
+    },
+    "retrieval_paired": {
+      "retrieval-copy-control:d0": {
+        "base_correct": 8,
+        "base_only": 0,
+        "branch_correct": 8,
+        "branch_only": 0,
+        "drop_points": -0.0,
+        "n": 8,
+        "n_discordant": 0,
+        "p": 1.0,
+        "resolved_at_p05": false,
+        "thin": true
+      },
+      "retrieval-mqar:d1024": {
+        "base_correct": 91,
+        "base_only": 2,
+        "branch_correct": 92,
+        "branch_only": 3,
+        "drop_points": -1.0,
+        "n": 100,
+        "n_discordant": 5,
+        "p": 1.0,
+        "resolved_at_p05": false,
+        "thin": true
+      },
+      "retrieval-mqar:d2048": {
+        "base_correct": 86,
+        "base_only": 5,
+        "branch_correct": 88,
+        "branch_only": 7,
+        "drop_points": -2.0,
+        "n": 100,
+        "n_discordant": 12,
+        "p": 0.7728299926844475,
+        "resolved_at_p05": false,
+        "thin": false
+      },
+      "retrieval-mqar:d256": {
+        "base_correct": 99,
+        "base_only": 0,
+        "branch_correct": 99,
+        "branch_only": 0,
+        "drop_points": -0.0,
+        "n": 100,
+        "n_discordant": 0,
+        "p": 1.0,
+        "resolved_at_p05": false,
+        "thin": true
+      },
+      "retrieval-mqar:d512": {
+        "base_correct": 96,
+        "base_only": 3,
+        "branch_correct": 95,
+        "branch_only": 2,
+        "drop_points": 1.0,
+        "n": 100,
+        "n_discordant": 5,
+        "p": 1.0,
+        "resolved_at_p05": false,
+        "thin": true
+      },
+      "retrieval-passkey:d1024": {
+        "base_correct": 86,
+        "base_only": 6,
+        "branch_correct": 80,
+        "branch_only": 0,
+        "drop_points": 6.0,
+        "n": 100,
+        "n_discordant": 6,
+        "p": 0.04122683333716371,
+        "resolved_at_p05": true,
+        "thin": true
+      },
+      "retrieval-passkey:d2048": {
+        "base_correct": 88,
+        "base_only": 8,
+        "branch_correct": 80,
+        "branch_only": 0,
+        "drop_points": 8.0,
+        "n": 100,
+        "n_discordant": 8,
+        "p": 0.013328328780817567,
+        "resolved_at_p05": true,
+        "thin": true
+      },
+      "retrieval-passkey:d256": {
+        "base_correct": 83,
+        "base_only": 0,
+        "branch_correct": 85,
+        "branch_only": 2,
+        "drop_points": -2.0,
+        "n": 100,
+        "n_discordant": 2,
+        "p": 0.4795001221869535,
+        "resolved_at_p05": false,
+        "thin": true
+      },
+      "retrieval-passkey:d512": {
+        "base_correct": 81,
+        "base_only": 0,
+        "branch_correct": 82,
+        "branch_only": 1,
+        "drop_points": -1.0,
+        "n": 100,
+        "n_discordant": 1,
+        "p": 1.0,
+        "resolved_at_p05": false,
+        "thin": true
+      }
+    }
+  },
+  "failed": [
+    {
+      "base": 0.9390589357612245,
+      "branch": 0.9602740757278454,
+      "gate": "general-bpb",
+      "limit_regression_pct": 1.5,
+      "observed_regression_pct": 2.259191533002497,
+      "passed": false
+    },
+    {
+      "gate": "retrieval",
+      "limit_drop_points": 2.0,
+      "missing": [],
+      "passed": false,
+      "per_key": {
+        "retrieval-copy-control:d0": {
+          "base": 1.0,
+          "branch": 1.0,
+          "drop_points": 0.0
+        },
+        "retrieval-mqar:d1024": {
+          "base": 0.91,
+          "branch": 0.92,
+          "drop_points": -1.0000000000000009
+        },
+        "retrieval-mqar:d2048": {
+          "base": 0.86,
+          "branch": 0.88,
+          "drop_points": -2.0000000000000018
+        },
+        "retrieval-mqar:d256": {
+          "base": 0.99,
+          "branch": 0.99,
+          "drop_points": 0.0
+        },
+        "retrieval-mqar:d512": {
+          "base": 0.96,
+          "branch": 0.95,
+          "drop_points": 1.0000000000000009
+        },
+        "retrieval-passkey:d1024": {
+          "base": 0.86,
+          "branch": 0.8,
+          "drop_points": 5.999999999999995
+        },
+        "retrieval-passkey:d2048": {
+          "base": 0.88,
+          "branch": 0.8,
+          "drop_points": 7.9999999999999964
+        },
+        "retrieval-passkey:d256": {
+          "base": 0.83,
+          "branch": 0.85,
+          "drop_points": -2.0000000000000018
+        },
+        "retrieval-passkey:d512": {
+          "base": 0.81,
+          "branch": 0.82,
+          "drop_points": -0.9999999999999898
+        }
+      },
+      "worst_drop_points": 7.9999999999999964,
+      "worst_key": "retrieval-passkey:d2048"
+    }
+  ],
+  "models": {
+    "base": {
+      "cards": {
+        "code-bpb": "runs/eval/code-base/code-bpb.json",
+        "general-bpb": "runs/eval/code-base/general-bpb.json",
+        "humaneval-plus": "runs/eval/code-base/humaneval-plus.json",
+        "mbpp-plus": "runs/eval/code-base/mbpp-plus.json",
+        "retrieval-copy-control": "runs/eval/retrieval-base-n100/retrieval-copy-control.json",
+        "retrieval-mqar": "runs/eval/retrieval-base-n100/retrieval-mqar.json",
+        "retrieval-passkey": "runs/eval/retrieval-base-n100/retrieval-passkey.json",
+        "tasks": "runs/eval/baseline-hero-tasks.json"
+      },
+      "details": {
+        "checkpoint": "/root/daedalus/final/hero/checkpoint.pt",
+        "code_bpb_by_source": {
+          "code-javascript-typescript-javascript-all": {
+            "bpb": 0.7623826496271792,
+            "tokens": 859869.0,
+            "weight": 0.1934265476923077
+          },
+          "code-javascript-typescript-typescript-all": {
+            "bpb": 0.5963380406414385,
+            "tokens": 1160534.0,
+            "weight": 0.2565734523076923
+          },
+          "code-python": {
+            "bpb": 0.521223117627484,
+            "tokens": 2000611.0,
+            "weight": 0.55
+          }
+        },
+        "five_task_scores": {
+          "arc_easy": 50.2104377104377,
+          "hellaswag": 37.91077474606652,
+          "openbookqa": 32.4,
+          "piqa": 65.99564744287268,
+          "winogrande": 50.355169692186266
+        },
+        "general_bpb_share_covered": 0.7792207792207793,
+        "general_bpb_sources": [
+          "dclm-baseline",
+          "fineweb-edu"
+        ]
+      },
+      "sha256": "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153"
+    },
+    "code-branch-1b": {
+      "cards": {
+        "code-bpb": "runs/eval/code-branch-1b/code-bpb.json",
+        "general-bpb": "runs/eval/code-branch-1b/general-bpb.json",
+        "humaneval-plus": "runs/eval/code-branch-1b/humaneval-plus.json",
+        "mbpp-plus": "runs/eval/code-branch-1b/mbpp-plus.json",
+        "retrieval-copy-control": "runs/eval/code-branch-1b/retrieval-copy-control.json",
+        "retrieval-mqar": "runs/eval/code-branch-1b/retrieval-mqar.json",
+        "retrieval-passkey": "runs/eval/code-branch-1b/retrieval-passkey.json",
+        "tasks": "runs/eval/code-branch-1b/tasks.json"
+      },
+      "details": {
+        "checkpoint": "runs/code-branch-1b/checkpoint.pt",
+        "code_bpb_by_source": {
+          "code-javascript-typescript-javascript-all": {
+            "bpb": 0.5061984528085198,
+            "tokens": 859869.0,
+            "weight": 0.1934265476923077
+          },
+          "code-javascript-typescript-typescript-all": {
+            "bpb": 0.1391207850808585,
+            "tokens": 1160534.0,
+            "weight": 0.2565734523076923
+          },
+          "code-python": {
+            "bpb": 0.4887835613155193,
+            "tokens": 2000611.0,
+            "weight": 0.55
+          }
+        },
+        "five_task_scores": {
+          "arc_easy": 49.87373737373738,
+          "hellaswag": 36.59629555865365,
+          "openbookqa": 32.2,
+          "piqa": 65.12513601741023,
+          "winogrande": 49.408050513022886
+        },
+        "general_bpb_share_covered": 0.7792207792207793,
+        "general_bpb_sources": [
+          "dclm-baseline",
+          "fineweb-edu"
+        ]
+      },
+      "sha256": "52c451a1768f17a4e76c263ac5c2f0e09a55918bb23eafd70fd895a1794ac3ae"
+    }
+  },
+  "reading": "the gate is a preregistered threshold and has returned its answer; everything under `evidence` says how to read that answer and decides nothing",
+  "reason": "general-bpb, retrieval did not pass",
+  "schema": 1,
+  "verdict": {
+    "continue": false,
+    "failed": [
+      "general-bpb",
+      "retrieval"
+    ],
+    "gate": "branch_1b"
+  }
+}

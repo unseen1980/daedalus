@@ -1,0 +1,114 @@
+{
+  "holdout_frac": 0.02,
+  "languages": {
+    "unbucketed": {
+      "configs": [
+        {
+          "admitted": {
+            "holdout": 246,
+            "train": 13052
+          },
+          "columns": {
+            "code": 20000,
+            "language": 20000,
+            "license": 20000,
+            "path": 20000,
+            "repo_name": 20000,
+            "size": 20000
+          },
+          "config": "all-all",
+          "data_files": "all-all/partial-train/*.parquet",
+          "dataset": "codeparrot/github-code",
+          "languages": {
+            "Assembly": 15,
+            "Batchfile": 39,
+            "C": 2107,
+            "C#": 1252,
+            "C++": 1264,
+            "CMake": 39,
+            "CSS": 327,
+            "Dockerfile": 74,
+            "FORTRAN": 17,
+            "GO": 331,
+            "HTML": 1980,
+            "Haskell": 62,
+            "Java": 3341,
+            "JavaScript": 2121,
+            "Julia": 13,
+            "Lua": 92,
+            "Makefile": 103,
+            "Markdown": 1645,
+            "PHP": 2017,
+            "Perl": 100,
+            "PowerShell": 27,
+            "Python": 1258,
+            "Ruby": 782,
+            "Rust": 54,
+            "SQL": 122,
+            "Scala": 136,
+            "Shell": 248,
+            "TeX": 48,
+            "TypeScript": 354,
+            "Visual Basic": 32
+          },
+          "licenses": {
+            "agpl-3.0": 553,
+            "apache-2.0": 4283,
+            "artistic-2.0": 19,
+            "bsd-2-clause": 274,
+            "bsd-3-clause": 1146,
+            "cc0-1.0": 221,
+            "epl-1.0": 151,
+            "gpl-2.0": 2594,
+            "gpl-3.0": 2411,
+            "isc": 71,
+            "lgpl-2.1": 328,
+            "lgpl-3.0": 455,
+            "mit": 7155,
+            "mpl-2.0": 191,
+            "unlicense": 148
+          },
+          "refused": {
+            "no_repository": 0,
+            "non_permissive": 6702,
+            "unknown_license": 0
+          },
+          "repositories": {
+            "holdout": 224,
+            "train": 11090
+          },
+          "repository_fields": {
+            "repo_name": 20000
+          },
+          "resolved": true,
+          "rows_read": 20000,
+          "rows_requested": 20000,
+          "samples": [
+            {
+              "chars": 266,
+              "license": "isc",
+              "repository": "mshick/velvet",
+              "split": "train"
+            },
+            {
+              "chars": 322,
+              "license": "isc",
+              "repository": "gokillers/libsodium-go",
+              "split": "train"
+            },
+            {
+              "chars": 886,
+              "license": "isc",
+              "repository": "burninggarden/burninggarden",
+              "split": "train"
+            }
+          ]
+        }
+      ],
+      "share": 0.0
+    }
+  },
+  "problems": [],
+  "rows_per_config": 20000,
+  "split_salt": "vast/daedalus-code-20260824"
+}

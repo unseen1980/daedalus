@@ -1,0 +1,48 @@
+{
+  "created_at": "2026-08-26T15:47:09.013021Z",
+  "details": {
+    "memory_mb": 1024,
+    "timeout_s": 30.0
+  },
+  "item_count": 164,
+  "item_digest": "e9438e79b19746d95249bec84eef9f61",
+  "kind": "code-execution",
+  "metrics": {
+    "n": 164.0,
+    "pass@1": 1.0,
+    "pass@1_plus": 1.0,
+    "plus_inputs_absent": 0.0,
+    "syntax_valid": 1.0
+  },
+  "name": "humaneval-plus-oracle",
+  "provenance": {
+    "artifact": {
+      "config": null,
+      "kind": "canonical-solutions",
+      "path": "evalplus:humaneval-plus",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "bpb_mode": "not-applicable",
+    "bpb_sample_batches": null,
+    "git_sha": "ce46608",
+    "runtime": {
+      "backend": "oracle",
+      "evalplus": "0.3.1",
+      "max_new_tokens": 384,
+      "oracle": true
+    },
+    "seed": 20260824,
+    "task_revisions": {
+      "humaneval-plus-oracle": "unknown"
+    },
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<embedded>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}

@@ -1,0 +1,68 @@
+{
+  "created_at": "2026-08-27T01:43:25.787003Z",
+  "details": {
+    "bucket": "code",
+    "bucket_absent": [],
+    "bucket_share_covered": 1.0,
+    "caveats": [
+      "data/holdout/stack-edu-python is GitHub Python from the same dataset and revision the code bucket streams, and the code corpus is repository-split against its own holdout only -- so that source cannot serve as a general-retention measurement for a model being trained on code. Score general BPB over the general-text sources separately from it."
+    ],
+    "holdout_root": "data/code-mixture/holdout",
+    "model": "base",
+    "phase": "phase8-code-probes",
+    "sources_requested": [
+      "code-javascript-typescript-javascript-all",
+      "code-javascript-typescript-typescript-all",
+      "code-python"
+    ],
+    "weighting": "explicit",
+    "weights": {
+      "code-javascript-typescript-javascript-all": 0.1934265476923077,
+      "code-javascript-typescript-typescript-all": 0.2565734523076923,
+      "code-python": 0.55
+    }
+  },
+  "item_count": 3,
+  "item_digest": "92b36aadeea693d04d062d38f731a8db",
+  "kind": "bpb",
+  "metrics": {
+    "bpb": 0.5871422684627945,
+    "bpb_code-javascript-typescript-javascript-all": 0.7623826496271792,
+    "bpb_code-javascript-typescript-typescript-all": 0.5963380406414385,
+    "bpb_code-python": 0.521223117627484,
+    "bpb_equal_weight": 0.6266479359653672,
+    "bpb_token_weighted": 0.5944730559977862,
+    "n_sources": 3.0,
+    "tokens_code-javascript-typescript-javascript-all": 859869.0,
+    "tokens_code-javascript-typescript-typescript-all": 1160534.0,
+    "tokens_code-python": 2000611.0
+  },
+  "name": "code-bpb",
+  "provenance": {
+    "artifact": {
+      "config": "daedalus-150m",
+      "kind": "checkpoint",
+      "path": "/root/daedalus/final/hero/checkpoint.pt",
+      "revision": null,
+      "sha256": "cfbf27dccf93a07caa2b93cbd630e483c174d52aed8785d104edb7addeb0e153"
+    },
+    "bpb_mode": "full",
+    "bpb_sample_batches": null,
+    "git_sha": "97cdca6",
+    "runtime": {
+      "batch_size": 8,
+      "device": "cuda",
+      "seq_len": 2048
+    },
+    "seed": 20260824,
+    "task_revisions": {},
+    "tokenizer": {
+      "config": null,
+      "kind": "tokenizer",
+      "path": "<smollm2-default>",
+      "revision": null,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "schema": 1
+}
