@@ -33,10 +33,12 @@ from scripts.code_branch_report import (BranchScoringError, CollectedScore,
                                         assert_one_artifact,
                                         assert_retrieval_paired,
                                         branch_pass_plan,
-                                        build_branch_verdict, collect,
+                                        build_branch_verdict,
+                                        build_stop_record, collect,
                                         default_retrieval_paths,
                                         five_task_scores, harness_constraints,
                                         input_paths, missing_inputs,
+                                        paired_retrieval_evidence,
                                         read_five_task_mean,
                                         read_tasks_payload,
                                         retrieval_identity_digest,
@@ -1004,3 +1006,161 @@ def test_verdict_refuses_rather_than_writing_a_partial_payload(tmp_path, capsys)
     assert code == 2
     assert not out_path.exists()
     assert "REFUSE" in capsys.readouterr().err
+
+
+# ------------------------------------------------------ the stop's evidence ---
+#
+# The gate has already answered. These are about the record of that answer being
+# about the same items the gate differenced, and about it refusing to exist for a
+# branch the gate continued.
+
+def _scored_items(task, outcomes, *, depths=DEPTHS):
+    """Items whose `correct` follows `outcomes[depth]`, everything else fixed.
+
+    The identity digest excludes the outcome fields, so two models' items differ
+    here in exactly the way two real scoring passes differ and in no other.
+    """
+
+    items = []
+    for depth in depths:
+        for index, correct in enumerate(outcomes[depth]):
+            items.append({
+                "id": f"{task}-d{depth}-{index}", "task": task, "depth": depth,
+                "needle_depth_frac": 0.0, "prompt_tokens": depth,
+                "prompt": f"{task} at {depth} item {index}",
+                "expected": f"{depth}{index}",
+                "correct": int(correct), "query_accuracy": float(correct),
+                "extracted": f"{depth}{index}" if correct else "",
+                "response": f"{depth}{index}" if correct else "no",
+            })
+    return items
+
+
+def _exact_from(outcomes):
+    return {depth: sum(values) / len(values)
+            for depth, values in outcomes.items()}
+
+
+def _stopped_pair(tmp_path, *, base_outcomes=None, branch_outcomes=None,
+                  **branch_over):
+    """A base and a branch the gate stops, with per-item retrieval on both."""
+
+    base_outcomes = base_outcomes or {256: [1, 1, 1, 1], 512: [1, 1, 1, 1]}
+    branch_outcomes = branch_outcomes or {256: [1, 1, 1, 1], 512: [0, 0, 1, 1]}
+    base = _write_model(
+        tmp_path, "base", BASE_SHA, code_bpb=1.20, general_bpb=3.80,
+        tasks_mean=0.45, per_depth=4, retrieval_exact=_exact_from(base_outcomes),
+        retrieval_items=_scored_items("passkey", base_outcomes))
+    branch = _write_model(
+        tmp_path, "code-branch-1b", BRANCH_SHA, per_depth=4,
+        **{"code_bpb": 1.10, "general_bpb": 3.81, "tasks_mean": 0.45,
+           "retrieval_exact": _exact_from(branch_outcomes),
+           "retrieval_items": _scored_items("passkey", branch_outcomes),
+           **branch_over})
+    return _collect(base), _collect(branch)
+
+
+def test_paired_evidence_counts_the_disagreements_at_each_depth(tmp_path):
+    collected_base, collected_branch = _stopped_pair(tmp_path)
+
+    evidence = paired_retrieval_evidence(
+        collected_base.retrieval_cards["retrieval-passkey"],
+        collected_branch.retrieval_cards["retrieval-passkey"])
+
+    # Keyed as `retrieval_scores` keys, so a row sits beside its own drop.
+    assert sorted(evidence) == ["retrieval-passkey:d256", "retrieval-passkey:d512"]
+    unchanged = evidence["retrieval-passkey:d256"]
+    assert unchanged["n_discordant"] == 0 and unchanged["drop_points"] == 0.0
+    fell = evidence["retrieval-passkey:d512"]
+    assert (fell["base_only"], fell["branch_only"]) == (2, 0)
+    assert fell["base_correct"] == 4 and fell["branch_correct"] == 2
+    # 2 of 4 items, and the gate's sign convention: positive is the branch worse.
+    assert fell["drop_points"] == pytest.approx(50.0)
+    assert fell["thin"] is True
+
+
+def test_the_paired_drop_is_the_drop_the_gate_measured(tmp_path):
+    """Two numbers over the same items that disagreed would mean one of them is
+    about something else. The card's `exact_match_d<depth>` is the mean of the
+    same `correct` field this pairs on, so they cannot."""
+    collected_base, collected_branch = _stopped_pair(tmp_path)
+    verdict = build_branch_verdict(collected_base, collected_branch)
+
+    evidence = paired_retrieval_evidence(
+        collected_base.retrieval_cards["retrieval-passkey"],
+        collected_branch.retrieval_cards["retrieval-passkey"])
+    gate = next(check for check in verdict["gate"]["checks"]
+                if check["gate"] == "retrieval")
+
+    for key, row in evidence.items():
+        assert row["drop_points"] == pytest.approx(
+            gate["per_key"][key]["drop_points"])
+
+
+def test_paired_evidence_refuses_cards_that_scored_different_items(tmp_path):
+    """`assert_retrieval_paired`'s refusals are this function's too. A p-value
+    over two different needle sets is confident and meaningless."""
+    collected_base, _ = _stopped_pair(tmp_path)
+    other = _write_model(tmp_path, "reseeded", BRANCH_SHA, per_depth=4,
+                         retrieval_seed=SEED + 1,
+                         retrieval_items=_scored_items(
+                             "passkey", {256: [1, 1, 1, 1], 512: [1, 1, 0, 0]}))
+
+    with pytest.raises(BranchScoringError, match="seed"):
+        paired_retrieval_evidence(
+            collected_base.retrieval_cards["retrieval-passkey"],
+            _collect(other).retrieval_cards["retrieval-passkey"])
+
+
+def test_a_stop_record_carries_every_failed_clause_and_its_evidence(tmp_path):
+    # 3.80 -> 3.88 is +2.1% general, past 1.5%, alongside the retrieval drop.
+    collected_base, collected_branch = _stopped_pair(tmp_path, general_bpb=3.88)
+
+    record = build_stop_record(collected_base, collected_branch)
+
+    assert record["decision"] == "stop"
+    assert record["verdict"]["continue"] is False
+    assert sorted(check["gate"] for check in record["failed"]) == [
+        "general-bpb", "retrieval"]
+    assert record["evidence"]["retrieval_paired"][
+        "retrieval-passkey:d512"]["base_only"] == 2
+    # And which source the general regression is in, not just that there is one.
+    by_source = record["evidence"]["general_bpb_by_source"]
+    assert sorted(by_source) == ["dclm-baseline", "fineweb-edu"]
+    assert by_source["fineweb-edu"]["improvement_pct"] < 0
+
+
+def test_a_branch_the_gate_continued_has_no_stop_to_record(tmp_path):
+    """The file outlives the session, so a record that says `stop` about a
+    branch the gate continued misreports the program's own decision."""
+    collected_base, collected_branch = _stopped_pair(
+        tmp_path, branch_outcomes={256: [1, 1, 1, 1], 512: [1, 1, 1, 1]})
+
+    with pytest.raises(BranchScoringError, match="no stop to record"):
+        build_stop_record(collected_base, collected_branch)
+
+
+def test_stop_record_writes_beside_the_verdict_without_rewriting_it(tmp_path,
+                                                                   capsys):
+    base = _write_model(tmp_path, "base", BASE_SHA, code_bpb=1.20,
+                        general_bpb=3.80, per_depth=4,
+                        retrieval_items=_scored_items(
+                            "passkey", {256: [1, 1, 1, 1], 512: [1, 1, 1, 1]}))
+    branch = _write_model(
+        tmp_path, "code-branch-1b", BRANCH_SHA, code_bpb=1.10,
+        general_bpb=3.88, per_depth=4,
+        retrieval_exact={256: 1.0, 512: 0.5},
+        retrieval_items=_scored_items("passkey",
+                                      {256: [1, 1, 1, 1], 512: [0, 0, 1, 1]}))
+    out_path = tmp_path / "branch-1b-stop.json"
+
+    code = _cli(_cli_args(tmp_path, base, branch, "stop-record",
+                          "--json-out", str(out_path)))
+    payload = json.loads(out_path.read_text())
+
+    assert code == 0
+    assert payload["decision"] == "stop"
+    assert payload["branch"] == "code-branch-1b"
+    assert "decides nothing" in payload["reading"]
+    assert not (tmp_path / "branch-1b-verdict.json").exists()
+    assert "STOP" in capsys.readouterr().out

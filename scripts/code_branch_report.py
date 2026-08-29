@@ -3,6 +3,7 @@
     python scripts/code_branch_report.py plan
     python scripts/code_branch_report.py score --device cuda
     python scripts/code_branch_report.py verdict --json-out runs/code-probes/branch-1b-verdict.json
+    python scripts/code_branch_report.py stop-record   # only when the gate said stop
 
 `daedalus/code_gates.py::branch_1b_verdict` is the rule that decides whether the
 1B branch continues to the 2B extension and the post-training after it. It takes
@@ -45,6 +46,14 @@ dropped it would pass while the thing that proves the other depths mean anything
 was failing. If it is what falls, `retrieval_drops` names it as the worst key and
 a reader sees immediately that the finding is about the harness.
 
+**`stop-record` is what a no is worth carrying forward.** The gate returns a
+threshold answer and this cannot change it; what the aggregate it differenced
+cannot say is whether an 8-point retrieval drop on 100 items is one-sided
+disagreement or churn, and which of two general-replay sources the regression is
+in. Both are read off the per-item sidecars and the per-source breakdown the
+cards already carry, and both are marked as deciding nothing -- the same stance
+`execution_moves` takes with `moved`. It refuses a branch the gate continued.
+
 **`score` runs the branch's half of that pair, configured from the base's own
 cards.** The base was measured across two phases and four evaluators, and the
 knobs that fix what its numbers *are* -- `--per-depth`, the depth set, the seed,
@@ -81,6 +90,7 @@ from scripts.code_branch import BRANCH_NAME, BRANCH_TOKENS  # noqa: E402
 from scripts.code_probes import (DEFAULT_MIXTURE_RECORD,  # noqa: E402
                                  arm_is_complete)
 from scripts.bpb_eval import per_source_bpb  # noqa: E402
+from scripts.mcnemar import mcnemar  # noqa: E402
 from scripts.code_probe_report import (BASE_MODEL, CODE_CARD,  # noqa: E402
                                        DATASETS, DEFAULT_BASE_EVAL_DIR,
                                        DEFAULT_EVAL_ROOT, GENERAL_CARD,
@@ -120,6 +130,11 @@ DEFAULT_BRANCH_EVAL_DIR = f"{DEFAULT_EVAL_ROOT}/{BRANCH_NAME}"
 DEFAULT_BRANCH_CHECKPOINT = f"runs/{BRANCH_NAME}/checkpoint.pt"
 DEFAULT_BASE_CHECKPOINT = "/root/daedalus/final/hero/checkpoint.pt"
 DEFAULT_VERDICT = "runs/code-probes/branch-1b-verdict.json"
+
+#: Written beside the verdict rather than into it. The verdict is the gate's
+#: output and is already on disk; rewriting it to add fields discovered
+#: afterwards is how an immutable record stops being one.
+DEFAULT_STOP_RECORD = "runs/code-probes/branch-1b-stop.json"
 
 
 class BranchScoringError(ValueError):
@@ -931,6 +946,136 @@ def build_branch_verdict(base: CollectedScore, branch: CollectedScore) -> dict:
     }
 
 
+# ------------------------------------------------------ the stop's evidence ---
+#
+# A gate that returns no has done its job, and nothing below may change that
+# answer. What it cannot do is say how to *read* the no, and for a branch this
+# program stops rather than continues, that reading is what the final report
+# carries forward.
+#
+# The two clauses that stopped the 1B branch fail for different reasons and want
+# different evidence. Retrieval is 100 binary items per depth, so an 8-point drop
+# is 8 items and the aggregate cannot say whether those 8 are one-sided or churn
+# in both directions -- which is the difference between "code training damaged
+# retrieval" and "this measurement cannot tell". General BPB is a
+# mixture-weighted mean over sources, so a 2.26% regression can be one source
+# moving or both, and the verdict already pairs the *code* mean by source for
+# exactly that reason.
+#
+# Both are reported and neither is decisive, the same stance `execution_moves`
+# takes with `moved`. The thresholds are preregistered, the numbers are in, and
+# a paired test run after the fact is evidence about the finding, never a second
+# chance at the gate.
+
+def paired_retrieval_evidence(base: Scorecard,
+                              branch: Scorecard) -> Dict[str, dict]:
+    """Per-depth discordant counts and a McNemar p for one retrieval task.
+
+    The pairing is the gate's own: `assert_retrieval_paired` refuses two cards
+    that did not score the same items, and each item is then matched by `id`
+    rather than by position, so the counts here are about the same needles the
+    gate differenced. Keys are `retrieval_scores`' keys, so a row of this table
+    sits beside the drop that produced it without a translation step.
+    """
+
+    assert_retrieval_paired(base, branch)
+    if base.items is None or branch.items is None:
+        raise BranchScoringError(
+            f"{base.name}: a paired test needs both item sidecars; the "
+            f"aggregate alone cannot say which items disagreed")
+
+    branch_by_id = {item["id"]: item for item in branch.items}
+    grouped: Dict[str, Tuple[List[int], List[int]]] = {}
+    for item in base.items:
+        other = branch_by_id.get(item["id"])
+        if other is None:
+            raise BranchScoringError(
+                f"{base.name}: item {item['id']!r} is in the base's sidecar and "
+                f"not the branch's; pairing what is left would compare two "
+                f"different item sets")
+        left, right = grouped.setdefault(f"{base.name}:d{item['depth']}",
+                                         ([], []))
+        left.append(int(item["correct"]))
+        right.append(int(other["correct"]))
+
+    evidence: Dict[str, dict] = {}
+    for key, (left, right) in sorted(grouped.items()):
+        result = mcnemar(left, right)
+        evidence[key] = {
+            "n": len(left),
+            "base_correct": sum(left),
+            "branch_correct": sum(right),
+            # `mcnemar` labels its discordants by argument order; named here so
+            # a reader never has to recover which side b01 was.
+            "base_only": result["b01"],
+            "branch_only": result["b10"],
+            "n_discordant": result["n_discordant"],
+            # The gate's sign convention: positive is the branch doing worse.
+            # `mcnemar` reports branch-minus-base, so this is its negation.
+            "drop_points": -result["diff_pts"],
+            "p": result["p"],
+            "resolved_at_p05": bool(result["p"] < 0.05),
+            # Below ~10 disagreements the normal approximation behind `p` is
+            # thin, as `scripts/mcnemar.py` says of its own output. Flagged
+            # rather than withheld: the counts are still the finding.
+            "thin": bool(result["n_discordant"] < 10),
+        }
+    return evidence
+
+
+def build_stop_record(base: CollectedScore, branch: CollectedScore) -> dict:
+    """The gate's no, the clauses that produced it, and how to read them.
+
+    Built from the same cards as the verdict rather than from the verdict file,
+    so the record cannot describe a gate result the evidence on disk does not
+    produce. A branch the gate *continued* is refused: a stop record for it
+    would misreport the program's own decision, and the file outlives the
+    session that wrote it.
+    """
+
+    verdict = build_branch_verdict(base, branch)
+    if verdict["continue"]:
+        raise BranchScoringError(
+            f"the 1B gate continues {branch.score.name}: {verdict['reason']}. "
+            f"There is no stop to record.")
+
+    failed = [check for check in verdict["gate"]["checks"]
+              if not check["passed"]]
+    retrieval: Dict[str, dict] = {}
+    for name, card in sorted(base.retrieval_cards.items()):
+        retrieval.update(paired_retrieval_evidence(
+            card, branch.retrieval_cards[name]))
+
+    try:
+        general_by_source = pair_by_source(
+            per_source_bpb(load_scorecard(base.cards[GENERAL_CARD])),
+            per_source_bpb(load_scorecard(branch.cards[GENERAL_CARD])),
+            measured_name=branch.score.name)
+    except (ScorecardError, ProbeScoringError, KeyError, ValueError) as exc:
+        raise BranchScoringError(
+            f"the general-replay regression cannot be attributed to a source: "
+            f"{exc}") from exc
+
+    return {
+        "schema": 1,
+        "decision": "stop",
+        "branch": branch.score.name,
+        "reason": verdict["reason"],
+        "reading": ("the gate is a preregistered threshold and has returned "
+                    "its answer; everything under `evidence` says how to read "
+                    "that answer and decides nothing"),
+        "failed": failed,
+        "evidence": {
+            "retrieval_paired": retrieval,
+            "general_bpb_by_source": general_by_source,
+        },
+        "models": verdict["models"],
+        "verdict": {"gate": verdict["gate"]["gate"],
+                    "continue": verdict["continue"],
+                    "failed": verdict["gate"]["failed"]},
+    }
+
+
 # -------------------------------------------------------------------- cli ---
 
 def _models(a) -> tuple:
@@ -1078,6 +1223,42 @@ def _verdict(a) -> int:
     return 0
 
 
+def _stop_record(a) -> int:
+    base, branch = _models(a)
+    try:
+        record = build_stop_record(_collect_args(a, base, is_base=True),
+                                   _collect_args(a, branch, is_base=False))
+    except (BranchScoringError, ProbeGateError, ProbeScoringError,
+            ScorecardError, OSError) as exc:
+        print(f"REFUSE: {exc}", file=sys.stderr)
+        return 2
+    _write_json(a.json_out, record)
+    _print_stop_record(record)
+    print(f"\nwrote {a.json_out}")
+    return 0
+
+
+def _print_stop_record(record: dict) -> None:
+    print(f"\n{record['branch']}: STOP -- {record['reason']}")
+    print(f"\n{len(record['failed'])} clause(s) failed; the evidence below "
+          f"decides nothing.")
+    print("\nretrieval, paired on the items both models answered:")
+    print(f"  {'key':34s} {'n':>4s} {'base':>5s} {'branch':>6s} "
+          f"{'base only':>9s} {'branch only':>11s} {'drop':>7s} {'p':>7s}")
+    for key, row in sorted(record["evidence"]["retrieval_paired"].items()):
+        flag = " thin" if row["thin"] else ""
+        print(f"  {key:34s} {row['n']:4d} {row['base_correct']:5d} "
+              f"{row['branch_correct']:6d} {row['base_only']:9d} "
+              f"{row['branch_only']:11d} {row['drop_points']:+7.2f} "
+              f"{row['p']:7.4f}{flag}")
+    print("\ngeneral-replay BPB by source (improvement_pct is positive-is-"
+          "better, so a retention regression reads negative):")
+    for source, value in sorted(
+            record["evidence"]["general_bpb_by_source"].items()):
+        print(f"  {source:40s} {value['base']:.5f} -> {value['measured']:.5f} "
+              f"({value['improvement_pct']:+.2f}%, weight {value['weight']:.3f})")
+
+
 def _print_verdict(verdict: dict) -> None:
     gate = verdict["gate"]
     print(f"\n{gate['gate']}: {'continue' if gate['continue'] else 'STOP'} -- "
@@ -1160,6 +1341,13 @@ def _cli(argv=None) -> int:
     shared(verdict)
     verdict.add_argument("--json-out", default=DEFAULT_VERDICT)
     verdict.set_defaults(fn=_verdict)
+
+    stop = sub.add_parser("stop-record",
+                          help="a stopped branch's clauses and the paired "
+                               "evidence for how to read them")
+    shared(stop)
+    stop.add_argument("--json-out", default=DEFAULT_STOP_RECORD)
+    stop.set_defaults(fn=_stop_record)
 
     a = p.parse_args(argv)
     if a.base_retrieval is None:
