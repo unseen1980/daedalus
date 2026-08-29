@@ -408,21 +408,50 @@ What remains for step 6 is `post.py` taking a locally built dataset. That half i
 
 **One trap it must not walk into, found by writing the build.** A built row is already `post.iter_chat_examples`' shape, so wiring it up looks like a one-line `--dataset` change — and that path runs `chatml.keep_example` at its default 1,200-character cap over the **whole** assistant turn. That is the cap this gate deliberately reapplies to *prose only*, because applied whole it refuses a forty-line function: the payload this phase exists to add. Handed a built file unchanged, `post.py` would silently drop most of the code half it was just given, report a smaller SFT set, and look like a stream that ran short. The conversations in a built file have already passed a strictly stronger filter, so the reader for them must not filter again.
 
-## The 1B branch has trained; gate 2 is being measured
+Step 6 does not run: the section below is gate 2 returning stop, and the post-training after the extension stops with it. The admission gate, the build and `post.py --built-dataset` are kept and tested rather than reverted — they are the step's finished half, and what stopped is the training that would have consumed them.
 
-The branch finished at **2026-08-27T09:51Z** with **1,000,341,504 tokens** over 1,908 steps at a median 49.8k tok/s, 5.61 hours, no skipped updates and no non-finite step. Its in-flight marker closed `completed`, so the run is done rather than merely resumable.
+## Gate 2 says stop, and Daedalus-Code ends at 1B
 
-`code_branch_report.py score` is writing the branch's eight cards with the harness the base's own cards fix, and will run `branch_1b_verdict` on them. The first card is in: **code BPB 0.4024** against the base's 0.5871, a **31.5% improvement** — against a final-stage bar of 5%. That is one clause of four, and the three that decide retention (general BPB, the five-task mean, the retrieval curve at every depth) are still being measured. No conclusion is drawn here until the verdict file exists.
+The branch finished at **2026-08-27T09:51Z** with **1,000,341,504 tokens** over 1,908 steps at a median 49.8k tok/s, 5.61 hours, no skipped updates and no non-finite step. Its in-flight marker closed `completed`, so the run is done rather than merely resumable. All eight cards were then written with the harness the base's own cards fix, and `branch_1b_verdict` ran on them. `runs/code-probes/branch-1b-verdict.json`:
 
-## What the disk is doing, and the launcher guard it forced
+| clause | base | branch | bound | |
+| --- | ---: | ---: | :--- | :--- |
+| code BPB | 0.5871 | **0.4024** | ≥2% improvement | **pass**, +31.46% |
+| execution regression | — | — | no metric falls past its bar | **pass**, MBPP+ moved up |
+| general-replay BPB | 0.9391 | 0.9603 | ≤1.5% regression | **fail**, +2.26% |
+| five-task mean | 47.374 | 46.641 | ≤1 point drop | **pass**, −0.734 |
+| retrieval, every depth | — | — | ≤2 point drop | **fail**, −8.0 at `passkey:d2048` |
 
-The volume reads **100% used with 2.0–2.7G free**, and it moves without reference to this program: `du -x` accounts for 123G inside this container against 866G used on a 915G overlay, so roughly 740G belongs to something else. `runs/code-branch-1b/milestone-checkpoint.pt` — 1.435G, present at 10:05Z — was gone by 10:35Z, deleted by nothing in this repository and recorded by no controller event. That is noted as an unexplained deletion rather than attributed.
+Two clauses of five fail, so the gate returns **stop**. That answer was written down before the branch produced a number — `branch_1b_verdict`'s own wording is "continue to the extension and SFT, or stop", and `code_extension.load_branch_verdict` refuses this verdict by name. So **step 5's 2B extension does not run, and neither does the post-training after it**: the SFT stage, the preference stage, and this branch's QAT. The plan's degradation policy names stopping Daedalus-Code at 1B as an acceptable outcome, and this is that outcome arriving on its own evidence rather than on the clock.
 
-The arithmetic that matters: the 2B extension writes a **1.435G** checkpoint, and `save_checkpoint` holds the file and its `.tmp` at once, so a save needs **2.87G**. At present free space the extension cannot write its first checkpoint.
+What is *not* stopped is the reporting. The 1B branch is Daedalus-Code V1's final checkpoint and phase 9 carries it as a stopped branch with both halves of the result: a code model that improved held-out code BPB by 31.5% against a 5% final-stage bar and lifted MBPP+ syntax validity from 0.238 to 0.386 and pass@1 from 0.0079 to 0.0212, at the cost of 2.26% of general-replay BPB and 8 points of long-depth passkey retrieval.
 
-The way that used to surface was the worst available. A trainer does not touch the disk until its first save, so the run launches clean, trains for hours, raises ENOSPC, leaves nothing behind, and the supervisor resumes it from step zero into the same wall — 11 GPU-hours an attempt at the extension's measured rate, three attempts, against a fixed 144-hour budget. **The launcher now asks first.** The floor is two copies of a checkpoint whose size is read off a file that exists — the checkpoint an earlier attempt wrote, or failing that the `--init-from` weights, which for continued pretraining are the same architecture and so the same size. No evidence on disk means no verdict, the stance `trainer_checkpoint_for` already takes. `--min-free-bytes` states a different requirement for a run whose checkpoint is not the size of its input; `0` turns it off. It is checked in `detach_phase` and not only in `main`, because `code_branch.launch` and `code_extension` call `detach_phase` directly and a refusal left to the child would be written to the log its caller is walking away from. What was measured at admission goes in the timeline, so a run that later dies on ENOSPC reads as the disk moving under it rather than as nobody having looked.
+### What the aggregates could not say
 
-**This is a live blocker on step 5, not a hypothetical.** Freeing space is a decision with priced options — the three `runs/code-smoke-lr*` directories hold 2.0G each — and it is the operator's to make; every previous reclaim in this program was put to the user first and this session kept that.
+A gate is a threshold and it has answered; nothing below can move it. But an 8-point drop is 8 items of 100, and a 2.26% regression is a weighted mean over two sources — neither aggregate says whether the finding is real. `code_branch_report.py stop-record` pairs the per-item sidecars the two models already wrote (`runs/code-probes/branch-1b-stop.json`), and it sharpens the stop rather than softening it:
+
+| depth | base | branch | base only | branch only | drop | p |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `passkey:d1024` | 86 | 80 | **6** | **0** | +6.00 | 0.041 |
+| `passkey:d2048` | 88 | 80 | **8** | **0** | +8.00 | 0.013 |
+| `mqar:d1024` | 91 | 92 | 2 | 3 | −1.00 | 1.000 |
+| `mqar:d2048` | 86 | 88 | 5 | 7 | −2.00 | 0.773 |
+
+Every disagreeing passkey item at 1024 and 2048 tokens went the same way; not one went the other. MQAR churns in both directions and resolves nothing at any depth, and passkey at 256 and 512 is flat. So the branch lost **long-depth passkey specifically**, not retrieval generally, and not by luck. On the general side both replay sources regressed together — `dclm-baseline` 1.0389→1.0600 (−2.03%) and `fineweb-edu` 0.8792→0.9004 (−2.42%) — so that clause is not one odd holdout either.
+
+The record is built from the cards rather than from the verdict file, refuses a branch the gate continued, and marks every number under `evidence` as deciding nothing. It writes *beside* the verdict, not into it: a gate's output that gains fields after the fact is no longer the thing it was.
+
+### The disk blocker on step 5 is resolved and moot
+
+Recorded on the 27th: the volume read **100% used with 2.0–2.7G free** while `du -x` accounted for 123G inside this container against 866G used, so roughly 740G belonged to something outside it. It has since been released — the volume now reads **371.5G free of 982.2G**, and the extension the shortage would have blocked is refused by the gate instead.
+
+The guard it forced stays, because it was never about this one run. A trainer does not touch the disk until its first save, so an ENOSPC run launches clean, trains for hours, leaves nothing behind, and the supervisor resumes it from step zero into the same wall — 11 GPU-hours an attempt, three attempts, against a fixed 144-hour budget. **The launcher now asks first.** The floor is two copies of a checkpoint whose size is read off a file that exists — the checkpoint an earlier attempt wrote, or failing that the `--init-from` weights, which for continued pretraining are the same architecture and so the same size. No evidence on disk means no verdict, the stance `trainer_checkpoint_for` already takes. `--min-free-bytes` states a different requirement for a run whose checkpoint is not the size of its input; `0` turns it off. It is checked in `detach_phase` and not only in `main`, because `code_branch.launch` and `code_extension` call `detach_phase` directly and a refusal left to the child would be written to the log its caller is walking away from.
+
+One thing stays on the record unexplained rather than attributed: `runs/code-branch-1b/milestone-checkpoint.pt` — 1.435G, present at 10:05Z — was gone by 10:35Z, deleted by nothing in this repository and recorded by no controller event.
+
+### The evidence is now in the branch, not only in the container
+
+The two verdicts, the stop record and every scorecard behind them are committed here, per-item sidecars included. Phase 9 is required to re-run its headline metrics from immutable artifacts, and the base's own retrieval sidecars have been tracked since phase 3 at the same size — a branch scored against them whose items are not kept is a difference nobody else can check.
 
 **One branch-boundary deviation is recorded rather than hidden.** `scripts/vast_program.py` is control-plane code, which `branch_policy` sends to #14 first and merges forward. It is committed here instead, because the approved wrapper cannot express that workflow: `branch` refuses to switch with modified tracked files, and there is no stash, path checkout, cherry-pick or merge subcommand, so a change already in the working tree cannot reach the parent — and reverting and re-applying still dead-ends, because nothing can then merge the parent forward. `6fd2bb4` put a `train.py` change here under the same constraint. Phase 9 verifies this branch's diff is code-only, so either those two commits move or that claim is amended; the capability gap is the thing to fix and the commits are the symptom.
 
