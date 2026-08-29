@@ -1,20 +1,18 @@
 # Daedalus Vast Program Status
 
-> **Action required.** 3 repair continuations failed on phase phase8-branch-1b-scoring
-
-- Heartbeat: `2026-08-29T03:01:43.417903Z`
+- Heartbeat: `2026-08-29T03:06:45.205729Z`
 - Phase: `phase8-branch-1b-scoring`
-- Status: `blocked`
+- Status: `running`
 - Source: `vast/daedalus-code-20260824` at `89826d93bfc5`
-- Elapsed: `112.29h` of `144.0h`
-- Finalization window opens in: `23.71h`
+- Elapsed: `112.37h` of `144.0h`
+- Finalization window opens in: `23.63h`
 - Deadline stage: `active`
 
 ## Lanes
 
 - `directive`: `directive-none-outstanding` (passed)
 - `evidence`: `phase6-stageb-decode` (passed)
-- `inspect`: `phase8-branch-1b-scoring-plan` (failed)
+- `inspect`: `phase8-disk-report` (passed)
 - `operator`: `phase8-branch-prerequisite` (passed)
 - `retrieval`: `phase6-stagea-retrieval-remeasure` (passed)
 - `selfcheck`: `phase6-lane-selfcheck` (passed)
