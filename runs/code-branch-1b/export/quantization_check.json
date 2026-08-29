@@ -1,0 +1,34 @@
+{
+  "fp16_ppl": 6.894,
+  "q4_0_ppl": 7.3235,
+  "delta_pct": 6.230055120394546,
+  "passes_threshold": false,
+  "fp16_gguf": "runs/code-branch-1b/export/model-f16.gguf",
+  "q4_0_gguf": "runs/code-branch-1b/export/model-q4_0.gguf",
+  "decode_speed": {
+    "tok_per_sec": 279.997869,
+    "tok_per_sec_stddev": 5.25917,
+    "n_gen": 128,
+    "n_threads": 8,
+    "by_depth": {
+      "0": {
+        "depth": 0,
+        "tok_per_sec": 279.997869,
+        "tok_per_sec_stddev": 5.25917,
+        "n_threads": 8
+      },
+      "512": {
+        "depth": 512,
+        "tok_per_sec": 244.968156,
+        "tok_per_sec_stddev": 21.385078,
+        "n_threads": 8
+      },
+      "2048": {
+        "depth": 2048,
+        "tok_per_sec": 229.82706,
+        "tok_per_sec_stddev": 5.206497,
+        "n_threads": 8
+      }
+    }
+  }
+}
