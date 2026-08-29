@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 112.37,
-    "finalization_in_hours": 23.63,
+    "elapsed_hours": 112.45,
+    "finalization_in_hours": 23.55,
     "hard_hours": 144.0,
-    "remaining_hours": 31.63,
+    "remaining_hours": 31.55,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 9,
     "utilization_pct": 0
   },
-  "heartbeat_at": "2026-08-29T03:06:45.205729Z",
+  "heartbeat_at": "2026-08-29T03:11:47.129591Z",
   "lanes": {
     "directive": {
       "details": {
@@ -62,16 +62,16 @@
         "attempts": 1,
         "command": [
           "python",
-          "-c",
-          "\nimport os, shutil, json\nu = shutil.disk_usage(\"/workspace\")\nprint(json.dumps({\"total_gb\": round(u.total/1e9,1), \"used_gb\": round(u.used/1e9,1), \"free_gb\": round(u.free/1e9,2)}))\nrows = []\nfor root in (\"runs\", \"data\"):\n    for name in sorted(os.listdir(root)):\n        p = os.path.join(root, name)\n        total = 0\n        for dirpath, dirnames, filenames in os.walk(p):\n            for f in filenames:\n                fp = os.path.join(dirpath, f)\n                try:\n                    total += os.path.getsize(fp)\n                except OSError:\n                    pass\n        if total > 200e6:\n            rows.append((total, p))\nfor total, p in sorted(rows, reverse=True)[:30]:\n    print(f\"{total/1e9:8.2f}G  {p}\")\n"
+          "scripts/code_branch_report.py",
+          "stop-record"
         ],
         "returncodes": [
           0
         ]
       },
-      "phase": "phase8-disk-report",
+      "phase": "phase8-branch-1b-stop-record",
       "status": "passed",
-      "updated_at": "2026-08-29T03:04:04.931598Z"
+      "updated_at": "2026-08-29T03:11:30.528453Z"
     },
     "operator": {
       "details": {
@@ -134,5 +134,5 @@
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "running",
-  "updated_at": "2026-08-29T03:04:04.931598Z"
+  "updated_at": "2026-08-29T03:11:30.528453Z"
 }
