@@ -4,10 +4,10 @@
     "user_action_required": false
   },
   "deadline": {
-    "elapsed_hours": 123.69,
-    "finalization_in_hours": 12.31,
+    "elapsed_hours": 123.77,
+    "finalization_in_hours": 12.23,
     "hard_hours": 144.0,
-    "remaining_hours": 20.31,
+    "remaining_hours": 20.23,
     "reserve_hours": 8.0,
     "stage": "active"
   },
@@ -16,7 +16,7 @@
     "memory_used_mb": 14232,
     "utilization_pct": 100
   },
-  "heartbeat_at": "2026-08-29T14:25:48.464238Z",
+  "heartbeat_at": "2026-08-29T14:30:50.104007Z",
   "lanes": {
     "directive": {
       "details": {
@@ -130,7 +130,7 @@
   "phase": "phase9-finalization",
   "schema": 1,
   "source_branch": "vast/daedalus-code-20260824",
-  "source_sha": "73ab22c43f4a",
+  "source_sha": "cbf5ad7a8bed",
   "stale_control_plane": [],
   "started_at": "2026-08-24T10:44:35.993665Z",
   "status": "complete",
