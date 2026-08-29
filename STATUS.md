@@ -2,12 +2,12 @@
 
 > **Action required.** see the phase timeline
 
-- Heartbeat: `2026-08-29T03:57:02.950288Z`
+- Heartbeat: `2026-08-29T04:02:04.846572Z`
 - Phase: `phase9-final-report`
 - Status: `failed`
-- Source: `vast/daedalus-code-20260824` at `f0a8992e6341`
-- Elapsed: `113.21h` of `144.0h`
-- Finalization window opens in: `22.79h`
+- Source: `vast/daedalus-improvements-20260824` at `99eba20207d9`
+- Elapsed: `113.29h` of `144.0h`
+- Finalization window opens in: `22.71h`
 - Deadline stage: `active`
 
 ## Lanes
