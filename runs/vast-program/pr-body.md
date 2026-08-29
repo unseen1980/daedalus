@@ -6,7 +6,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 
 **The headline is negative, and that is the result.** This program ships no improved V1. Every preregistered gate that could have produced one returned *stop* — Phase 3 accepted no QAT arm, Phase 5 selected no decay schedule, Phase 6 recommended no shape, Phase 7's mixture sweep kept the baseline, and Phase 8 stopped Daedalus-Code at 1B. Three of the four phases scoped to find V2 gains found none, and none of those thresholds moved after a number was seen. The result that did land was found by two phases that were not looking for it: **Phase 3's QAT recovery and Phase 8's code branch, which share nothing but their starting weights, both failed retention on passkey at 2048 tokens** — 7.0 and 8.0 points. See `runs/final/v2-recommendation.md` §6.
 
-**This PR cannot be marked ready by the tooling it runs under.** `daedalus-approved` exposes `pr-draft`, `pr-find` and `pr-edit` (a REST body PATCH); it has no ready-for-review command, and the REST endpoint cannot flip `draft` in any case. Its own gates pass — full suite green on `5a27659`, 8 of 8 recorded artifact digests matched, no unresolved WIP — so the remaining transition is a one-click manual action, not an outstanding blocker.
+**This PR cannot be marked ready by the tooling it runs under.** `daedalus-approved` exposes `pr-draft`, `pr-find` and `pr-edit` (a REST body PATCH); it has no ready-for-review command, and the REST endpoint cannot flip `draft` in any case. Its own gates pass — 2046 passed and 4 skipped on `5a27659`, 8 of 8 recorded artifact digests matched, no unresolved WIP — so the remaining transition is a one-click manual action, not an outstanding blocker.
 
 ## Live progress
 
@@ -353,8 +353,8 @@ The workspace was never marked trusted, so Claude Code ignored `.claude/settings
 
 | Check | Result |
 | --- | --- |
-| Full suite, this branch at `5a27659` | green |
-| Full suite, code branch at `b12de92` | 2584 passed, 4 skipped in 303.64s |
+| Full suite, this branch at `5a27659` | 2046 passed, 4 skipped in 235.36s — 2022 at the code branch's fork point plus the 24 new finalization tests |
+| Full suite, code branch | 2584 passed, 4 skipped in 303.64s |
 | Artifact digests re-verified against measurement time | 8 of 8 matched, 0 mismatched, 1 fingerprint-only |
 | Headline metrics re-measured from immutable GGUFs | released base reproduced bit for bit; code branch reproduced its export check exactly |
 | `wip:` commits outstanding | none on either source branch |
