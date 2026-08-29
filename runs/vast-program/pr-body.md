@@ -6,7 +6,7 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 
 **The headline is negative, and that is the result.** This program ships no improved V1. Every preregistered gate that could have produced one returned *stop* — Phase 3 accepted no QAT arm, Phase 5 selected no decay schedule, Phase 6 recommended no shape, Phase 7's mixture sweep kept the baseline, and Phase 8 stopped Daedalus-Code at 1B. Three of the four phases scoped to find V2 gains found none, and none of those thresholds moved after a number was seen. The result that did land was found by two phases that were not looking for it: **Phase 3's QAT recovery and Phase 8's code branch, which share nothing but their starting weights, both failed retention on passkey at 2048 tokens** — 7.0 and 8.0 points. See `runs/final/v2-recommendation.md` §6.
 
-**This PR cannot be marked ready by the tooling it runs under.** `daedalus-approved` exposes `pr-draft`, `pr-find` and `pr-edit` (a REST body PATCH); it has no ready-for-review command, and the REST endpoint cannot flip `draft` in any case. Its own gates pass — 2046 passed and 4 skipped on `5a27659`, 8 of 8 recorded artifact digests matched, no unresolved WIP — so the remaining transition is a one-click manual action, not an outstanding blocker.
+**This PR cannot be marked ready by the tooling it runs under.** `daedalus-approved` exposes `pr-draft`, `pr-find` and `pr-edit` (a REST body PATCH); it has no ready-for-review command, and the REST endpoint cannot flip `draft` in any case. Its own gates pass — 2047 passed and 4 skipped on `e42bfdf`, 8 of 8 recorded artifact digests matched, no unresolved WIP — so the remaining transition is a one-click manual action, not an outstanding blocker.
 
 ## Live progress
 
@@ -41,6 +41,10 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 **The report refuses to call a proxy a model gain, structurally.** Phases 4–7 ranked tokenizers, decay schedules, shapes and mixtures on 105M- and 159M-parameter proxies over 101M–500M token budgets. The plan warns three times that those are not statements about the released 150M model, which is a good sign it is the mistake a final report makes. So `Claim` refuses the combination at construction: a claim scoped `proxy` or `projection` cannot set `applies_to_released_model`, a section cannot hide a claim of another measurement scope under its heading, and a claim naming no source file is refused outright. The rules run again over the serialised form, so a hand-edited report is caught too.
 
 The invariant fired on the first assembly of the real report — which is how the section rule got its one exemption. `process` claims (a refused escalation, a pending Mac measurement) are not model measurements, cannot be quoted as gains, and belong beside the numbers they qualify rather than exiled to a section a reader will not connect. Two *measurement* scopes under one heading is still refused, in both directions, and both directions are tested.
+
+**Four fixes this branch owns are committed on #15, and a reviewer of this PR alone will not see them.** Phase 9 ran the diff check #15's description promised. `1b1222b` (`scripts/vast_program.py`, refuse a run that cannot write a checkpoint), `ee235c6` (`scripts/bpb_eval.py`, per-source BPB wherever the aggregate is reported) and `6fd2bb4` + `a8c16c6` (`train.py`, a failed checkpoint write must not keep the space; validate on elapsed steps rather than a modulo of two cadences) are control-plane, evaluation and general-trainer changes that `branch_policy` sends here first. A fifth, `89826d9` on `post.py`, is the plan disagreeing with itself — phase 8's own **Files** list names extending `post.py` as phase 8 work.
+
+Nothing is lost by merging: all five are additive and tested, and #15 merges into this branch before this branch merges anywhere. The cause is a capability gap rather than a judgement call — `branch` refuses to switch with modified tracked files and the wrapper has no stash, path checkout, cherry-pick or merge subcommand, so a repair discovered mid-phase with a running job depending on it cannot reach the parent. **The fix is a `cherry-pick` or path-scoped-commit subcommand on `ops/vast/run-approved`**, and it should land before the next program runs.
 
 **One interpretive risk is flagged rather than smoothed over.** Daedalus-Code's aggregate code-BPB improvement is 31.46%, but TypeScript is 25.7% of the mixture weight and contributes about 20 of those points — two thirds of the headline from a quarter of the mixture, at a held-out BPB of 0.139. File-level leakage is excluded and was excluded by a measured mechanism (own source directory, salted per-repository split, zero rows admitted without a repository identifier), but the TypeScript holdout is narrow and generated or vendored content would produce that number honestly while meaning very little. It is unresolved, it is the first step of the code continuation plan, and until it is settled the defensible claim is **+6.2% on Python** — which is also the only language either gate benchmark measures.
 
@@ -353,8 +357,8 @@ The workspace was never marked trusted, so Claude Code ignored `.claude/settings
 
 | Check | Result |
 | --- | --- |
-| Full suite, this branch at `5a27659` | 2046 passed, 4 skipped in 235.36s — 2022 at the code branch's fork point plus the 24 new finalization tests |
-| Full suite, code branch | 2584 passed, 4 skipped in 303.64s |
+| Full suite, this branch at `e42bfdf` | 2047 passed, 4 skipped in 223.13s — 2022 at the code branch's fork point plus the 25 new finalization tests |
+| Full suite, code branch at `f0a8992` | 2584 passed, 4 skipped in 238.36s |
 | Artifact digests re-verified against measurement time | 8 of 8 matched, 0 mismatched, 1 fingerprint-only |
 | Headline metrics re-measured from immutable GGUFs | released base reproduced bit for bit; code branch reproduced its export check exactly |
 | `wip:` commits outstanding | none on either source branch |
