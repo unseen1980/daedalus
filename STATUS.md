@@ -1,11 +1,11 @@
 # Daedalus Vast Program Status
 
-- Heartbeat: `2026-08-29T11:54:56.565423Z`
+- Heartbeat: `2026-08-29T11:59:58.244293Z`
 - Phase: `phase9-finalization`
 - Status: `complete`
 - Source: `vast/daedalus-code-20260824` at `f0a8992e6341`
-- Elapsed: `121.17h` of `144.0h`
-- Finalization window opens in: `14.83h`
+- Elapsed: `121.26h` of `144.0h`
+- Finalization window opens in: `14.74h`
 - Deadline stage: `active`
 
 ## Lanes
@@ -28,7 +28,7 @@
 ```json
 {
   "memory_total_mb": 24564,
-  "memory_used_mb": 2306,
-  "utilization_pct": 98
+  "memory_used_mb": 9,
+  "utilization_pct": 0
 }
 ```
