@@ -4,6 +4,8 @@ Stacked on #14 (`vast/daedalus-improvements-20260824`). This branch carries **on
 
 Nothing here is merged automatically, and no artifact is published outside a private experiment repository.
 
+**Phase 8 is complete and it stopped where the gate told it to.** The 1B branch cleared code BPB, execution and the five-task mean, and failed general-replay BPB (2.26% against 1.5%) and retrieval (8.0 points at passkey d2048 against 2.0). So the 2B extension, the SFT stage, the preference stage and the code QAT pass **did not run**, and `runs/code-branch-1b/checkpoint.pt` is the terminal artifact: a base model, not an instruct model. Phase 9's finalization is at the bottom of this description.
+
 ## What phase 8 starts from
 
 `hero-base-f16` — the released **base**, never the SFT/DPO checkpoint. The mixture is 65% permissively licensed code, 15% technical and mathematical prose, and 20% original general replay. Train and holdout split **by repository**, not by file or by packed window, and decontaminated against HumanEval+ and MBPP+ prompts, reference solutions, tests, and repository metadata.
@@ -477,6 +479,34 @@ That is a property of the released checkpoint rather than of either treatment, a
 
 The two verdicts, the stop record and every scorecard behind them are committed here, per-item sidecars included. Phase 9 is required to re-run its headline metrics from immutable artifacts, and the base's own retrieval sidecars have been tracked since phase 3 at the same size — a branch scored against them whose items are not kept is a difference nobody else can check.
 
-**One branch-boundary deviation is recorded rather than hidden.** `scripts/vast_program.py` is control-plane code, which `branch_policy` sends to #14 first and merges forward. It is committed here instead, because the approved wrapper cannot express that workflow: `branch` refuses to switch with modified tracked files, and there is no stash, path checkout, cherry-pick or merge subcommand, so a change already in the working tree cannot reach the parent — and reverting and re-applying still dead-ends, because nothing can then merge the parent forward. `6fd2bb4` put a `train.py` change here under the same constraint. Phase 9 verifies this branch's diff is code-only, so either those two commits move or that claim is amended; the capability gap is the thing to fix and the commits are the symptom.
+**Branch-boundary deviations, now counted rather than estimated.** An earlier version of this paragraph named two commits. Phase 9 ran the check it promised — `git diff --stat origin/vast/daedalus-improvements-20260824...vast/daedalus-code-20260824` — and the answer is **five commits across four shared files**, so the claim is amended rather than left standing:
+
+| commit | shared file | what it is |
+| --- | --- | --- |
+| `1b1222b` | `scripts/vast_program.py` | refuse a run that cannot write a checkpoint — **control plane, belongs on #14** |
+| `ee235c6` | `scripts/bpb_eval.py` | per-source BPB wherever the aggregate is reported — **evaluation, belongs on #14** |
+| `6fd2bb4` | `train.py` | a failed checkpoint write must not keep the space — **general trainer, belongs on #14** |
+| `a8c16c6` | `train.py` | validate on elapsed steps, not a modulo of two cadences — **general trainer, belongs on #14** |
+| `89826d9` | `post.py` | a built SFT set filtered twice loses the code it carries — arguably phase 8's own, see below |
+
+The last one is the plan disagreeing with itself rather than a session drifting: `branch_policy` sends shared files to #14 first, while the plan's phase 8 **Files** list names "extend `post.py` to accept explicit code SFT/preference datasets" as phase 8 work. Both readings are defensible and the commit is on the branch the Files list points at. The other four are misplaced under any reading.
+
+**The cause is a capability gap, not a judgement call.** `branch` refuses to switch with modified tracked files, and the wrapper has no stash, path checkout, cherry-pick or merge subcommand — so a change already in the working tree cannot reach the parent, and reverting and re-applying dead-ends too, because nothing can then merge the parent forward. Every one of these five was a repair discovered mid-phase with a running job depending on it.
+
+**Nothing here is lost by merging.** All five are additive, all are tested, and #15 merges into #14 before #14 merges anywhere — so the files arrive in the right order regardless. What the misplacement costs is review attention: a reviewer of #14 alone will not see four fixes to files #14 owns. **The fix is a `cherry-pick` or path-scoped-commit subcommand on the wrapper**, and it should land before the next program runs.
+
+## Phase 9 — finalization
+
+`runs/final/improvement-report.json` is the program's machine-readable source of truth and `improvement-report.md` renders it; both are here because this branch is the tip of the stack and the only one carrying both the phase 3–7 verdicts and phase 8's. The generator (`daedalus/final_report.py`, `scripts/final_report.py`), `v2-recommendation.md` and the released model's re-measurement are on **#14**.
+
+**The Q4 penalty was re-measured, not copied.** `runs/final/quant/code-branch-1b/` re-runs it at finalization from the exported GGUFs through the same paired per-chunk instrument, the same 292-chunk text and the same context size as the released base: **6.8940 fp16, 7.3235 Q4_0, 6.230055%**, worse on 288 of 292 chunks. That reproduces the export's own check exactly and, more usefully, puts it on the instrument that makes it comparable to the base's 5.53867% rather than to a number measured some other way. The released base was re-measured the same way and reproduced **bit for bit** five days on, including artifact digests.
+
+**Every artifact digest was re-verified.** 8 of 8 artifacts the report cites re-hashed to the digest their measuring scorecard recorded — both models' checkpoints and GGUFs, and the rejected QAT arm's pair. The ninth entry, phase 4's selected tokenizer, had no earlier digest and is recorded `fingerprint only` rather than counted as a pass.
+
+**The interpretive risk in this branch's headline is flagged, not smoothed.** The aggregate code-BPB improvement is 31.46%, but TypeScript is 25.7% of the mixture weight and carries about **20 of those points** — two thirds of the headline from a quarter of the mixture — at a held-out BPB of **0.139**. The build records exclude file-level leakage by a mechanism that was measured rather than argued: `TypeScript-all` is its own source directory, the split is a salted hash of the repository name, and `no_repository` is 0 in every probe. What they do not exclude is a narrow holdout dominated by generated or vendored TypeScript, which would produce 0.139 honestly and mean almost nothing about the model. That is **step 0 of `runs/final/daedalus-code-next.md`** — a read, not an experiment — and until it resolves the defensible claim is **+6.2% on Python**, which is also the only language either gate benchmark measures.
+
+**This PR cannot be marked ready by the tooling it runs under.** `daedalus-approved` has `pr-draft`, `pr-find` and `pr-edit` (a REST body PATCH); there is no ready-for-review command, and that REST endpoint cannot flip `draft` in any case. Its own gates pass — **2584 passed, 4 skipped** on the full suite, 8 of 8 digests matched, no `wip:` commit — so the transition is a one-click manual action rather than an outstanding blocker.
+
+**Nothing is published.** No model or dataset went to the Hub. Phase 3 had no winner to publish; this branch's artifact needs a code-specific model card and the TypeScript question settled first, and both are written down in `daedalus-code-next.md` rather than rushed under a deadline. The publication path itself was exercised end to end in preflight — export, private upload, remote listing, LFS pointer check, delete — so what is missing is a decision, not a capability.
 
 **One test was repaired, not silenced.** `test_the_real_corpus_can_fill_the_branchs_budget` asked its question through `branch_plan`, which carries one refusal that is not about the corpus: once the branch has trained its budget, `arm_is_complete` declines to spend it twice. At 09:51Z the run succeeded and the test inverted — reporting a corpus that can fill the budget as one that cannot. It now asks the three inputs directly and holds the launcher to the weaker, correct claim.
