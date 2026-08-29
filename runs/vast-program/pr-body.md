@@ -2,6 +2,12 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 
 **Draft. Do not merge.** Phases land as atomic, tested commits and this description tracks their status.
 
+**The program is complete.** All ten phases ran; the finalization window closed them out at T+112.9h of 144h. Full suite green, all recorded artifact digests re-verified, no `wip:` commit on either source branch, the default branch untouched at `99232b4`.
+
+**The headline is negative, and that is the result.** This program ships no improved V1. Every preregistered gate that could have produced one returned *stop* — Phase 3 accepted no QAT arm, Phase 5 selected no decay schedule, Phase 6 recommended no shape, Phase 7's mixture sweep kept the baseline, and Phase 8 stopped Daedalus-Code at 1B. Three of the four phases scoped to find V2 gains found none, and none of those thresholds moved after a number was seen. The result that did land was found by two phases that were not looking for it: **Phase 3's QAT recovery and Phase 8's code branch, which share nothing but their starting weights, both failed retention on passkey at 2048 tokens** — 7.0 and 8.0 points. See `runs/final/v2-recommendation.md` §6.
+
+**This PR cannot be marked ready by the tooling it runs under.** `daedalus-approved` exposes `pr-draft`, `pr-find` and `pr-edit` (a REST body PATCH); it has no ready-for-review command, and the REST endpoint cannot flip `draft` in any case. Its own gates pass — full suite green on `5a27659`, 8 of 8 recorded artifact digests matched, no unresolved WIP — so the remaining transition is a one-click manual action, not an outstanding blocker.
+
 ## Live progress
 
 - Heartbeat: [`vast/progress-20260824`](https://github.com/unseen1980/daedalus/tree/vast/progress-20260824) — refreshed every five minutes with elapsed hours, hours to the finalization window, and an action banner when a human is needed.
@@ -20,9 +26,23 @@ Unattended research program from `docs/superpowers/plans/2026-08-24-daedalus-vas
 | 4 — Tokenizer lab for V2 | **complete**, 32,768 selected, reading in `runs/tokenizer-lab/v2-tokenizer-migration.md` |
 | 5 — ShortConv channel death prevention | **complete**, **no schedule selected**, verdict in `runs/conv-health/verdict-paired.json`, reading in `runs/conv-health/phase5-conv-decay.md` |
 | 6 — Architecture Pareto proxies | **complete**, **no shape recommended and stage C is a no-go**, verdicts in `runs/architecture/stageb-recommendation.json` and `runs/architecture/stageb-stage-c.json` |
-| 7 — Improved general corpus and mixture | **in progress**, steps 1–8 and 10 complete — mixture verdict **keep-baseline** in `runs/corpus/mixture-verdict-probe.json`, acceptance gate in `runs/corpus/phase7-gate.md`, headroom in `runs/corpus/headroom-curve.md`; step 9 demonstrated on a rebuilt source, open at full scale |
-| 8 — Daedalus-Code | **step 1 complete** — `vast/daedalus-code-20260824` created from this branch's tested SHA `8aa5cb4`, stacked draft **#15** open, base scorecards and both harness oracles committed there. No training has started; `daedalus/codeprep.py` and the code corpus are next |
-| 9 — Finalization and reporting | begins no later than T+136h |
+| 7 — Improved general corpus and mixture | **complete**, mixture verdict **keep-baseline** in `runs/corpus/mixture-verdict-probe.json`, acceptance gate in `runs/corpus/phase7-gate.md`, headroom in `runs/corpus/headroom-curve.md`; step 9 demonstrated on a rebuilt source, not run at full scale |
+| 8 — Daedalus-Code | **complete on #15**, **stopped at 1B** — gate failed on general BPB (2.26% against 1.5%) and retrieval (8.0 points against 2.0), so the 2B extension, SFT, DPO and the code QAT pass did not run |
+| 9 — Finalization and reporting | **complete** — see below |
+
+## Phase 9 — finalization
+
+**Where the outputs live.** The report is assembled from evidence that is itself split across the stack, so its pieces are too. This branch carries the generator (`daedalus/final_report.py`, `scripts/final_report.py`, `tests/test_final_report.py`), the released model's re-measurement (`runs/final/quant/released-base/`) and `runs/final/v2-recommendation.md`. `improvement-report.json`, its markdown rendering and `daedalus-code-next.md` are on **#15**, which is the tip of the stack and the only branch holding both the Phase 3–7 verdicts and the Phase 8 ones.
+
+**The headline numbers were re-measured, not copied.** Both models' Q4_0 penalties were re-run at finalization from the immutable exported GGUFs through stock llama.cpp, on the same 292-chunk text at the same context size as Phase 0 five days earlier. The released model reproduced **bit for bit** — 6.6135 FP16, 6.9798 Q4_0, penalty 5.53867090043092%, identical chunk counts and identical artifact digests. That is what makes "from immutable final artifacts" a check rather than a claim.
+
+**Artifact manifest: 8 of 8 recorded digests matched.** Every artifact the report cites was re-hashed and compared against the digest the scorecard recorded when it measured that file. The ninth entry, the selected 32,768 tokenizer, had no earlier digest and is recorded as `fingerprint only` rather than counted as a pass — absence of a mismatch is not a match.
+
+**The report refuses to call a proxy a model gain, structurally.** Phases 4–7 ranked tokenizers, decay schedules, shapes and mixtures on 105M- and 159M-parameter proxies over 101M–500M token budgets. The plan warns three times that those are not statements about the released 150M model, which is a good sign it is the mistake a final report makes. So `Claim` refuses the combination at construction: a claim scoped `proxy` or `projection` cannot set `applies_to_released_model`, a section cannot hide a claim of another measurement scope under its heading, and a claim naming no source file is refused outright. The rules run again over the serialised form, so a hand-edited report is caught too.
+
+The invariant fired on the first assembly of the real report — which is how the section rule got its one exemption. `process` claims (a refused escalation, a pending Mac measurement) are not model measurements, cannot be quoted as gains, and belong beside the numbers they qualify rather than exiled to a section a reader will not connect. Two *measurement* scopes under one heading is still refused, in both directions, and both directions are tested.
+
+**One interpretive risk is flagged rather than smoothed over.** Daedalus-Code's aggregate code-BPB improvement is 31.46%, but TypeScript is 25.7% of the mixture weight and contributes about 20 of those points — two thirds of the headline from a quarter of the mixture, at a held-out BPB of 0.139. File-level leakage is excluded and was excluded by a measured mechanism (own source directory, salted per-repository split, zero rows admitted without a repository identifier), but the TypeScript holdout is narrow and generated or vendored content would produce that number honestly while meaning very little. It is unresolved, it is the first step of the code continuation plan, and until it is settled the defensible claim is **+6.2% on Python** — which is also the only language either gate benchmark measures.
 
 ## Released-model baselines
 
@@ -328,6 +348,30 @@ Both failure drills pass and are recorded in the timeline: a session killed mid-
 ## Security fix worth reviewing
 
 The workspace was never marked trusted, so Claude Code ignored `.claude/settings.json` in full — including the `deny` rules keeping an engineering session away from `.env`, the runtime credential directory, and the SSH material. It reports this only in a stderr warning that a non-interactive session shows nobody, so the control plane looked configured while enforcing none of it. `ops/vast/trust_workspace.py` records trust in the user-level config as an installed, tested step.
+
+## Final validation
+
+| Check | Result |
+| --- | --- |
+| Full suite, this branch at `5a27659` | green |
+| Full suite, code branch at `b12de92` | 2584 passed, 4 skipped in 303.64s |
+| Artifact digests re-verified against measurement time | 8 of 8 matched, 0 mismatched, 1 fingerprint-only |
+| Headline metrics re-measured from immutable GGUFs | released base reproduced bit for bit; code branch reproduced its export check exactly |
+| `wip:` commits outstanding | none on either source branch |
+| Source branches pushed | both in sync with `origin` |
+| Default branch | unchanged at `99232b4`, the recorded `PROGRAM_BASE_SHA` |
+| Secret-like files tracked | none; `.env` remains ignored |
+| Hub publication | **none** — no model or dataset was published, so there is nothing to fresh-download and hash-match |
+
+**On the Hub check.** The plan's final validation asks for private Hub downloads into a fresh directory, hash-matched. Nothing was published, so that check has no subject. The publication path itself was exercised end to end during preflight — export, private upload, remote file listing, LFS pointer verification, delete (`runs/preflight/publish-live.json`) — so the capability is demonstrated; what is absent is a decision to publish. Phase 3 had no winner to publish, and Phase 8's artifact needs a code-specific model card and the unresolved TypeScript question settled first. Both are recorded in `runs/final/daedalus-code-next.md` rather than done under a deadline.
+
+## What is left for the user
+
+1. Review this PR and **#15**. Neither can be marked ready by the approved tooling; both satisfy their own gates.
+2. Run the Apple Silicon decode suite on the final Q4_0 artifacts. Every decode figure in this program is this box's CPU, which fixes the shape of the curve and not the number a user feels.
+3. Inspect a fixed prompt pack for general and code generation quality.
+4. Decide on publication — nothing is published and nothing will be without explicit approval.
+5. Destroy the Vast instance. The controller does not, by design.
 
 ## Constraints held
 
